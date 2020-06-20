@@ -6,8 +6,6 @@ TEST_CASE("minimal") {
 }
 #else
 int main (int argc, char *argv[]) {
-  spdlog::set_level(static_cast<spdlog::level::level_enum>(SPDLOG_ACTIVE_LEVEL));
-  PrintBuildSettings();
   return 0;
 }
 #endif
