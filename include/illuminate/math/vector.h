@@ -17,27 +17,30 @@ inline float hadd(const simd_vec& v) {
   sum = _mm_add_ss(sum, moved);
   return _mm_cvtss_f32(sum);
 }
-class vec4 {
+class vector {
  public:
-  vec4() {
+  vector() {
     vec() = set_zero();
   }
-  vec4(const float c) {
+  vector(const float c) {
     vec() = set_val(c);
   }
-  vec4(const float f0, const float f1, const float f2, const float f3) {
+  vector(const float f0, const float f1, const float f2, const float f3) {
     vec() = set_val(f0, f1, f2, f3);
   }
-  vec4(const simd_vec&& v) {
+  vector(const float f0, const float f1, const float f2) {
+    vec() = set_val(f0, f1, f2, 0.0f);
+  }
+  vector(const simd_vec&& v) {
     vec() = std::move(v);
   }
-  vec4(const vec4& v) : data(v.data) {
+  vector(const vector& v) : data(v.data) {
   }
-  vec4 operator=(const vec4& v) {
+  vector operator=(const vector& v) {
     vec() = v.vec();
     return *this;
   }
-  bool operator==(const vec4& v) const {
+  bool operator==(const vector& v) const {
     auto cmp = _mm_cmpeq_ps(vec(), v.vec());
     auto result = _mm_movemask_epi8(_mm_castps_si128(cmp));
     return result == 0xFFFF;
@@ -48,40 +51,44 @@ class vec4 {
   float& operator[](const uint32_t index) {
     return array()[index];
   }
-  vec4& operator+=(const float c) {
+  vector& operator+=(const float c) {
     auto v = set_val(c);
     vec() = _mm_add_ps(vec(), v);
     return *this;
   }
-  vec4& operator-=(const float c) {
+  vector& operator-=(const float c) {
     auto v = set_val(c);
     vec() = _mm_sub_ps(vec(), v);
     return *this;
   }
-  vec4& operator*=(const float c) {
+  vector& operator*=(const float c) {
     auto v = set_val(c);
     vec() = _mm_mul_ps(vec(), v);
     return *this;
   }
-  vec4& operator/=(const float c) {
+  vector& operator/=(const float c) {
     auto v = set_val(c);
     vec() = _mm_div_ps(vec(), v);
     return *this;
   }
-  vec4& operator+=(const vec4& v) {
+  vector& operator+=(const vector& v) {
     vec() = _mm_add_ps(vec(), v.vec());
     return *this;
   }
-  vec4& operator-=(const vec4& v) {
+  vector& operator-=(const vector& v) {
     vec() = _mm_sub_ps(vec(), v.vec());
     return *this;
   }
-  vec4& operator*=(const vec4& v) {
+  vector& operator*=(const vector& v) {
     vec() = _mm_mul_ps(vec(), v.vec());
     return *this;
   }
-  vec4& operator/=(const vec4& v) {
+  vector& operator/=(const vector& v) {
     vec() = _mm_div_ps(vec(), v.vec());
+    return *this;
+  }
+  vector& rcp() {
+    vec() = _mm_rcp_ps(vec());
     return *this;
   }
   float dist() const {
@@ -89,68 +96,72 @@ class vec4 {
     auto sum = hadd(sq);
     return sqrt(sum);
   }
-  vec4& normalize() {
+  vector& normalize() {
     float d = dist();
     (*this) /= d;
     return *this;
   }
-  friend vec4 operator+(const vec4& v, const float c) {
-    auto v2 = vec4(c);
+  friend vector operator+(const vector& v, const float c) {
+    auto v2 = vector(c);
     v2.vec() = _mm_add_ps(v.vec(), v2.vec());
     return v2;
   }
-  friend vec4 operator-(const vec4& v, const float c) {
-    auto v2 = vec4(c);
+  friend vector operator-(const vector& v, const float c) {
+    auto v2 = vector(c);
     v2.vec() = _mm_sub_ps(v.vec(), v2.vec());
     return v2;
   }
-  friend vec4 operator*(const vec4& v, const float c) {
-    auto v2 = vec4(c);
+  friend vector operator*(const vector& v, const float c) {
+    auto v2 = vector(c);
     v2.vec() = _mm_mul_ps(v.vec(), v2.vec());
     return v2;
   }
-  friend vec4 operator/(const vec4& v, const float c) {
-    auto v2 = vec4(c);
+  friend vector operator/(const vector& v, const float c) {
+    auto v2 = vector(c);
     v2.vec() = _mm_div_ps(v.vec(), v2.vec());
     return v2;
   }
-  friend vec4 operator+(const float c, const vec4& v) {
-    auto v2 = vec4(c);
+  friend vector operator+(const float c, const vector& v) {
+    auto v2 = vector(c);
     v2.vec() = _mm_add_ps(v.vec(), v2.vec());
     return v2;
   }
-  friend vec4 operator-(const float c, const vec4& v) {
-    auto v2 = vec4(c);
+  friend vector operator-(const float c, const vector& v) {
+    auto v2 = vector(c);
     v2.vec() = _mm_sub_ps(v2.vec(), v.vec());
     return v2;
   }
-  friend vec4 operator*(const float c, const vec4& v) {
-    auto v2 = vec4(c);
+  friend vector operator*(const float c, const vector& v) {
+    auto v2 = vector(c);
     v2.vec() = _mm_mul_ps(v.vec(), v2.vec());
     return v2;
   }
-  friend vec4 operator/(const float c, const vec4& v) {
-    auto v2 = vec4(c);
+  friend vector operator/(const float c, const vector& v) {
+    auto v2 = vector(c);
     v2.vec() = _mm_div_ps(v2.vec(), v.vec());
     return v2;
   }
-  friend vec4 operator+(const vec4& a, const vec4& b) {
+  friend vector operator+(const vector& a, const vector& b) {
     auto result = _mm_add_ps(a.vec(), b.vec());
     return {std::move(result)};
   }
-  friend vec4 operator-(const vec4& a, const vec4& b) {
+  friend vector operator-(const vector& a, const vector& b) {
     auto result = _mm_sub_ps(a.vec(), b.vec());
     return {std::move(result)};
   }
-  friend vec4 operator*(const vec4& a, const vec4& b) {
+  friend vector operator*(const vector& a, const vector& b) {
     auto result = _mm_mul_ps(a.vec(), b.vec());
     return {std::move(result)};
   }
-  friend vec4 operator/(const vec4& a, const vec4& b) {
+  friend vector operator/(const vector& a, const vector& b) {
     auto result = _mm_div_ps(a.vec(), b.vec());
     return {std::move(result)};
   }
-  friend float sum(const vec4& v) {
+  friend vector rcp(const vector& v) {
+    auto result = _mm_rcp_ps(v.vec());
+    return {std::move(result)};
+  }
+  friend float sum(const vector& v) {
     return hadd(v.vec());
   }
  private:
@@ -163,5 +174,7 @@ class vec4 {
   inline float* array() { return data.array; }
   RawVector data;
 };
+using vec4 = vector;
+using vec3 = vector;
 }
 #endif
