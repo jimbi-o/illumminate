@@ -27,9 +27,9 @@ twitter_username: o_jimbi
 github_username:  jimbi-o
 
 # Build settings
-theme: jekyll-theme-tactile
-plugins:
-  - jekyll-feed
+theme: minima
+#plugins:
+#  - jekyll-feed
 
 # Exclude from processing.
 # The following items will not be processed, by default.
