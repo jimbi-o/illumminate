@@ -49,10 +49,12 @@ target_link_libraries(illuminatemath PRIVATE doctest::doctest)
 
 target_include_directories(illuminatemath
   PUBLIC
-  "../include"
+  "../../include/illuminate/math"
   PRIVATE
   "."
 )
-target_sources(illuminatemath PRIVATE
-  "main.cpp"
-)
+if (BUILD_WITH_TEST)
+  target_sources(illuminatemath PRIVATE
+	"vec_test.cpp"
+  )
+endif()
