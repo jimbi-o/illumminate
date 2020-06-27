@@ -9,6 +9,19 @@ union RawVector {
   simd_vec data;
   float array[4];
 };
+template <uint32_t N>
+inline simd_vec create_simd_vec(const float*) {}
+template <>
+inline simd_vec create_simd_vec<4>(const float* f/*4elems only*/) {
+  return _mm_load_ps(f);
+}
+template <uint32_t N>
+inline simd_vec create_simd_vec(const float) {}
+template <>
+inline simd_vec create_simd_vec<4>(const float c) {
+  const float f[4] = {c,c,c,c};
+  return _mm_load_ps(f);
+}
 inline float hadd(const simd_vec& v) {
   // https://stackoverflow.com/questions/6996764/fastest-way-to-do-horizontal-sse-vector-sum-or-other-reduction/35270026#35270026
   auto moved = _mm_movehdup_ps(v);
@@ -17,29 +30,21 @@ inline float hadd(const simd_vec& v) {
   sum = _mm_add_ss(sum, moved);
   return _mm_cvtss_f32(sum);
 }
+template <uint32_t N>
 class vector {
  public:
   vector() {
-    vec() = set_zero();
+    vec() = _mm_setzero_ps();
   }
-  vector(const float c) {
-    vec() = set_val(c);
-  }
-  vector(const float f0, const float f1, const float f2, const float f3) {
-    vec() = set_val(f0, f1, f2, f3);
-  }
-  vector(const float f0, const float f1, const float f2) {
-    vec() = set_val(f0, f1, f2, 0.0f);
-  }
+  vector(const float* f) {}
+  vector(const float c) {}
+  vector(const float f0, const float f1, const float f2, const float f3) {}
+  vector(const float f0, const float f1, const float f2) {}
   vector(const simd_vec&& v) {
     vec() = std::move(v);
   }
-  vector(const vector& v) : data(v.data) {
-  }
-  vector operator=(const vector& v) {
-    vec() = v.vec();
-    return *this;
-  }
+  vector(const vector& v) : data(v.data) {}
+  vector operator=(const vector& v) { vec() = v.vec(); return *this; }
   bool operator==(const vector& v) const {
     auto cmp = _mm_cmpeq_ps(vec(), v.vec());
     auto result = _mm_movemask_epi8(_mm_castps_si128(cmp));
@@ -52,22 +57,22 @@ class vector {
     return array()[index];
   }
   vector& operator+=(const float c) {
-    auto v = set_val(c);
+    auto v = create_simd_vec<4>(c);
     vec() = _mm_add_ps(vec(), v);
     return *this;
   }
   vector& operator-=(const float c) {
-    auto v = set_val(c);
+    auto v = create_simd_vec<4>(c);
     vec() = _mm_sub_ps(vec(), v);
     return *this;
   }
   vector& operator*=(const float c) {
-    auto v = set_val(c);
+    auto v = create_simd_vec<4>(c);
     vec() = _mm_mul_ps(vec(), v);
     return *this;
   }
   vector& operator/=(const float c) {
-    auto v = set_val(c);
+    auto v = create_simd_vec<4>(c);
     vec() = _mm_div_ps(vec(), v);
     return *this;
   }
@@ -165,16 +170,26 @@ class vector {
     return hadd(v.vec());
   }
  private:
-  static inline simd_vec set_zero() { return _mm_setzero_ps(); }
-  static inline simd_vec set_val(const float c) { return _mm_set1_ps(c); }
-  static inline simd_vec set_val(const float f0, const float f1, const float f2, const float f3) { return _mm_setr_ps(f0, f1, f2, f3); }
   inline const simd_vec& vec() const { return data.data; }
   inline simd_vec& vec() { return data.data; }
   inline constexpr const float* array() const { return data.array; }
   inline float* array() { return data.array; }
   RawVector data;
 };
-using vec4 = vector;
-using vec3 = vector;
+template <>
+vector<4>::vector(const float* f) {
+  vec() = create_simd_vec<4>(f);
+}
+template <>
+vector<4>::vector(const float c) {
+  vec() = create_simd_vec<4>(c);
+}
+template <>
+vector<4>::vector(const float f0, const float f1, const float f2, const float f3) {
+  const float f[4] = {f0,f1,f2,f3};
+  vec() = create_simd_vec<4>(f);
+}
+using vec4 = vector<4>;
+using vec3 = vector<3>;
 }
 #endif
