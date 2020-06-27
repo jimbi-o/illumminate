@@ -121,4 +121,6 @@ TEST_CASE("vector") {
   CHECK(sv[3] == -2.0f);
   auto s = sum(sv);
   CHECK(s == -11.5f);
+  sv.normalize();
+  CHECK(sv.dist() == 1.0f);
 }

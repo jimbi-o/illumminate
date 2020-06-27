@@ -9,6 +9,14 @@ union RawVector {
   simd_vec data;
   float array[4];
 };
+inline float hadd(const simd_vec& v) {
+  // https://stackoverflow.com/questions/6996764/fastest-way-to-do-horizontal-sse-vector-sum-or-other-reduction/35270026#35270026
+  auto moved = _mm_movehdup_ps(v);
+  auto sum = _mm_add_ps(v, moved);
+  moved = _mm_movehl_ps(moved, sum);
+  sum = _mm_add_ss(sum, moved);
+  return _mm_cvtss_f32(sum);
+}
 class vec4 {
  public:
   vec4() {
@@ -76,6 +84,16 @@ class vec4 {
     vec() = _mm_div_ps(vec(), v.vec());
     return *this;
   }
+  float dist() const {
+    auto sq = _mm_mul_ps(vec(), vec());
+    auto sum = hadd(sq);
+    return sqrt(sum);
+  }
+  vec4& normalize() {
+    float d = dist();
+    (*this) /= d;
+    return *this;
+  }
   friend vec4 operator+(const vec4& v, const float c) {
     auto v2 = vec4(c);
     v2.vec() = _mm_add_ps(v.vec(), v2.vec());
@@ -133,12 +151,7 @@ class vec4 {
     return {std::move(result)};
   }
   friend float sum(const vec4& v) {
-    // https://stackoverflow.com/questions/6996764/fastest-way-to-do-horizontal-sse-vector-sum-or-other-reduction/35270026#35270026
-    auto moved = _mm_movehdup_ps(v.vec());
-    auto sum = _mm_add_ps(v.vec(), moved);
-    moved = _mm_movehl_ps(moved, sum);
-    sum = _mm_add_ss(sum, moved);
-    return _mm_cvtss_f32(sum);
+    return hadd(v.vec());
   }
  private:
   static inline simd_vec set_zero() { return _mm_setzero_ps(); }
