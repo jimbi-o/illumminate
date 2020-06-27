@@ -36,10 +36,20 @@ class vector {
   vector() {
     vec() = _mm_setzero_ps();
   }
-  vector(const float* f) {}
-  vector(const float c) {}
-  vector(const float f0, const float f1, const float f2, const float f3) {}
-  vector(const float f0, const float f1, const float f2) {}
+  vector(const float* f) {
+    vec() = create_simd_vec<N>(f);
+  }
+  vector(const float c) {
+    vec() = create_simd_vec<N>(c);
+  }
+  vector(const float f0, const float f1, const float f2, const float f3) {
+    const float f[4] = {f0,f1,f2,f3};
+    vec() = create_simd_vec<4>(f);
+  }
+  vector(const float f0, const float f1, const float f2) {
+    const float f[4] = {f0,f1,f2,0.0f};
+    vec() = create_simd_vec<4>(f);
+  }
   vector(const simd_vec&& v) {
     vec() = std::move(v);
   }
@@ -176,19 +186,6 @@ class vector {
   inline float* array() { return data.array; }
   RawVector data;
 };
-template <>
-vector<4>::vector(const float* f) {
-  vec() = create_simd_vec<4>(f);
-}
-template <>
-vector<4>::vector(const float c) {
-  vec() = create_simd_vec<4>(c);
-}
-template <>
-vector<4>::vector(const float f0, const float f1, const float f2, const float f3) {
-  const float f[4] = {f0,f1,f2,f3};
-  vec() = create_simd_vec<4>(f);
-}
 using vec4 = vector<4>;
 using vec3 = vector<3>;
 }
