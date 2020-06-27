@@ -29,6 +29,9 @@ else()
 endif()
 
 target_compile_features(illuminatemath PUBLIC cxx_std_17)
+if (NOT MSVC)
+  target_compile_options(illuminatemath PRIVATE -msse4.2)
+endif()
 target_compile_definitions(illuminatemath PRIVATE ${PJ_BUILD_TYPE})
 if ("${PJ_BUILD_TYPE}" STREQUAL "BUILD_TYPE_DEBUG")
   # debug

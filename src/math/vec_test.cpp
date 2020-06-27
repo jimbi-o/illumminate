@@ -119,4 +119,6 @@ TEST_CASE("vector") {
   CHECK(sv[1] == -2.0f);
   CHECK(sv[2] == -2.5f);
   CHECK(sv[3] == -2.0f);
+  auto s = sum(sv);
+  CHECK(s == -11.5f);
 }

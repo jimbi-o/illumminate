@@ -1,6 +1,7 @@
 #ifndef __ILLUMINATE_MATH_VECTOR_H__
 #define __ILLUMINATE_MATH_VECTOR_H__
 #include <cstdint>
+#include <math.h>
 #include "immintrin.h"
 namespace illuminate::math {
 using simd_vec = __m128;
@@ -30,7 +31,7 @@ class vec4 {
   }
   bool operator==(const vec4& v) const {
     auto cmp = _mm_cmpeq_ps(vec(), v.vec());
-    auto result = _mm_movemask_epi8(cmp);
+    auto result = _mm_movemask_epi8(_mm_castps_si128(cmp));
     return result == 0xFFFF;
   }
   constexpr float operator[](const uint32_t index) const {
@@ -131,13 +132,19 @@ class vec4 {
     auto result = _mm_div_ps(a.vec(), b.vec());
     return {std::move(result)};
   }
+  friend float sum(const vec4& v) {
+    auto sum = v.vec();
+    sum = _mm_hadd_ps(sum, sum);
+    sum = _mm_hadd_ps(sum, sum);
+    return _mm_cvtss_f32(sum);
+  }
  private:
   static inline simd_vec set_zero() { return _mm_setzero_ps(); }
   static inline simd_vec set_val(const float c) { return _mm_set1_ps(c); }
   static inline simd_vec set_val(const float f0, const float f1, const float f2, const float f3) { return _mm_setr_ps(f0, f1, f2, f3); }
   inline const simd_vec& vec() const { return data.data; }
   inline simd_vec& vec() { return data.data; }
-  inline const float* array() const { return data.array; }
+  inline constexpr const float* array() const { return data.array; }
   inline float* array() { return data.array; }
   RawVector data;
 };
