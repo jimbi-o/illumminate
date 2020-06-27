@@ -57,22 +57,22 @@ class vector {
     return array()[index];
   }
   vector& operator+=(const float c) {
-    auto v = create_simd_vec<4>(c);
+    auto v = create_simd_vec<N>(c);
     vec() = _mm_add_ps(vec(), v);
     return *this;
   }
   vector& operator-=(const float c) {
-    auto v = create_simd_vec<4>(c);
+    auto v = create_simd_vec<N>(c);
     vec() = _mm_sub_ps(vec(), v);
     return *this;
   }
   vector& operator*=(const float c) {
-    auto v = create_simd_vec<4>(c);
+    auto v = create_simd_vec<N>(c);
     vec() = _mm_mul_ps(vec(), v);
     return *this;
   }
   vector& operator/=(const float c) {
-    auto v = create_simd_vec<4>(c);
+    auto v = create_simd_vec<N>(c);
     vec() = _mm_div_ps(vec(), v);
     return *this;
   }
