@@ -133,9 +133,11 @@ class vec4 {
     return {std::move(result)};
   }
   friend float sum(const vec4& v) {
-    auto sum = v.vec();
-    sum = _mm_hadd_ps(sum, sum);
-    sum = _mm_hadd_ps(sum, sum);
+    // https://stackoverflow.com/questions/6996764/fastest-way-to-do-horizontal-sse-vector-sum-or-other-reduction/35270026#35270026
+    auto moved = _mm_movehdup_ps(v.vec());
+    auto sum = _mm_add_ps(v.vec(), moved);
+    moved = _mm_movehl_ps(moved, sum);
+    sum = _mm_add_ss(sum, moved);
     return _mm_cvtss_f32(sum);
   }
  private:
