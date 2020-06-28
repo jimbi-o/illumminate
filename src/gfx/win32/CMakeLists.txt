@@ -13,7 +13,13 @@ FetchContent_Declare(
   GIT_SHALLOW    OFF
 )
 FetchContent_MakeAvailable(doctest)
-
+FetchContent_Declare(
+  spdlog
+  GIT_REPOSITORY https://github.com/gabime/spdlog.git
+  GIT_TAG        39150eb8c7673f37d740d957acfcbff8c48ef9a6
+  GIT_SHALLOW    OFF
+)
+FetchContent_MakeAvailable(spdlog)
 
 if (NOT DEFINED PJ_BUILD_TYPE)
   set(PJ_BUILD_TYPE "BUILD_TYPE_DEVEOP")
@@ -44,17 +50,19 @@ elseif ("${PJ_BUILD_TYPE}" STREQUAL "BUILD_TYPE_DEVELOP")
 endif()
 if (BUILD_WITH_TEST)
   target_compile_definitions(illuminategfxwin32 PRIVATE BUILD_WITH_TEST)
+  target_link_libraries(illuminategfxwin32 PRIVATE doctest::doctest)
 else()
   target_compile_definitions(illuminategfxwin32 PRIVATE DOCTEST_CONFIG_DISABLE)
 endif()
 
-target_link_libraries(illuminategfxwin32 PRIVATE doctest::doctest)
+target_link_libraries(illuminategfxwin32 PRIVATE spdlog)
 
 target_include_directories(illuminategfxwin32
   PUBLIC
   "../../../include"
   PRIVATE
   "."
+  "../../"
   "../../../include/gfx/win32"
 )
 
@@ -63,6 +71,6 @@ target_sources(illuminategfxwin32 PRIVATE
 )
 if (BUILD_WITH_TEST)
   target_sources(illuminategfxwin32 PRIVATE
-	"win32_window_test.cpp"
+	"win32_test.cpp"
   )
 endif()

@@ -44,11 +44,10 @@ elseif ("${PJ_BUILD_TYPE}" STREQUAL "BUILD_TYPE_DEVELOP")
 endif()
 if (BUILD_WITH_TEST)
   target_compile_definitions(illuminatemath PRIVATE BUILD_WITH_TEST)
+  target_link_libraries(illuminatemath PRIVATE doctest::doctest)
 else()
   target_compile_definitions(illuminatemath PRIVATE DOCTEST_CONFIG_DISABLE)
 endif()
-
-target_link_libraries(illuminatemath PRIVATE doctest::doctest)
 
 target_include_directories(illuminatemath
   PUBLIC
