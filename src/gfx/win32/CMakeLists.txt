@@ -68,6 +68,7 @@ target_include_directories(illuminategfxwin32
 
 target_sources(illuminategfxwin32 PRIVATE
   "win32_window.cpp"
+  "win32_handle.cpp"
 )
 if (BUILD_WITH_TEST)
   target_sources(illuminategfxwin32 PRIVATE

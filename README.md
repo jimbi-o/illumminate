@@ -16,9 +16,6 @@ cmake.exe -S src/math -B buildvs -A x64 -DCMAKE_CONFIGURATION_TYPES="Debug;RelWi
 
 # win32 lib
 
-## ninja
-cmake -S src/gfx/win32 -B build -GNinja -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake --build build && ./build/illuminategfxwin32
-
 ## visual studio
-cmake.exe -S src/gfx/win32 -B buildvs -A x64 -DCMAKE_CONFIGURATION_TYPES="Debug;RelWithDebInfo;Release" && cmake.exe --build buildvs --config RelWithDebInfo && ./buildvs/RelWithDebInfo/illuminategfxwin32.exe
+cmake.exe -S src/gfx/win32 -B build -G "Visual Studio 16 2019" -A x64 -T"ClangCL" -DCMAKE_CONFIGURATION_TYPES="Debug;RelWithDebInfo;Release" -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake.exe --build build --config RelWithDebInfo && ./build/RelWithDebInfo/illuminategfxwin32.exe
 ```
