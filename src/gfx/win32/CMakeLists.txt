@@ -63,7 +63,7 @@ target_include_directories(illuminategfxwin32
   PRIVATE
   "."
   "../../"
-  "../../../include/gfx/win32"
+  "../../../include/illuminate/gfx/win32"
 )
 
 target_sources(illuminategfxwin32 PRIVATE
