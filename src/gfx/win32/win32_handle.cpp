@@ -1,5 +1,5 @@
 #include "win32_handle.h"
-#include "logger.h"
+#include "minimal_for_cpp.h"
 #include "doctest/doctest.h"
 namespace illuminate::gfx::win32 {
 HANDLE CreateEventHandle() {

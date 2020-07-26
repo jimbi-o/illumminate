@@ -14,11 +14,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(doctest)
 
-
-if (NOT DEFINED PJ_BUILD_TYPE)
-  set(PJ_BUILD_TYPE "BUILD_TYPE_DEVEOP")
-endif()
-
 if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
   if (NOT DEFINED BUILD_WITH_TEST)
 	set(BUILD_WITH_TEST ON)
@@ -34,16 +29,6 @@ if (NOT MSVC)
 endif()
 if ("${CMAKE_VS_PLATFORM_TOOLSET}" STREQUAL "ClangCL")
   target_compile_options(illuminatemath PRIVATE "/arch:AVX2")
-endif()
-target_compile_definitions(illuminatemath PRIVATE ${PJ_BUILD_TYPE})
-if ("${PJ_BUILD_TYPE}" STREQUAL "BUILD_TYPE_DEBUG")
-  # debug
-  target_compile_definitions(illuminatemath PRIVATE BUILD_WITH_ASSERT)
-elseif ("${PJ_BUILD_TYPE}" STREQUAL "BUILD_TYPE_DEVELOP")
-  # develop
-  target_compile_definitions(illuminatemath PRIVATE BUILD_WITH_ASSERT)
-# else ()
-  # ship
 endif()
 if (BUILD_WITH_TEST)
   target_compile_definitions(illuminatemath PRIVATE BUILD_WITH_TEST)
