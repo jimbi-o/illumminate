@@ -8,22 +8,21 @@ realtime 3d graphics renderer
 # math lib
 
 ## ninja
-cmake -S src/math -B build -GNinja -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake --build build && ./build/illuminatemath
+cmake -S src/math -B buildmath -GNinja -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake --build buildmath && ./buildmath/illuminatemath
 
 ## visual studio
-cmake.exe -S src/math -B buildvs -A x64 -DCMAKE_CONFIGURATION_TYPES="Debug;RelWithDebInfo;Release" && cmake.exe --build buildvs --config RelWithDebInfo && ./buildvs/RelWithDebInfo/illuminatemath.exe
+cmake.exe -S src/math -B buildmathvs -A x64 -T"ClangCL" -DCMAKE_CONFIGURATION_TYPES="Debug;RelWithDebInfo;Release" && cmake.exe --build buildmathvs --config RelWithDebInfo && ./buildmathvs/RelWithDebInfo/illuminatemath.exe
 
 # core
 
 ## syntax check
-
 clang -std=c++17 -I ../ -I ../../include -I ../../include/illuminate/core -I ../../build/_deps/doctest-src/ -I ../../build/_deps/spdlog-src/include/ -fsyntax-only strid.cpp
 
 ## ninja
 cmake -S src/core -B buildcore -GNinja -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake --build buildcore && ./buildcore/illuminatecore
 
 ## visual studio
-cmake.exe -S src/core -B buildcorevs -A x64 -DCMAKE_CONFIGURATION_TYPES="Debug;RelWithDebInfo;Release" && cmake.exe --build buildcorevs --config RelWithDebInfo && ./buildcorevs/RelWithDebInfo/illuminatecore.exe
+cmake.exe -S src/core -B buildcorevs -A x64 -T"ClangCL" -DCMAKE_CONFIGURATION_TYPES="Debug;RelWithDebInfo;Release" && cmake.exe --build buildcorevs --config RelWithDebInfo && ./buildcorevs/RelWithDebInfo/illuminatecore.exe
 
 # win32 lib
 
@@ -31,6 +30,9 @@ cmake.exe -S src/core -B buildcorevs -A x64 -DCMAKE_CONFIGURATION_TYPES="Debug;R
 cmake.exe -S src/gfx/win32 -B build -G "Visual Studio 16 2019" -A x64 -T"ClangCL" -DCMAKE_CONFIGURATION_TYPES="Debug;RelWithDebInfo;Release" -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake.exe --build build --config RelWithDebInfo && ./build/RelWithDebInfo/illuminategfxwin32.exe
 
 # renderer
+
+## syntax check
+clang -std=c++17 -I ../ -I ../../include -I ../../include/illuminate -I ../../include/illuminate/gfx -I ../../build/_deps/doctest-src/ -I ../../build/_deps/spdlog-src/include/ -fsyntax-only renderer.cpp
 
 ## ninja
 cmake -S src/gfx -B buildgfx -GNinja -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake --build buildgfx && ./buildgfx/illuminategfx
