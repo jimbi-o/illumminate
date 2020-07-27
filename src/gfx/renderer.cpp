@@ -71,6 +71,7 @@ TEST_CASE("renderer test") {
   RendererInterface* renderer = nullptr;
   SUBCASE("d3d12 renderer") {
     renderer = CreateRendererD3d12();
+    CHECK(renderer);
   }
   renderer->ExecuteBatchedRendererPass(&batch, 1, global_buffer_descs);
   delete renderer;

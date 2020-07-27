@@ -48,7 +48,7 @@ struct ClearValue {
   };
 };
 using ClearRequiredBufferList = std::unordered_map<StrId, ClearValue>;
-struct RenderPass {
+struct RenderPassConfig {
   StrId pass_name;
   QueueType queue_type;
   AsyncCompute async_compute_enabled;
@@ -57,11 +57,11 @@ struct RenderPass {
   PassBindedBufferList pass_binded_buffers;
   ClearRequiredBufferList clear_required_buffers;
 };
-using RenderPassList = std::vector<RenderPass>;
+using RenderPassConfigList = std::vector<RenderPassConfig>;
 using BatchLocalBufferDescList = std::unordered_map<StrId, BufferDesc>;
 struct BatchedRendererPass {
   StrId batch_name;
-  RenderPassList pass_list;
+  RenderPassConfigList pass_configs;
   BatchLocalBufferDescList batch_local_buffer_descs;
 };
 constexpr ClearValue GetClearValueDefaultRtv() {
