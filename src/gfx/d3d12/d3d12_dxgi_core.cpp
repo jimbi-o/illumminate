@@ -8,9 +8,7 @@ bool DxgiCore::Init() {
   SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   library_ = LoadLibrary("Dxgi.dll");
   ASSERT(library_ && "failed to load Dxgi.dll");
-  LoadDllFunction(library_, CreateDXGIFactory2);  
-  ASSERT(CreateDXGIFactory2 && "load CreateDXGIFactory2 failed");
-  auto hr = CreateDXGIFactory2(0, IID_PPV_ARGS(&factory_));
+  auto hr = CALL(CreateDXGIFactory2)(0, IID_PPV_ARGS(&factory_));
   ASSERT(SUCCEEDED(hr) && factory_ && "CreateDXGIFactory2 failed", hr);
   hr = factory_->EnumAdapterByGpuPreference(0, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&adapter_));
   ASSERT(SUCCEEDED(hr) && adapter_ && "EnumAdapterByGpuPreference failed", hr);
@@ -28,8 +26,7 @@ void DxgiCore::Term() {
   factory_->Release();
 #ifndef SHIP_BUILD
   IDXGIDebug1* debug = nullptr;
-  LoadDllFunction(library_, DXGIGetDebugInterface1);
-  auto hr = DXGIGetDebugInterface1(0, IID_PPV_ARGS(&debug));
+  auto hr = CALL(DXGIGetDebugInterface1)(0, IID_PPV_ARGS(&debug));
   if (FAILED(hr)) {
     logwarn("DXGIGetDebugInterface failed. {}", hr);
     return;

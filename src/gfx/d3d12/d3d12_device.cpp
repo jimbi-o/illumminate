@@ -10,9 +10,8 @@ bool Device::Init(DxgiAdapter* const adapter) {
   ASSERT(library_ && "LoadLibrary(D3D12.dll) failed");
 #ifndef SHIP_BUILD
   if (IsDebuggerPresent()) {
-    LoadDllFunction(library_, D3D12GetDebugInterface);
     ID3D12Debug* debug_interface = nullptr;
-    if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug_interface)))) {
+    if (SUCCEEDED(CALL(D3D12GetDebugInterface)(IID_PPV_ARGS(&debug_interface)))) {
       debug_interface->EnableDebugLayer();
       loginfo("EnableDebugLayer");
       ID3D12Debug1* debug_interface1 = nullptr;
@@ -25,8 +24,7 @@ bool Device::Init(DxgiAdapter* const adapter) {
     }
   }
 #endif
-  LoadDllFunction(library_, D3D12CreateDevice);
-  auto hr = D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(&device_));
+  auto hr = CALL(D3D12CreateDevice)(adapter, D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(&device_));
   ASSERT(SUCCEEDED(hr) && device_ && "D3D12CreateDevice failed.", hr);
   return true;
 #ifndef SHIP_BUILD
