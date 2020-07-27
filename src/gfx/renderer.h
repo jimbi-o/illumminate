@@ -52,6 +52,7 @@ struct RenderPass {
   StrId pass_name;
   QueueType queue_type;
   AsyncCompute async_compute_enabled;
+  StrId render_function_name;
   ViewportSize viewport_size;
   PassBindedBufferList pass_binded_buffers;
   ClearRequiredBufferList clear_required_buffers;

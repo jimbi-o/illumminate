@@ -9,6 +9,7 @@ TEST_CASE("renderer test") {
         SID("gpass1"),
         QueueType::kGraphics,
         AsyncCompute::kDisable,
+        SID("gpass1"),
         // viewport size
         { BufferSizeType::kSwapchainRelative,1.0f, 1.0f},
         // pass binded buffers
@@ -26,6 +27,7 @@ TEST_CASE("renderer test") {
         SID("gpass2"),
         QueueType::kGraphics,
         AsyncCompute::kDisable,
+        SID("gpass2"),
         // viewport size
         { BufferSizeType::kSwapchainRelative,1.0f, 1.0f},
         // pass binded buffers
@@ -39,6 +41,7 @@ TEST_CASE("renderer test") {
         SID("cpass1"),
         QueueType::kCompute,
         AsyncCompute::kEnable,
+        SID("cpass1"),
         // viewport size
         {},
         // pass binded buffers
@@ -65,7 +68,10 @@ TEST_CASE("renderer test") {
       { BufferFormat::kDepthBufferDefault, BufferSizeType::kViewportRelative, 1.0f, 1.0f }
     },
   };
-  auto renderer = CreateRendererD3d12();
+  RendererInterface* renderer = nullptr;
+  SUBCASE("d3d12 renderer") {
+    renderer = CreateRendererD3d12();
+  }
   renderer->ExecuteBatchedRendererPass(&batch, 1, global_buffer_descs);
   delete renderer;
 }
