@@ -44,7 +44,7 @@ else()
   target_compile_definitions(illuminategfxd3d12 PRIVATE DOCTEST_CONFIG_DISABLE)
 endif()
 
-target_link_libraries(illuminategfxd3d12 PRIVATE spdlog)
+target_link_libraries(illuminategfxd3d12 PRIVATE spdlog dxguid.lib)
 
 target_include_directories(illuminategfxd3d12
   PUBLIC
@@ -62,6 +62,8 @@ target_include_directories(illuminategfxd3d12
 target_sources(illuminategfxd3d12 PRIVATE
   "d3d12_renderer.cpp"
   "d3d12_dxgi_core.cpp"
+  "d3d12_device.cpp"
+  "d3d12_util.cpp"
 )
 if (BUILD_WITH_TEST)
   target_sources(illuminategfxd3d12 PRIVATE

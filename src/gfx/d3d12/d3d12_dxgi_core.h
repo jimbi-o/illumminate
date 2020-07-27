@@ -1,10 +1,7 @@
 #ifndef __ILLUMINATE_D3D12_DXGI_CORE_H__
 #define __ILLUMINATE_D3D12_DXGI_CORE_H__
-#include <dxgi1_6.h>
-#include "renderer.h"
+#include "d3d12_header_common.h"
 namespace illuminate::gfx::d3d12 {
-using DxgiFactory = IDXGIFactory7;
-using DxgiAdapter = IDXGIAdapter4;
 class DxgiCore {
  public:
   bool Init();

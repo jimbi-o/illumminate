@@ -1,11 +1,14 @@
 #include "d3d12_dxgi_core.h"
-#include "minimal_for_cpp.h"
+#include "d3d12_minimal_for_cpp.h"
+#ifndef SHIP_BUILD
+#include "DXGIDebug.h"
+#endif
 namespace illuminate::gfx::d3d12 {
 bool DxgiCore::Init() {
   SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   library_ = LoadLibrary("Dxgi.dll");
   ASSERT(library_ && "failed to load Dxgi.dll");
-  decltype(&CreateDXGIFactory2) CreateDXGIFactory2 = reinterpret_cast<decltype(CreateDXGIFactory2)>(GetProcAddress(library_, "CreateDXGIFactory2"));
+  LoadDllFunction(library_, CreateDXGIFactory2);  
   ASSERT(CreateDXGIFactory2 && "load CreateDXGIFactory2 failed");
   auto hr = CreateDXGIFactory2(0, IID_PPV_ARGS(&factory_));
   ASSERT(SUCCEEDED(hr) && factory_ && "CreateDXGIFactory2 failed", hr);
@@ -21,8 +24,19 @@ bool DxgiCore::Init() {
   return true;
 };
 void DxgiCore::Term() {
-  factory_->Release();
   adapter_->Release();
+  factory_->Release();
+#ifndef SHIP_BUILD
+  IDXGIDebug1* debug = nullptr;
+  LoadDllFunction(library_, DXGIGetDebugInterface1);
+  auto hr = DXGIGetDebugInterface1(0, IID_PPV_ARGS(&debug));
+  if (FAILED(hr)) {
+    logwarn("DXGIGetDebugInterface failed. {}", hr);
+    return;
+  }
+  debug->ReportLiveObjects(DXGI_DEBUG_ALL, DXGI_DEBUG_RLO_ALL);
+  debug->Release();
+#endif
   FreeLibrary(library_);
 };
 }
