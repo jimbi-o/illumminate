@@ -74,6 +74,5 @@ class RendererInterface {
  public:
   virtual ~RendererInterface() {}
 };
-extern RendererInterface* CreateRendererD3d12();
 }
 #endif

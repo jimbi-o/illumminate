@@ -1,6 +1,6 @@
 #include "renderer.h"
 namespace illuminate::gfx {
-void ExecuteBatchedRendererPass(const BatchedRendererPass* const batch_list, const uint32_t batch_num, const BufferDescList& global_buffer_descs, RendererInterface* const renderer) {
+void ProcessBatchedRendererPass(const BatchedRendererPass* const batch_list, const uint32_t batch_num, const BufferDescList& global_buffer_descs) {
 }
 }
 #include "doctest/doctest.h"
@@ -72,11 +72,5 @@ TEST_CASE("renderer test") {
       { BufferFormat::kDepthBufferDefault, BufferSizeType::kViewportRelative, 1.0f, 1.0f }
     },
   };
-  RendererInterface* renderer = nullptr;
-  SUBCASE("d3d12 renderer") {
-    renderer = CreateRendererD3d12();
-    CHECK(renderer);
-  }
-  ExecuteBatchedRendererPass(&batch, 1, global_buffer_descs, renderer);
-  delete renderer;
+  ProcessBatchedRendererPass(&batch, 1, global_buffer_descs);
 }

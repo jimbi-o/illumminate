@@ -54,6 +54,7 @@ target_include_directories(illuminatecore
 
 target_sources(illuminatecore PRIVATE
   "strid.cpp"
+  "illuminate_memory.cpp"
 )
 if (BUILD_WITH_TEST)
   target_sources(illuminatecore PRIVATE

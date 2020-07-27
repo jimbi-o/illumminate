@@ -21,8 +21,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(spdlog)
 
-add_subdirectory(d3d12)
-
 if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
   if (NOT DEFINED BUILD_WITH_TEST)
 	set(BUILD_WITH_TEST ON)
@@ -34,7 +32,7 @@ endif()
 
 target_compile_features(illuminategfx PUBLIC cxx_std_17)
 if (NOT MSVC)
-  target_compile_options(illuminategfx PRIVATE /arch:AVX2)
+  target_compile_options(illuminategfx PRIVATE -msse4.2)
 endif()
 if ("${CMAKE_VS_PLATFORM_TOOLSET}" STREQUAL "ClangCL")
   target_compile_options(illuminategfx PRIVATE "/arch:AVX2")
@@ -46,7 +44,7 @@ else()
   target_compile_definitions(illuminategfx PRIVATE DOCTEST_CONFIG_DISABLE)
 endif()
 
-target_link_libraries(illuminategfx PRIVATE illuminategfxd3d12 spdlog)
+target_link_libraries(illuminategfx PRIVATE spdlog)
 
 target_include_directories(illuminategfx
   PUBLIC
