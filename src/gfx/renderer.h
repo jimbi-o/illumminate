@@ -73,7 +73,6 @@ constexpr ClearValue GetClearValueDefaultDsv() {
 class RendererInterface {
  public:
   virtual ~RendererInterface() {}
-  virtual void ExecuteBatchedRendererPass(const BatchedRendererPass* const batch_list, const uint32_t batch_num, const BufferDescList& global_buffer_descs) = 0;
 };
 extern RendererInterface* CreateRendererD3d12();
 }

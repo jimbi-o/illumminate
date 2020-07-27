@@ -1,4 +1,8 @@
 #include "renderer.h"
+namespace illuminate::gfx {
+void ExecuteBatchedRendererPass(const BatchedRendererPass* const batch_list, const uint32_t batch_num, const BufferDescList& global_buffer_descs, RendererInterface* const renderer) {
+}
+}
 #include "doctest/doctest.h"
 TEST_CASE("renderer test") {
   using namespace illuminate::gfx;
@@ -73,6 +77,6 @@ TEST_CASE("renderer test") {
     renderer = CreateRendererD3d12();
     CHECK(renderer);
   }
-  renderer->ExecuteBatchedRendererPass(&batch, 1, global_buffer_descs);
+  ExecuteBatchedRendererPass(&batch, 1, global_buffer_descs, renderer);
   delete renderer;
 }
