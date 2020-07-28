@@ -1,12 +1,12 @@
 #ifndef __ILLUMINATE_CORE_STRID_H__
 #define __ILLUMINATE_CORE_STRID_H__
 #include <cstdint>
-#include <unordered_map>
-#include <unordered_set>
+#include <functional>
+#define STRID_DEBUG_STR_ENABLED
 using size_t = std::size_t;
 namespace illuminate::core {
 template <typename C, typename V>
-bool IsContaining(const C& container, const V& val) {
+constexpr bool IsContaining(const C& container, const V& val) {
   return container.find(val) != container.end();
 }
 using HashResult = uint32_t;
@@ -18,12 +18,21 @@ constexpr inline HashResult HornerHash(const HashResult prime, const char (&str)
 }
 class StrId {
  public:
+#ifndef STRID_DEBUG_STR_ENABLED
   constexpr StrId(const HashResult hash) : hash_(hash) {}
+  constexpr StrId() : hash_(0) {}
+#else
+  StrId(const HashResult hash, const char* const str) : hash_(hash), str_(str) {}
+  StrId() : hash_(0), str_() {}
+#endif
   constexpr operator uint32_t() const { return hash_; }
   constexpr bool operator==(const StrId& id) const { return hash_ == id.hash_; } // for unordered_map
   constexpr HashResult GetHash() const { return hash_; }
  private:
   HashResult hash_;
+#ifdef STRID_DEBUG_STR_ENABLED
+  std::string str_;
+#endif
 };
 }
 // for unordered_map
@@ -37,6 +46,10 @@ struct less<illuminate::core::StrId> {
   bool operator()(const illuminate::core::StrId& l, const illuminate::core::StrId& r) const { return r.GetHash() < l.GetHash(); }
 };
 }
+#ifndef STRID_DEBUG_STR_ENABLED
 #define SID(str) illuminate::core::StrId(illuminate::core::HornerHash(31,str))
+#else
+#define SID(str) illuminate::core::StrId(illuminate::core::HornerHash(31,str), str)
+#endif
 using StrId = illuminate::core::StrId;
 #endif

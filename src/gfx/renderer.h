@@ -15,31 +15,6 @@ enum class BufferSizeType : uint8_t {
   kViewportRelative,
   kAbsolute,
 };
-struct BufferDesc {
-  BufferFormat format;
-  BufferSizeType size_type;
-  float x, y, z;
-};
-using BufferDescList = std::unordered_map<StrId, BufferDesc>;
-enum class QueueType : uint8_t { kGraphics, kCompute };
-enum class AsyncCompute : uint8_t { kDisable, kEnable };
-enum class BufferRWType : uint8_t {
-  kReadSrv,
-  kReadDsv,
-  kReadUav,
-  kWriteRtv,
-  kWriteDsv,
-  kWriteUav,
-};
-struct ViewportSize {
-  BufferSizeType size_type;
-  float width, height;
-};
-struct PassBindedBuffer {
-  StrId buffer_name;
-  BufferRWType rw_type;
-};
-using PassBindedBufferList = std::vector<PassBindedBuffer>;
 struct ClearValue {
   struct DepthStencil { float depth; uint8_t stencil; };
   union {
@@ -47,7 +22,29 @@ struct ClearValue {
     DepthStencil depth_stencil;
   };
 };
-using ClearRequiredBufferList = std::unordered_map<StrId, ClearValue>;
+struct BufferDesc {
+  BufferFormat format;
+  BufferSizeType size_type;
+  float x, y, z;
+  ClearValue clear_value;
+};
+using BufferDescList = std::unordered_map<StrId, BufferDesc>;
+enum class QueueType : uint8_t { kGraphics, kCompute, kTransfer, };
+enum class AsyncCompute : uint8_t { kDisabled, kEnabled };
+enum class BufferState : uint8_t { kSrv, kRtv, kDsv, kUav, };
+enum class BufferLoadOp : uint8_t { kLoad, kClear, kDontCare, };
+enum class BufferStoreOp : uint8_t { kStore, kDontCare, };
+struct ViewportSize {
+  BufferSizeType size_type;
+  float width, height;
+};
+struct PassBindedBuffer {
+  StrId buffer_name;
+  BufferState state;
+  BufferLoadOp  load_op;
+  BufferStoreOp store_op;
+};
+using PassBindedBufferList = std::vector<PassBindedBuffer>;
 struct RenderPassConfig {
   StrId pass_name;
   QueueType queue_type;
@@ -55,7 +52,6 @@ struct RenderPassConfig {
   StrId render_function_name;
   ViewportSize viewport_size;
   PassBindedBufferList pass_binded_buffers;
-  ClearRequiredBufferList clear_required_buffers;
 };
 using RenderPassConfigList = std::vector<RenderPassConfig>;
 using BatchLocalBufferDescList = std::unordered_map<StrId, BufferDesc>;

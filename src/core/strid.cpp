@@ -1,4 +1,6 @@
 #include "strid.h"
+#include <unordered_map>
+#include <unordered_set>
 #include "doctest/doctest.h"
 TEST_CASE("strid") {
   using namespace illuminate::core;
