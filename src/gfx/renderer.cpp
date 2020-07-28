@@ -80,8 +80,13 @@ void LinkLoadingBuffersToExistingBuffers(const BatchedRendererPass* const batch_
     auto pass_num = batch.pass_configs.size();
     for (uint32_t j = 0; j < pass_num; j++) {
       auto& pass = batch.pass_configs[j];
-      for (auto& buffer : pass.pass_binded_buffers) {
+      const uint32_t buffer_num = pass.pass_binded_buffers.size();
+      for (uint32_t k = 0; k < buffer_num; k++) {
+        auto& buffer = pass.pass_binded_buffers[k];
         if (buffer.load_op != BufferLoadOp::kLoad) continue;
+        if (buffer.state == BufferState::kSrv && buffer.store_op != BufferStoreOp::kDontCare) {
+          logwarn("invalid state for srv. {} {} {}({})", i, j, k, buffer.buffer_name);
+        }
         (*pass_binded_buffer_ids)[pass.pass_name][buffer.state][buffer.buffer_name] = FindBufferIdFromLatestStore(batch_list, batch_num, i, j, buffer.buffer_name, *pass_binded_buffer_ids);
       }
     }
