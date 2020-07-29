@@ -97,6 +97,21 @@ PassBindedBufferIdList IdentifyPassBindedBuffers(const BatchedRendererPass* cons
   LinkLoadingBuffersToExistingBuffers(batch_list, batch_num, &pass_binded_buffer_ids);
   return pass_binded_buffer_ids;
 }
+using PassBindedBufferStateList = std::unordered_map<uint32_t, std::unordered_map<StrId, BufferState>>;
+PassBindedBufferStateList ExtractBufferStateList(const BatchedRendererPass* const batch_list, const uint32_t batch_num, const PassBindedBufferIdList& pass_binded_buffer_ids) {
+  PassBindedBufferStateList list;
+  for (uint32_t i = 0; i < batch_num; i++) {
+    auto& batch = batch_list[i];
+    for (auto& pass : batch.pass_configs) {
+      auto pass_name = pass.pass_name;
+      for (auto& buffer : pass.pass_binded_buffers) {
+        auto buffer_id = pass_binded_buffer_ids.at(pass_name).at(buffer.state).at(buffer.buffer_name);
+        list[buffer_id][pass_name] = buffer.state;
+      }
+    }
+  }
+  return list;
+}
 void ProcessBatchedRendererPass(const BatchedRendererPass* const batch_list, const uint32_t batch_num, const BufferDescList& global_buffer_descs) {
   // TODO
 }
@@ -266,6 +281,28 @@ TEST_CASE("pass binded buffer id list") {
   CHECK(pass_binded_buffer_ids[SID("cpass1")][BufferState::kUav][SID("buf1")]    == pass_binded_buffer_ids[SID("gpass4")][BufferState::kSrv][SID("buf1")]);
   CHECK(pass_binded_buffer_ids[SID("gpass3")][BufferState::kRtv][SID("primary")] == pass_binded_buffer_ids[SID("gpass4")][BufferState::kSrv][SID("primary")]);
   CHECK(pass_binded_buffer_ids[SID("gpass4")][BufferState::kSrv][SID("buf1")]    == pass_binded_buffer_ids[SID("cpass1")][BufferState::kUav][SID("buf1")]);
+  auto buffer_state_list = ExtractBufferStateList(test_data.data(), test_data.size(), pass_binded_buffer_ids);
+  auto gpass1_rtv_primary = pass_binded_buffer_ids[SID("gpass1")][BufferState::kRtv][SID("primary")];
+  auto gpass1_dsv_depth   = pass_binded_buffer_ids[SID("gpass1")][BufferState::kDsv][SID("depth")];
+  auto gpass2_rtv_primary = pass_binded_buffer_ids[SID("gpass2")][BufferState::kRtv][SID("primary")];
+  auto cpass1_uav_buf0    = pass_binded_buffer_ids[SID("cpass1")][BufferState::kUav][SID("buf0")];
+  auto cpass1_uav_buf1    = pass_binded_buffer_ids[SID("cpass1")][BufferState::kUav][SID("buf1")];
+  auto gpass3_rtv_primary = pass_binded_buffer_ids[SID("gpass3")][BufferState::kRtv][SID("primary")];
+  auto gpass3_rtv_sub     = pass_binded_buffer_ids[SID("gpass3")][BufferState::kRtv][SID("sub")];
+  auto gpass4_rtv_primary = pass_binded_buffer_ids[SID("gpass4")][BufferState::kRtv][SID("primary")];
+  auto gpass4_rtv_buf0    = pass_binded_buffer_ids[SID("gpass4")][BufferState::kRtv][SID("buf0")];
+  CHECK(buffer_state_list[gpass1_rtv_primary][SID("gpass1")] == BufferState::kRtv);
+  CHECK(buffer_state_list[gpass1_dsv_depth][SID("gpass1")] == BufferState::kDsv);
+  CHECK(buffer_state_list[gpass1_rtv_primary][SID("gpass2")] == BufferState::kSrv);
+  CHECK(buffer_state_list[gpass2_rtv_primary][SID("gpass2")] == BufferState::kRtv);
+  CHECK(buffer_state_list[cpass1_uav_buf0][SID("cpass1")] == BufferState::kUav);
+  CHECK(buffer_state_list[cpass1_uav_buf1][SID("cpass1")] == BufferState::kUav);
+  CHECK(buffer_state_list[gpass3_rtv_primary][SID("gpass3")] == BufferState::kRtv);
+  CHECK(buffer_state_list[gpass3_rtv_sub][SID("gpass3")] == BufferState::kRtv);
+  CHECK(buffer_state_list[gpass3_rtv_primary][SID("gpass4")] == BufferState::kSrv);
+  CHECK(buffer_state_list[gpass4_rtv_primary][SID("gpass4")] == BufferState::kRtv);
+  CHECK(buffer_state_list[gpass4_rtv_buf0][SID("gpass4")] == BufferState::kRtv);
+  CHECK(buffer_state_list[cpass1_uav_buf1][SID("gpass4")] == BufferState::kSrv);
 }
 TEST_CASE("renderer test") {
   using namespace illuminate::gfx;
