@@ -19,6 +19,9 @@ if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
 	set(BUILD_WITH_TEST ON)
   endif()
   add_executable(illuminatemath)
+  if (BUILD_WITH_TEST)
+	target_sources(illuminatemath PRIVATE "vec_test.cpp")
+  endif()
 else()
   add_library(illuminatemath)
 endif()
@@ -44,8 +47,3 @@ target_include_directories(illuminatemath
   "."
   "../../include/illuminate/math"
 )
-if (BUILD_WITH_TEST)
-  target_sources(illuminatemath PRIVATE
-	"vec_test.cpp"
-  )
-endif()

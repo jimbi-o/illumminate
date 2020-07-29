@@ -26,6 +26,9 @@ if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
 	set(BUILD_WITH_TEST ON)
   endif()
   add_executable(illuminategfxwin32)
+  if (BUILD_WITH_TEST)
+	target_sources(illuminategfxwin32 PRIVATE "win32_test.cpp")
+  endif()
 else()
   add_library(illuminategfxwin32)
 endif()
@@ -56,8 +59,3 @@ target_sources(illuminategfxwin32 PRIVATE
   "win32_window.cpp"
   "win32_handle.cpp"
 )
-if (BUILD_WITH_TEST)
-  target_sources(illuminategfxwin32 PRIVATE
-	"win32_test.cpp"
-  )
-endif()

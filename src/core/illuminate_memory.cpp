@@ -187,7 +187,7 @@ TEST_CASE("scoped memory allocation with janitor") {
   void* ptr = nullptr;
   {
     auto janitor = memory.GetAllocatorWorkJanitor();
-    vector<uint32_t> vec(allocator_t<uint32_t>(janitor.GetAllocator<uint32_t>()));
+    vector<uint32_t> vec(janitor.GetAllocator<uint32_t>());
     for (uint32_t i = 0; i < 10; i++) {
       vec.push_back(i);
     }

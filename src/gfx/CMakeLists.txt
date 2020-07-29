@@ -26,9 +26,14 @@ if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
 	set(BUILD_WITH_TEST ON)
   endif()
   add_executable(illuminategfx)
+  if (BUILD_WITH_TEST)
+	target_sources(illuminategfx PRIVATE "gfx_test.cpp")
+  endif()
 else()
   add_library(illuminategfx)
 endif()
+
+add_subdirectory("../core" "${CMAKE_CURRENT_BINARY_DIR}/core")
 
 target_compile_features(illuminategfx PUBLIC cxx_std_17)
 if (NOT MSVC)
@@ -44,7 +49,7 @@ else()
   target_compile_definitions(illuminategfx PRIVATE DOCTEST_CONFIG_DISABLE)
 endif()
 
-target_link_libraries(illuminategfx PRIVATE spdlog)
+target_link_libraries(illuminategfx PRIVATE spdlog illuminatecore)
 
 target_include_directories(illuminategfx
   PUBLIC
@@ -59,8 +64,3 @@ target_include_directories(illuminategfx
 target_sources(illuminategfx PRIVATE
   "renderer.cpp"
 )
-if (BUILD_WITH_TEST)
-  target_sources(illuminategfx PRIVATE
-	"gfx_test.cpp"
-  )
-endif()

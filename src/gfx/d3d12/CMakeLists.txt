@@ -26,6 +26,9 @@ if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
 	set(BUILD_WITH_TEST ON)
   endif()
   add_executable(illuminategfxd3d12)
+  if (BUILD_WITH_TEST)
+	target_sources(illuminategfxd3d12 PRIVATE "d3d12_test.cpp")
+  endif()
 else()
   add_library(illuminategfxd3d12)
 endif()
@@ -65,8 +68,3 @@ target_sources(illuminategfxd3d12 PRIVATE
   "d3d12_device.cpp"
   "d3d12_util.cpp"
 )
-if (BUILD_WITH_TEST)
-  target_sources(illuminategfxd3d12 PRIVATE
-	"d3d12_test.cpp"
-  )
-endif()

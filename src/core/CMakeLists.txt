@@ -26,6 +26,9 @@ if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
 	set(BUILD_WITH_TEST ON)
   endif()
   add_executable(illuminatecore)
+  if (BUILD_WITH_TEST)
+	target_sources(illuminatecore PRIVATE "core_test.cpp")
+  endif()
 else()
   add_library(illuminatecore)
 endif()
@@ -56,8 +59,3 @@ target_sources(illuminatecore PRIVATE
   "strid.cpp"
   "illuminate_memory.cpp"
 )
-if (BUILD_WITH_TEST)
-  target_sources(illuminatecore PRIVATE
-	"core_test.cpp"
-  )
-endif()

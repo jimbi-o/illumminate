@@ -8,11 +8,11 @@ TEST_CASE("strid") {
   CHECK(sid == SID("a"));
   CHECK(sid != SID("b"));
   switch (sid) {
-    case SID("a"): {
+    case HASH("a"): {
       CHECK(true);
       break;
     }
-    case SID("b"): {
+    case HASH("b"): {
       CHECK(false);
       break;
     }

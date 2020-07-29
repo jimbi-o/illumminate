@@ -18,6 +18,7 @@ constexpr inline HashResult HornerHash(const HashResult prime, const char (&str)
 }
 class StrId {
  public:
+  static const HashResult kHashPrime = 31;
 #ifndef STRID_DEBUG_STR_ENABLED
   constexpr StrId(const HashResult hash) : hash_(hash) {}
   constexpr StrId() : hash_(0) {}
@@ -47,9 +48,10 @@ struct less<illuminate::core::StrId> {
 };
 }
 #ifndef STRID_DEBUG_STR_ENABLED
-#define SID(str) illuminate::core::StrId(illuminate::core::HornerHash(31,str))
+#define SID(str) illuminate::core::StrId(illuminate::core::HornerHash(illuminate::core::StrId::kHashPrime,str))
 #else
-#define SID(str) illuminate::core::StrId(illuminate::core::HornerHash(31,str), str)
+#define SID(str) illuminate::core::StrId(illuminate::core::HornerHash(illuminate::core::StrId::kHashPrime,str), str)
 #endif
 using StrId = illuminate::core::StrId;
 #endif
+#define HASH(str) illuminate::core::HornerHash(illuminate::core::StrId::kHashPrime,str)
