@@ -112,6 +112,24 @@ PassBindedBufferStateList ExtractBufferStateList(const BatchedRendererPass* cons
   }
   return list;
 }
+bool IsBufferStateMergeable(const BufferState current_state, const BufferStoreOp current_store_op, const BufferState next_state, const BufferStoreOp next_store_op) {
+  if (current_state == next_state) return true;
+  switch (current_state) {
+    case BufferState::kSrv:
+      if (next_state == BufferState::kRtv) return false;
+      return next_store_op == BufferStoreOp::kDontCare;
+    case BufferState::kRtv:
+      return false;
+    case BufferState::kUav:
+      if (next_state == BufferState::kSrv) return current_store_op == BufferStoreOp::kDontCare;
+      return false;
+    case BufferState::kDsv:
+      if (next_state == BufferState::kSrv) return current_store_op == BufferStoreOp::kDontCare;
+      return false;
+  }
+  ASSERT(false && "no valid buffer state combination", current_state, current_store_op, next_state, next_store_op);
+  return false;
+}
 void ProcessBatchedRendererPass(const BatchedRendererPass* const batch_list, const uint32_t batch_num, const BufferDescList& global_buffer_descs) {
   // TODO
 }
@@ -303,6 +321,19 @@ TEST_CASE("pass binded buffer id list") {
   CHECK(buffer_state_list[gpass4_rtv_primary][SID("gpass4")] == BufferState::kRtv);
   CHECK(buffer_state_list[gpass4_rtv_buf0][SID("gpass4")] == BufferState::kRtv);
   CHECK(buffer_state_list[cpass1_uav_buf1][SID("gpass4")] == BufferState::kSrv);
+  CHECK(!IsBufferStateMergeable(BufferState::kSrv, BufferStoreOp::kDontCare, BufferState::kRtv, BufferStoreOp::kStore));
+  CHECK(!IsBufferStateMergeable(BufferState::kSrv, BufferStoreOp::kDontCare, BufferState::kDsv, BufferStoreOp::kStore));
+  CHECK( IsBufferStateMergeable(BufferState::kSrv, BufferStoreOp::kDontCare, BufferState::kDsv, BufferStoreOp::kDontCare));
+  CHECK(!IsBufferStateMergeable(BufferState::kSrv, BufferStoreOp::kDontCare, BufferState::kUav, BufferStoreOp::kStore));
+  CHECK( IsBufferStateMergeable(BufferState::kSrv, BufferStoreOp::kDontCare, BufferState::kUav, BufferStoreOp::kDontCare));
+  CHECK(!IsBufferStateMergeable(BufferState::kRtv, BufferStoreOp::kStore, BufferState::kDsv, BufferStoreOp::kStore));
+  CHECK(!IsBufferStateMergeable(BufferState::kRtv, BufferStoreOp::kStore, BufferState::kDsv, BufferStoreOp::kDontCare));
+  CHECK(!IsBufferStateMergeable(BufferState::kRtv, BufferStoreOp::kStore, BufferState::kUav, BufferStoreOp::kStore));
+  CHECK(!IsBufferStateMergeable(BufferState::kRtv, BufferStoreOp::kStore, BufferState::kUav, BufferStoreOp::kDontCare));
+  CHECK(!IsBufferStateMergeable(BufferState::kUav, BufferStoreOp::kStore, BufferState::kDsv, BufferStoreOp::kStore));
+  CHECK(!IsBufferStateMergeable(BufferState::kUav, BufferStoreOp::kStore, BufferState::kDsv, BufferStoreOp::kDontCare));
+  CHECK(!IsBufferStateMergeable(BufferState::kUav, BufferStoreOp::kDontCare, BufferState::kDsv, BufferStoreOp::kStore));
+  CHECK(!IsBufferStateMergeable(BufferState::kUav, BufferStoreOp::kDontCare, BufferState::kDsv, BufferStoreOp::kDontCare));
 }
 TEST_CASE("renderer test") {
   using namespace illuminate::gfx;
