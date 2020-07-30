@@ -31,7 +31,14 @@ struct BufferDesc {
 using BufferDescList = std::unordered_map<StrId, BufferDesc>;
 enum class QueueType : uint8_t { kGraphics, kCompute, kTransfer, };
 enum class AsyncCompute : uint8_t { kDisabled, kEnabled };
-enum class BufferState : uint8_t { kSrv, kRtv, kDsv, kUav, };
+enum class BufferState : uint32_t {
+  kSrv = 0x0001,
+  kRtv = 0x0002,
+  kDsv = 0x0004,
+  kUav = 0x0008,
+};
+inline constexpr BufferState operator&(const BufferState a, const BufferState b) { return static_cast<BufferState>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b)); }
+inline constexpr BufferState operator|(const BufferState a, const BufferState b) { return static_cast<BufferState>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b)); }
 enum class BufferLoadOp : uint8_t { kLoad, kClear, kDontCare, };
 enum class BufferStoreOp : uint8_t { kStore, kDontCare, };
 struct ViewportSize {
