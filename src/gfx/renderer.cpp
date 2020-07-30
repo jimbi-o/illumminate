@@ -97,7 +97,7 @@ PassBindedBufferIdList IdentifyPassBindedBuffers(const BatchedRendererPass* cons
   LinkLoadingBuffersToExistingBuffers(batch_list, batch_num, &pass_binded_buffer_ids);
   return pass_binded_buffer_ids;
 }
-using PassBindedBufferStateList = std::unordered_map<uint32_t, std::unordered_map<StrId, BufferState>>;
+using PassBindedBufferStateList = std::unordered_map<uint32_t, std::unordered_map<StrId, std::tuple<BufferState, BufferStoreOp>>>;
 PassBindedBufferStateList ExtractBufferStateList(const BatchedRendererPass* const batch_list, const uint32_t batch_num, const PassBindedBufferIdList& pass_binded_buffer_ids) {
   PassBindedBufferStateList list;
   for (uint32_t i = 0; i < batch_num; i++) {
@@ -106,7 +106,7 @@ PassBindedBufferStateList ExtractBufferStateList(const BatchedRendererPass* cons
       auto pass_name = pass.pass_name;
       for (auto& buffer : pass.pass_binded_buffers) {
         auto buffer_id = pass_binded_buffer_ids.at(pass_name).at(buffer.state).at(buffer.buffer_name);
-        list[buffer_id][pass_name] = buffer.state;
+        list[buffer_id][pass_name] = std::make_tuple(buffer.state, buffer.store_op);
       }
     }
   }
@@ -309,18 +309,32 @@ TEST_CASE("pass binded buffer id list") {
   auto gpass3_rtv_sub     = pass_binded_buffer_ids[SID("gpass3")][BufferState::kRtv][SID("sub")];
   auto gpass4_rtv_primary = pass_binded_buffer_ids[SID("gpass4")][BufferState::kRtv][SID("primary")];
   auto gpass4_rtv_buf0    = pass_binded_buffer_ids[SID("gpass4")][BufferState::kRtv][SID("buf0")];
-  CHECK(buffer_state_list[gpass1_rtv_primary][SID("gpass1")] == BufferState::kRtv);
-  CHECK(buffer_state_list[gpass1_dsv_depth][SID("gpass1")] == BufferState::kDsv);
-  CHECK(buffer_state_list[gpass1_rtv_primary][SID("gpass2")] == BufferState::kSrv);
-  CHECK(buffer_state_list[gpass2_rtv_primary][SID("gpass2")] == BufferState::kRtv);
-  CHECK(buffer_state_list[cpass1_uav_buf0][SID("cpass1")] == BufferState::kUav);
-  CHECK(buffer_state_list[cpass1_uav_buf1][SID("cpass1")] == BufferState::kUav);
-  CHECK(buffer_state_list[gpass3_rtv_primary][SID("gpass3")] == BufferState::kRtv);
-  CHECK(buffer_state_list[gpass3_rtv_sub][SID("gpass3")] == BufferState::kRtv);
-  CHECK(buffer_state_list[gpass3_rtv_primary][SID("gpass4")] == BufferState::kSrv);
-  CHECK(buffer_state_list[gpass4_rtv_primary][SID("gpass4")] == BufferState::kRtv);
-  CHECK(buffer_state_list[gpass4_rtv_buf0][SID("gpass4")] == BufferState::kRtv);
-  CHECK(buffer_state_list[cpass1_uav_buf1][SID("gpass4")] == BufferState::kSrv);
+  CHECK(std::get<0>(buffer_state_list[gpass1_rtv_primary][SID("gpass1")]) == BufferState::kRtv);
+  CHECK(std::get<1>(buffer_state_list[gpass1_rtv_primary][SID("gpass1")]) == BufferStoreOp::kStore);
+  CHECK(std::get<0>(buffer_state_list[gpass1_dsv_depth][SID("gpass1")]) == BufferState::kDsv);
+  CHECK(std::get<1>(buffer_state_list[gpass1_dsv_depth][SID("gpass1")]) == BufferStoreOp::kStore);
+  CHECK(std::get<0>(buffer_state_list[gpass1_rtv_primary][SID("gpass2")]) == BufferState::kSrv);
+  CHECK(std::get<1>(buffer_state_list[gpass1_rtv_primary][SID("gpass2")]) == BufferStoreOp::kDontCare);
+  CHECK(std::get<0>(buffer_state_list[gpass2_rtv_primary][SID("gpass2")]) == BufferState::kRtv);
+  CHECK(std::get<1>(buffer_state_list[gpass2_rtv_primary][SID("gpass2")]) == BufferStoreOp::kStore);
+  CHECK(std::get<0>(buffer_state_list[gpass1_dsv_depth][SID("gpass2")]) == BufferState::kDsv);
+  CHECK(std::get<1>(buffer_state_list[gpass1_dsv_depth][SID("gpass2")]) == BufferStoreOp::kDontCare);
+  CHECK(std::get<0>(buffer_state_list[cpass1_uav_buf0][SID("cpass1")]) == BufferState::kUav);
+  CHECK(std::get<1>(buffer_state_list[cpass1_uav_buf0][SID("cpass1")]) == BufferStoreOp::kStore);
+  CHECK(std::get<0>(buffer_state_list[cpass1_uav_buf1][SID("cpass1")]) == BufferState::kUav);
+  CHECK(std::get<1>(buffer_state_list[cpass1_uav_buf1][SID("cpass1")]) == BufferStoreOp::kStore);
+  CHECK(std::get<0>(buffer_state_list[gpass3_rtv_primary][SID("gpass3")]) == BufferState::kRtv);
+  CHECK(std::get<1>(buffer_state_list[gpass3_rtv_primary][SID("gpass3")]) == BufferStoreOp::kStore);
+  CHECK(std::get<0>(buffer_state_list[gpass3_rtv_sub][SID("gpass3")]) == BufferState::kRtv);
+  CHECK(std::get<1>(buffer_state_list[gpass3_rtv_sub][SID("gpass3")]) == BufferStoreOp::kStore);
+  CHECK(std::get<0>(buffer_state_list[gpass3_rtv_primary][SID("gpass4")]) == BufferState::kSrv);
+  CHECK(std::get<1>(buffer_state_list[gpass3_rtv_primary][SID("gpass4")]) == BufferStoreOp::kDontCare);
+  CHECK(std::get<0>(buffer_state_list[gpass4_rtv_primary][SID("gpass4")]) == BufferState::kRtv);
+  CHECK(std::get<1>(buffer_state_list[gpass4_rtv_primary][SID("gpass4")]) == BufferStoreOp::kStore);
+  CHECK(std::get<0>(buffer_state_list[gpass4_rtv_buf0][SID("gpass4")]) == BufferState::kRtv);
+  CHECK(std::get<1>(buffer_state_list[gpass4_rtv_buf0][SID("gpass4")]) == BufferStoreOp::kStore);
+  CHECK(std::get<0>(buffer_state_list[cpass1_uav_buf1][SID("gpass4")]) == BufferState::kSrv);
+  CHECK(std::get<1>(buffer_state_list[cpass1_uav_buf1][SID("gpass4")]) == BufferStoreOp::kDontCare);
   CHECK(!IsBufferStateMergeable(BufferState::kSrv, BufferStoreOp::kDontCare, BufferState::kRtv, BufferStoreOp::kStore));
   CHECK(!IsBufferStateMergeable(BufferState::kSrv, BufferStoreOp::kDontCare, BufferState::kDsv, BufferStoreOp::kStore));
   CHECK( IsBufferStateMergeable(BufferState::kSrv, BufferStoreOp::kDontCare, BufferState::kDsv, BufferStoreOp::kDontCare));
