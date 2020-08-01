@@ -112,8 +112,41 @@ PassBindedBufferStateList ExtractBufferStateList(const BatchedRendererPass* cons
   }
   return list;
 }
+constexpr inline BufferState CombineBufferStateViewType(const BufferState state_a, const BufferState state_b, const BufferLoadOp load_op, const BufferStoreOp store_op) {
+  return static_cast<BufferState>(CombineBufferFlags(GetBufferViewType(state_a) | GetBufferViewType(state_b), load_op, store_op));
+}
 void CombineMergeableBufferStates(BatchedRendererPass* const batch_list, const uint32_t batch_num, const PassBindedBufferIdList& pass_binded_buffer_ids, PassBindedBufferStateList* const pass_binded_buffer_states) {
-  // TODO
+  for (auto& buffer_states : *pass_binded_buffer_states) {
+    auto& buffer_state = buffer_states.second;
+    auto last_state = BufferState::kInvalid;
+    StrId last_pass;
+    for (uint32_t i = 0; i < batch_num; i++) {
+      auto& batch = batch_list[i];
+      const uint32_t pass_num = batch.pass_configs.size();
+      for (uint32_t j = 0; j < pass_num; j++) {
+        auto pass_name = batch.pass_configs[j].pass_name;
+        if (!IsContaining(buffer_state, pass_name)) continue;
+        auto next_state = buffer_state[pass_name];
+        bool set_last_state_to_next_state = true;
+        if (last_state != BufferState::kInvalid) {
+          if (last_state == next_state) {
+            buffer_state.erase(pass_name);
+          } else if (IsBufferStateReadOnly(last_state) && IsBufferStateReadOnly(next_state)) {
+            last_state = CombineBufferStateViewType(last_state, next_state, kBufferLoadOpLoad, kBufferStoreOpDontCare);
+            buffer_state[last_pass] = last_state;
+            set_last_state_to_next_state = false;
+            buffer_state.erase(pass_name);
+          } else if (GetBufferViewType(last_state) && GetBufferViewType(next_state) && !IsBufferStateReadOnly(next_state)) {
+            buffer_state.erase(pass_name);
+          }
+        }
+        if (set_last_state_to_next_state) {
+          last_state = next_state;
+        }
+        last_pass = pass_name;
+      }
+    }
+  }
 }
 void ProcessBatchedRendererPass(const BatchedRendererPass* const batch_list, const uint32_t batch_num, const BufferDescList& global_buffer_descs) {
   // TODO
@@ -282,6 +315,13 @@ std::tuple<std::vector<BatchedRendererPass>, PassBindedBufferIdList, PassBindedB
 }
 }
 #include "doctest/doctest.h"
+namespace illuminate::gfx {
+std::ostream& operator<< (std::ostream& os, const BufferState& state) {
+  auto state_val = static_cast<std::underlying_type_t<BufferState>>(state);
+  os << "{" << GetBufferViewType(state) << ", " << ((state_val & 0x00FF0000) >> 16) << ", " << ((state_val & 0xFF000000) >> 24) << "}";
+  return os;
+}
+}
 TEST_CASE("BufferState test") {
   using namespace illuminate::gfx;
   CHECK(IsBufferLoadOpLoad(BufferState::kSrvLoadDontCare));
@@ -303,6 +343,7 @@ TEST_CASE("BufferState test") {
   CHECK(IsBufferLoadOpLoad(BufferState::kUavLoadDontCare));
   CHECK(!IsBufferLoadOpLoad(BufferState::kUav));
   CHECK(IsBufferLoadOpLoad(BufferState::kUavReadOnly));
+  CHECK(!IsBufferLoadOpLoad(BufferState::kInvalid));
   CHECK(!IsBufferStoreOpStore(BufferState::kSrvLoadDontCare));
   CHECK(!IsBufferStoreOpStore(BufferState::kSrv));
   CHECK(IsBufferStoreOpStore(BufferState::kRtvDontCareStore));
@@ -322,10 +363,26 @@ TEST_CASE("BufferState test") {
   CHECK(!IsBufferStoreOpStore(BufferState::kUavLoadDontCare));
   CHECK(IsBufferStoreOpStore(BufferState::kUav));
   CHECK(!IsBufferStoreOpStore(BufferState::kUavReadOnly));
+  CHECK(!IsBufferStoreOpStore(BufferState::kInvalid));
+  CHECK(GetBufferViewType(BufferState::kSrvLoadDontCare) == kBufferViewTypeSrv);
   CHECK(GetBufferViewType(BufferState::kSrv) == kBufferViewTypeSrv);
+  CHECK(GetBufferViewType(BufferState::kRtvDontCareStore) == kBufferViewTypeRtv);
+  CHECK(GetBufferViewType(BufferState::kRtvClearStore) == kBufferViewTypeRtv);
+  CHECK(GetBufferViewType(BufferState::kRtvLoadStore) == kBufferViewTypeRtv);
   CHECK(GetBufferViewType(BufferState::kRtv) == kBufferViewTypeRtv);
+  CHECK(GetBufferViewType(BufferState::kRtvBlendable) == kBufferViewTypeRtv);
+  CHECK(GetBufferViewType(BufferState::kDsvDontCareStore) == kBufferViewTypeDsv);
+  CHECK(GetBufferViewType(BufferState::kDsvClearStore) == kBufferViewTypeDsv);
+  CHECK(GetBufferViewType(BufferState::kDsvLoadStore) == kBufferViewTypeDsv);
+  CHECK(GetBufferViewType(BufferState::kDsvLoadDontCare) == kBufferViewTypeDsv);
   CHECK(GetBufferViewType(BufferState::kDsv) == kBufferViewTypeDsv);
+  CHECK(GetBufferViewType(BufferState::kDsvReadOnly) == kBufferViewTypeDsv);
+  CHECK(GetBufferViewType(BufferState::kUavDontCareStore) == kBufferViewTypeUav);
+  CHECK(GetBufferViewType(BufferState::kUavClearStore) == kBufferViewTypeUav);
+  CHECK(GetBufferViewType(BufferState::kUavLoadStore) == kBufferViewTypeUav);
+  CHECK(GetBufferViewType(BufferState::kUavLoadDontCare) == kBufferViewTypeUav);
   CHECK(GetBufferViewType(BufferState::kUav) == kBufferViewTypeUav);
+  CHECK(GetBufferViewType(BufferState::kUavReadOnly) == kBufferViewTypeUav);
 }
 TEST_CASE("pass binded buffer id list") {
   using namespace illuminate::gfx;
@@ -431,7 +488,7 @@ TEST_CASE("pass binded buffer id list") {
   CHECK(testdata_dsvwrite_dsvread_srv_buffer_states[dsv_buffer_id][SID("pass3")] == BufferState::kSrv);
   CombineMergeableBufferStates(std::get<0>(testdata_dsvwrite_dsvread_srv).data(), std::get<0>(testdata_dsvwrite_dsvread_srv).size(), testdata_dsvwrite_dsvread_srv_pass_binded_buffer_ids, &testdata_dsvwrite_dsvread_srv_buffer_states);
   CHECK(testdata_dsvwrite_dsvread_srv_buffer_states[dsv_buffer_id][SID("pass1")] == BufferState::kDsv);
-  CHECK(testdata_dsvwrite_dsvread_srv_buffer_states[dsv_buffer_id][SID("pass2")] == BufferState::kSrvDsvReadOnly);
+  CHECK(testdata_dsvwrite_dsvread_srv_buffer_states[dsv_buffer_id][SID("pass2")] == static_cast<BufferState>(CombineBufferFlags((kBufferViewTypeSrv | kBufferViewTypeDsv), kBufferLoadOpLoad, kBufferStoreOpDontCare)));
   CHECK(!IsContaining(testdata_dsvwrite_dsvread_srv_buffer_states[dsv_buffer_id], SID("pass3")));
   CombineMergeableBufferStates(test_data.data(), test_data.size(), pass_binded_buffer_ids, &buffer_state_list);
   CHECK(buffer_state_list[gpass1_rtv_primary][SID("gpass1")] == BufferState::kRtv);

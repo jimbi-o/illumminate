@@ -37,12 +37,13 @@ static const BufferViewType kBufferViewTypeSrv = 0x01;
 static const BufferViewType kBufferViewTypeRtv = 0x02;
 static const BufferViewType kBufferViewTypeDsv = 0x04;
 static const BufferViewType kBufferViewTypeUav = 0x08;
-;
-static const uint8_t kBufferLoadOpLoad      = 0x0;
-static const uint8_t kBufferLoadOpClear     = 0x1;
-static const uint8_t kBufferLoadOpDontCare  = 0x2;
-static const uint8_t kBufferStoreOpStore    = 0x0;
-static const uint8_t kBufferStoreOpDontCare = 0x1;
+using BufferLoadOp = uint8_t;
+static const BufferLoadOp kBufferLoadOpLoad     = 0x0;
+static const BufferLoadOp kBufferLoadOpClear    = 0x1;
+static const BufferLoadOp kBufferLoadOpDontCare = 0x2;
+using BufferStoreOp = uint8_t;
+static const BufferStoreOp kBufferStoreOpStore    = 0x0;
+static const BufferStoreOp kBufferStoreOpDontCare = 0x1;
 constexpr inline uint32_t CombineBufferFlags(const BufferViewType view_type, const uint8_t load_op, const uint8_t store_op) { return view_type | (load_op << 16) | (store_op << 24); }
 enum class BufferState : uint32_t {
   kSrvLoadDontCare  = CombineBufferFlags(kBufferViewTypeSrv, kBufferLoadOpLoad,     kBufferStoreOpDontCare),
@@ -64,11 +65,12 @@ enum class BufferState : uint32_t {
   kUavLoadDontCare  = CombineBufferFlags(kBufferViewTypeUav, kBufferLoadOpLoad,     kBufferStoreOpDontCare),
   kUav              = kUavDontCareStore,
   kUavReadOnly      = kUavLoadDontCare,
-  kSrvDsvReadOnly   = CombineBufferFlags(kBufferViewTypeSrv | kBufferViewTypeUav, kBufferLoadOpLoad, kBufferStoreOpDontCare),
+  kInvalid          = 0xFFFFFFFF,
 };
 constexpr inline BufferViewType GetBufferViewType(const BufferState state) { return static_cast<std::underlying_type_t<BufferState>>(state) & 0x0000FFFF; }
 constexpr inline bool IsBufferLoadOpLoad(const BufferState state) { return (static_cast<std::underlying_type_t<BufferState>>(state) & 0x00FF0000) == 0x00000000; }
 constexpr inline bool IsBufferStoreOpStore(const BufferState state) { return (static_cast<std::underlying_type_t<BufferState>>(state) & 0xFF000000) == 0x00000000; }
+constexpr inline bool IsBufferStateReadOnly(const BufferState state) { return IsBufferLoadOpLoad(state) && !IsBufferStoreOpStore(state); }
 struct ViewportSize {
   BufferSizeType size_type;
   float width, height;
