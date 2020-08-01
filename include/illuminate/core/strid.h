@@ -20,10 +20,12 @@ class StrId {
  public:
   static const HashResult kHashPrime = 31;
 #ifndef STRID_DEBUG_STR_ENABLED
-  constexpr StrId(const HashResult hash) : hash_(hash) {}
+  template <size_t N>
+  constexpr StrId(const char (&str)[N]) : hash_(HornerHash(kHashPrime, str)) {}
   constexpr StrId() : hash_(0) {}
 #else
-  StrId(const HashResult hash, const char* const str) : hash_(hash), str_(str) {}
+  template <size_t N>
+  constexpr StrId(const char (&str)[N]) : hash_(HornerHash(kHashPrime, str)), str_(str) {}
   StrId() : hash_(0), str_() {}
 #endif
   constexpr operator uint32_t() const { return hash_; }
@@ -47,11 +49,7 @@ struct less<illuminate::core::StrId> {
   bool operator()(const illuminate::core::StrId& l, const illuminate::core::StrId& r) const { return r.GetHash() < l.GetHash(); }
 };
 }
-#ifndef STRID_DEBUG_STR_ENABLED
-#define SID(str) illuminate::core::StrId(illuminate::core::HornerHash(illuminate::core::StrId::kHashPrime,str))
-#else
-#define SID(str) illuminate::core::StrId(illuminate::core::HornerHash(illuminate::core::StrId::kHashPrime,str), str)
-#endif
+#define SID(str) illuminate::core::StrId(str)
+#define HASH(str) illuminate::core::HornerHash(illuminate::core::StrId::kHashPrime, str)
 using StrId = illuminate::core::StrId;
 #endif
-#define HASH(str) illuminate::core::HornerHash(illuminate::core::StrId::kHashPrime,str)

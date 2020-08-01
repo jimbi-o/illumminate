@@ -4,7 +4,7 @@
 #include "doctest/doctest.h"
 TEST_CASE("strid") {
   using namespace illuminate::core;
-  StrId sid(SID("a"));
+  StrId sid("a");
   CHECK(sid == SID("a"));
   CHECK(sid != SID("b"));
   switch (sid) {
@@ -24,4 +24,6 @@ TEST_CASE("strid") {
   std::unordered_set<StrId> set;
   set.insert(SID("d"));
   CHECK(IsContaining(set, SID("d")));
+  auto sid_auto = SID("b");
+  CHECK(sid_auto);
 }
