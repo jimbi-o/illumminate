@@ -128,17 +128,15 @@ void CombineMergeableBufferStates(BatchedRendererPass* const batch_list, const u
         if (!IsContaining(buffer_state, pass_name)) continue;
         auto next_state = buffer_state[pass_name];
         bool set_last_state_to_next_state = true;
-        if (last_state != BufferState::kInvalid) {
-          if (last_state == next_state) {
-            buffer_state.erase(pass_name);
-          } else if (IsBufferStateReadOnly(last_state) && IsBufferStateReadOnly(next_state)) {
-            last_state = CombineBufferStateViewType(last_state, next_state, kBufferLoadOpLoad, kBufferStoreOpDontCare);
-            buffer_state[last_pass] = last_state;
-            set_last_state_to_next_state = false;
-            buffer_state.erase(pass_name);
-          } else if (GetBufferViewType(last_state) && GetBufferViewType(next_state) && !IsBufferStateReadOnly(next_state)) {
-            buffer_state.erase(pass_name);
-          }
+        if (last_state == next_state) {
+          buffer_state.erase(pass_name);
+        } else if (IsBufferStateReadOnly(last_state) && IsBufferStateReadOnly(next_state)) {
+          last_state = CombineBufferStateViewType(last_state, next_state, kBufferLoadOpLoad, kBufferStoreOpDontCare);
+          buffer_state[last_pass] = last_state;
+          set_last_state_to_next_state = false;
+          buffer_state.erase(pass_name);
+        } else if (last_state != BufferState::kInvalid && GetBufferViewType(last_state) && GetBufferViewType(next_state) && !IsBufferStateReadOnly(next_state)) {
+          buffer_state.erase(pass_name);
         }
         if (set_last_state_to_next_state) {
           last_state = next_state;
@@ -511,6 +509,19 @@ TEST_CASE("pass binded buffer id list") {
   CHECK(buffer_state_list[gpass4_rtv_buf0][SID("gpass4")] == BufferState::kRtv);
   CHECK(buffer_state_list[cpass1_uav_buf1][SID("gpass4")] == BufferState::kSrv);
   CHECK(!IsContaining(buffer_state_list[gpass1_rtv_reused], SID("gpass4")));
+#if 0
+  // TODO
+  auto buffer_desc_impl = GetBufferDescImpl(test_data.data(), test_data.size(), buffer_state_list);
+  CHECK(buffer_desc_impl[gpass1_rtv_primary].width == );
+  CHECK(buffer_desc_impl[gpass1_rtv_primary].height == );
+  CHECK(buffer_desc_impl[gpass1_rtv_primary].format == );
+  CHECK(buffer_desc_impl[gpass1_rtv_primary].transitioned_viewtypes == );
+  CHECK(buffer_desc_impl[gpass1_rtv_primary].initial_state == );
+  CHECK(buffer_desc_impl[gpass1_rtv_primary].clear_value.color == );
+  CHECK(buffer_desc_impl[gpass1_rtv_primary].state_transition[SID("gpass2")].state_before == BufferState::);
+  CHECK(buffer_desc_impl[gpass1_rtv_primary].state_transition[SID("gpass2")].state_after  == BufferState::);
+  CHECK(buffer_desc_impl[gpass1_rtv_primary].state_transition[SID("gpass2")].split_flag   == StateTransitionSplitFlag::);
+#endif
 }
 TEST_CASE("renderer test") {
   using namespace illuminate::gfx;

@@ -95,6 +95,21 @@ struct BatchedRendererPass {
   RenderPassConfigList pass_configs;
   BatchLocalBufferDescList batch_local_buffer_descs;
 };
+enum class StateTransitionSplitFlag : uint8_t { kNone, kBegin, kEnd, };
+struct StateTransitionDesc {
+  BufferState state_before;
+  BufferState state_after;
+  StateTransitionSplitFlag split_flag;
+};
+using StateTransitionList = std::vector<StateTransitionDesc>;
+struct BufferDescImpl {
+  uint32_t width, height;
+  BufferFormat format;
+  BufferViewType transitioned_viewtypes;
+  BufferState initial_state;
+  ClearValue clear_value;
+  StateTransitionList state_transition_list;
+};
 constexpr ClearValue GetClearValueDefaultRtv() {
   return { .color = {0.0f, 0.0f, 0.0f, 1.0f} };
 }
