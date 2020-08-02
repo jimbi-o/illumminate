@@ -146,12 +146,12 @@ void CombineMergeableBufferStates(BatchedRendererPass* const batch_list, const u
     }
   }
 }
-void ProcessBatchedRendererPass(const BatchedRendererPass* const batch_list, const uint32_t batch_num, const BufferDescList& global_buffer_descs) {
+void ProcessBatchedRendererPass(const BatchedRendererPass* const batch_list, const uint32_t batch_num) {
   // TODO
 }
 namespace {
-std::tuple<std::vector<BatchedRendererPass>, BufferDescList> CreateTestData() {
-  std::vector<BatchedRendererPass> batches = {
+std::vector<BatchedRendererPass> CreateTestData() {
+  return {
     {
       SID("batch1"),
       {
@@ -198,10 +198,12 @@ std::tuple<std::vector<BatchedRendererPass>, BufferDescList> CreateTestData() {
           },
         },
       },
-      // batch local buffer desc
+      // buffer descs
       {
-        {SID("buf0"), { BufferFormat::kR8G8B8A8_Unorm, BufferSizeType::kAbsolute, 1024.0f, 1024.0f, 1.0f, {} }},
-        {SID("buf1"), { BufferFormat::kR8G8B8A8_Unorm, BufferSizeType::kSwapchainRelative, 0.5f, 0.5f, 1.0f, {} }}
+        {SID("primary"), {BufferFormat::kRgbLinearSdrDefault, BufferSizeType::kViewportRelative, 1.0f, 1.0f, 1.0f, GetClearValueDefaultDsv()}},
+        {SID("depth"),   {BufferFormat::kDepthBufferDefault, BufferSizeType::kViewportRelative, 1.0f, 1.0f, 1.0f, GetClearValueDefaultRtv()}},
+        {SID("buf0"),    {BufferFormat::kR8G8B8A8_Unorm, BufferSizeType::kAbsolute, 1024.0f, 1024.0f, 1.0f, {}}},
+        {SID("buf1"),    {BufferFormat::kR8G8B8A8_Unorm, BufferSizeType::kSwapchainRelative, 0.5f, 0.5f, 1.0f, {}}},
       },
     },
     {
@@ -241,23 +243,8 @@ std::tuple<std::vector<BatchedRendererPass>, BufferDescList> CreateTestData() {
           },
         },
       },
-      // batch local buffer desc
-      {
-        {SID("buf0"), { BufferFormat::kR8G8B8A8_Unorm, BufferSizeType::kAbsolute, 1024.0f, 1024.0f, 1.0f, {} }},
-        {SID("buf1"), { BufferFormat::kR8G8B8A8_Unorm, BufferSizeType::kSwapchainRelative, 0.5f, 0.5f, 1.0f, {} }}
-      },
     },
   };
-  BufferDescList global_buffer_descs = {
-    {
-      SID("primary"),
-      { BufferFormat::kRgbLinearSdrDefault, BufferSizeType::kViewportRelative, 1.0f, 1.0f, 1.0f, GetClearValueDefaultDsv() }
-    }, {
-      SID("depth"),
-      { BufferFormat::kDepthBufferDefault, BufferSizeType::kViewportRelative, 1.0f, 1.0f, 1.0f, GetClearValueDefaultRtv() }
-    },
-  };
-  return std::make_tuple(batches, global_buffer_descs);
 }
 std::tuple<std::vector<BatchedRendererPass>, PassBindedBufferIdList, PassBindedBufferStateList> CreateTestDataWithDsvTransition() {
   std::vector<BatchedRendererPass> batches = {
@@ -410,7 +397,7 @@ TEST_CASE("pass binded buffer id list") {
   a.async_compute_enabled = AsyncCompute::kEnabled;
   b.async_compute_enabled = AsyncCompute::kDisabled;
   CHECK(!IsPassExecutedOnSameQueue(a, b));
-  auto test_data = std::get<0>(CreateTestData());
+  auto test_data = CreateTestData();
   auto pass_binded_buffer_ids = ExtractDataStoredBuffers(test_data.data(), test_data.size());
   CHECK(IsContaining(pass_binded_buffer_ids[SID("gpass1")][kBufferViewTypeRtv], SID("primary")));
   CHECK(IsContaining(pass_binded_buffer_ids[SID("gpass1")][kBufferViewTypeDsv], SID("depth")));
@@ -522,9 +509,4 @@ TEST_CASE("pass binded buffer id list") {
   CHECK(buffer_desc_impl[gpass1_rtv_primary].state_transition[SID("gpass2")].state_after  == BufferState::);
   CHECK(buffer_desc_impl[gpass1_rtv_primary].state_transition[SID("gpass2")].split_flag   == StateTransitionSplitFlag::);
 #endif
-}
-TEST_CASE("renderer test") {
-  using namespace illuminate::gfx;
-  auto test_data = CreateTestData();
-  ProcessBatchedRendererPass(std::get<0>(test_data).data(), std::get<0>(test_data).size(), std::get<1>(test_data));
 }
