@@ -5,12 +5,12 @@
 #include <vector>
 #include <unordered_map>
 namespace illuminate::core {
-constexpr std::uintptr_t AlignAddress(const std::uintptr_t addr, const size_t align) {
+constexpr inline std::uintptr_t AlignAddress(const std::uintptr_t addr, const size_t align) {
   const auto mask = align - 1;
   //assert((align & mask) == 0);
   return (addr + mask) & ~mask;
 }
-void* AlignAddress(const void* ptr, const size_t align) {
+inline void* AlignAddress(const void* ptr, const size_t align) {
   auto addr = AlignAddress(reinterpret_cast<std::uintptr_t>(ptr), align);
   return reinterpret_cast<void*>(addr);
 }
