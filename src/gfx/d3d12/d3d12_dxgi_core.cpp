@@ -35,12 +35,23 @@ void DxgiCore::Term() {
   debug->Release();
 #endif
   FreeLibrary(library_);
-};
+}
+bool DxgiCore::IsTearingAllowed() {
+  BOOL tearing = FALSE;
+  auto hr = factory_->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &tearing, sizeof(tearing));
+  if (FAILED(hr)) {
+    logwarn("CheckFeatureSupport(tearing) failed. {}", hr);
+    return false;
+  }
+  loginfo("tearing support:{}", tearing);
+  return tearing;
+}
 }
 #include "doctest/doctest.h"
 TEST_CASE("dxgi core") {
   using namespace illuminate::gfx::d3d12;
   DxgiCore core;
   CHECK(core.Init());
+  CHECK(core.IsTearingAllowed());
   core.Term();
 }

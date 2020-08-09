@@ -72,10 +72,10 @@ void Device::Term() {
 #include "d3d12_dxgi_core.h"
 TEST_CASE("device") {
   using namespace illuminate::gfx::d3d12;
-  DxgiCore core;
-  CHECK(core.Init());
+  DxgiCore dxgi_core;
+  CHECK(dxgi_core.Init());
   Device device;
-  CHECK(device.Init(core.GetAdapter()));
+  CHECK(device.Init(dxgi_core.GetAdapter()));
   device.Term();
-  core.Term();
+  dxgi_core.Term();
 }

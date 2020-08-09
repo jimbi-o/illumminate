@@ -8,6 +8,7 @@ class DxgiCore {
   void Term();
   DxgiFactory* GetFactory() { return factory_; }
   DxgiAdapter* GetAdapter() { return adapter_; }
+  bool IsTearingAllowed();
  private:
   HMODULE library_ = nullptr;
   DxgiFactory* factory_ = nullptr;
