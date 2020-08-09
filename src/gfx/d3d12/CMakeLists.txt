@@ -20,6 +20,13 @@ FetchContent_Declare(
   GIT_SHALLOW    OFF
 )
 FetchContent_MakeAvailable(spdlog)
+FetchContent_Declare(
+  d3dx12
+  GIT_REPOSITORY https://github.com/microsoft/DirectX-Graphics-Samples.git
+  GIT_TAG        58b660720c61b0310301679fb1d5945a7bce9ebc
+  GIT_SHALLOW    OFF
+)
+FetchContent_MakeAvailable(d3dx12)
 
 if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
   if (NOT DEFINED BUILD_WITH_TEST)
@@ -60,6 +67,7 @@ target_include_directories(illuminategfxd3d12
   "../../../include/illuminate/gfx"
   "../../../include/illuminate/gfx/d3d12"
   "${doctest_SOURCE_DIR}"
+  "${d3dx12_SOURCE_DIR}/Libraries/D3DX12"
 )
 
 target_sources(illuminategfxd3d12 PRIVATE
