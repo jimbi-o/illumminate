@@ -48,6 +48,18 @@ bool Device::Init(DxgiAdapter* const adapter) {
     }
   }
 #endif
+  {
+    D3D12_FEATURE_DATA_D3D12_OPTIONS5 options{};
+    if (SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &options, sizeof(options)))) {
+      loginfo("ray tracing tier:{} (1.0:{} 1.1:{})", options.RaytracingTier, D3D12_RAYTRACING_TIER_1_0, D3D12_RAYTRACING_TIER_1_1);
+    }
+  }
+  {
+    D3D12_FEATURE_DATA_D3D12_OPTIONS7 options{};
+    if (SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS7, &options, sizeof(options)))) {
+      loginfo("mesh shader tier:{} (1:{})", options.MeshShaderTier, D3D12_MESH_SHADER_TIER_1);
+    }
+  }
   device_->SetName(L"device");
   return true;
 };
