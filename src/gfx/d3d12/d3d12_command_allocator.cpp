@@ -1,0 +1,66 @@
+#include "d3d12_command_allocator.h"
+#include "d3d12_minimal_for_cpp.h"
+namespace illuminate::gfx::d3d12 {
+bool CommandAllocator::Init(D3d12Device* const device) {
+  device_ = device;
+  return true;
+}
+void CommandAllocator::Term() {
+  for (auto& list : pool_) {
+    for (auto& allocator : list.second) {
+      allocator->Release();
+    }
+  }
+}
+ID3D12CommandAllocator** CommandAllocator::RetainCommandAllocator(const CommandListType command_list_type, const uint32_t num) {
+  auto d3d12_command_list_type = ConvertToD3d12CommandListType(command_list_type);
+  if (pool_[command_list_type].size() < num) {
+    loginfo("command allocator creation. {}({})", num, pool_[command_list_type].size());
+  }
+  while (pool_[command_list_type].size() < num) {
+    ID3D12CommandAllocator* allocator = nullptr;
+    device_->CreateCommandAllocator(d3d12_command_list_type, IID_PPV_ARGS(&allocator));
+    pool_[command_list_type].push_back(allocator);
+  }
+  ID3D12CommandAllocator** allocator = new ID3D12CommandAllocator*[num]{};
+  for (uint32_t i = 0; i < num; i++) {
+    allocator[i] = pool_[command_list_type].back();
+    pool_[command_list_type].pop_back();
+  }
+  allocation_info_[allocator] = std::make_tuple(command_list_type, num);
+  return allocator;
+}
+void CommandAllocator::ReturnCommandAllocator(ID3D12CommandAllocator** const allocator) {
+  const auto command_list_type = std::get<0>(allocation_info_[allocator]);
+  const auto num = std::get<1>(allocation_info_[allocator]);
+  allocation_info_.erase(allocator);
+  for (uint32_t i = 0; i < num; i++) {
+    pool_[command_list_type].push_back(allocator[i]);
+  }
+}
+}
+#include "doctest/doctest.h"
+#include "d3d12_dxgi_core.h"
+#include "d3d12_device.h"
+TEST_CASE("command allocator") {
+  using namespace illuminate::gfx::d3d12;
+  DxgiCore dxgi_core;
+  CHECK(dxgi_core.Init());
+  Device device;
+  CHECK(device.Init(dxgi_core.GetAdapter()));
+  CommandAllocator command_allocator;
+  CHECK(command_allocator.Init(device.GetDevice()));
+  auto command_allocators = command_allocator.RetainCommandAllocator(CommandListType::kGraphics, 3);
+  CHECK(command_allocators[0]);
+  CHECK(command_allocators[1]);
+  CHECK(command_allocators[2]);
+  command_allocator.ReturnCommandAllocator(command_allocators);
+  command_allocators = command_allocator.RetainCommandAllocator(CommandListType::kGraphics, 3);
+  CHECK(command_allocators[0]);
+  CHECK(command_allocators[1]);
+  CHECK(command_allocators[2]);
+  command_allocator.ReturnCommandAllocator(command_allocators);
+  command_allocator.Term();
+  device.Term();
+  dxgi_core.Term();
+}

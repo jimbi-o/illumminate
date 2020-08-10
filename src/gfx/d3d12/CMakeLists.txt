@@ -75,4 +75,5 @@ target_sources(illuminategfxd3d12 PRIVATE
   "d3d12_dxgi_core.cpp"
   "d3d12_device.cpp"
   "d3d12_util.cpp"
+  "d3d12_command_allocator.cpp"
 )
