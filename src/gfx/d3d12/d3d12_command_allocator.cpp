@@ -12,7 +12,7 @@ void CommandAllocator::Term() {
     }
   }
   for (auto& pair : allocation_info_) {
-    auto allocator = pair.first;
+    auto& allocator = pair.first;
     auto num = std::get<1>(pair.second);
     logwarn("command allocator not released. {} {}", std::get<0>(pair.second), num);
     for (uint32_t i = 0; i < num; i++) {
