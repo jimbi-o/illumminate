@@ -11,16 +11,24 @@ void CommandAllocator::Term() {
       allocator->Release();
     }
   }
+  for (auto& pair : allocation_info_) {
+    auto allocator = pair.first;
+    auto num = std::get<1>(pair.second);
+    logwarn("command allocator not released. {} {}", std::get<0>(pair.second), num);
+    for (uint32_t i = 0; i < num; i++) {
+      allocator[i]->Release();
+    }
+  }
 }
 ID3D12CommandAllocator** CommandAllocator::RetainCommandAllocator(const CommandListType command_list_type, const uint32_t num) {
   auto d3d12_command_list_type = ConvertToD3d12CommandListType(command_list_type);
   if (pool_[command_list_type].size() < num) {
-    loginfo("command allocator creation. {}({})", num, pool_[command_list_type].size());
-  }
-  while (pool_[command_list_type].size() < num) {
-    ID3D12CommandAllocator* allocator = nullptr;
-    device_->CreateCommandAllocator(d3d12_command_list_type, IID_PPV_ARGS(&allocator));
-    pool_[command_list_type].push_back(allocator);
+    loginfo("command allocator creation. {}({})", num * 2, pool_[command_list_type].size());
+    while (pool_[command_list_type].size() < num * 2) {
+      ID3D12CommandAllocator* allocator = nullptr;
+      device_->CreateCommandAllocator(d3d12_command_list_type, IID_PPV_ARGS(&allocator));
+      pool_[command_list_type].push_back(allocator);
+    }
   }
   ID3D12CommandAllocator** allocator = new ID3D12CommandAllocator*[num]{};
   for (uint32_t i = 0; i < num; i++) {
@@ -60,6 +68,12 @@ TEST_CASE("command allocator") {
   CHECK(command_allocators[1]);
   CHECK(command_allocators[2]);
   command_allocator.ReturnCommandAllocator(command_allocators);
+  command_allocators = command_allocator.RetainCommandAllocator(CommandListType::kCompute, 5);
+  CHECK(command_allocators[0]);
+  CHECK(command_allocators[1]);
+  CHECK(command_allocators[2]);
+  CHECK(command_allocators[3]);
+  CHECK(command_allocators[4]);
   command_allocator.Term();
   device.Term();
   dxgi_core.Term();
