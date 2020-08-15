@@ -76,6 +76,7 @@ TEST_CASE("device") {
   CHECK(dxgi_core.Init());
   Device device;
   CHECK(device.Init(dxgi_core.GetAdapter()));
+  CHECK(device.GetDevice());
   device.Term();
   dxgi_core.Term();
 }
