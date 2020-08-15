@@ -41,6 +41,7 @@ D3d12CommandList** CommandList::RetainCommandList(const CommandListType command_
       }
       list->Close();
 #endif
+      SET_NAME(list, L"commandlist", d3d12_command_list_type * 1000 + pool_[command_list_type].size());
       pool_[command_list_type].push_back(list);
     }
   }
