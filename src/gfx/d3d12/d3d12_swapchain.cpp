@@ -1,9 +1,9 @@
 #include "d3d12_swapchain.h"
 #include "d3d12_minimal_for_cpp.h"
 namespace illuminate::gfx::d3d12 {
-bool Swapchain::Init(DxgiFactory* factory, ID3D12CommandQueue* command_queue_graphics, D3d12Device* const device, HWND hwnd, const uint32_t buffer_num) {
+bool Swapchain::Init(DxgiFactory* factory, ID3D12CommandQueue* command_queue_graphics, D3d12Device* const device, HWND hwnd, const uint32_t swapchain_buffer_num, const uint32_t frame_latency) {
   format_ = DXGI_FORMAT_R8G8B8A8_UNORM;
-  buffer_num_ = buffer_num;
+  swapchain_buffer_num_ = swapchain_buffer_num;
   // tearing support
   {
     BOOL result = false; // doesn't work with "bool".
@@ -30,7 +30,7 @@ bool Swapchain::Init(DxgiFactory* factory, ID3D12CommandQueue* command_queue_gra
     desc.SampleDesc.Count = 1;
     desc.SampleDesc.Quality = 0;
     desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    desc.BufferCount = buffer_num_;
+    desc.BufferCount = swapchain_buffer_num_;
     desc.Scaling = DXGI_SCALING_NONE;
     desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     desc.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
@@ -41,14 +41,12 @@ bool Swapchain::Init(DxgiFactory* factory, ID3D12CommandQueue* command_queue_gra
     hr = swapchain->QueryInterface(IID_PPV_ARGS(&swapchain_));
     ASSERT(SUCCEEDED(hr) && "swapchain->QueryInterface failed. {}", hr);
     swapchain->Release();
-    // https://developer.nvidia.com/dx12-dos-and-donts
-    // Try using about 1-2 more swap-chain buffers than you are intending to queue frames (in terms of command allocators and dynamic data and the associated frame fences) and set the "max frame latency" to this number of swap-chain buffers.
   }
   // set max frame latency
   {
-    auto hr = swapchain_->SetMaximumFrameLatency(buffer_num_ - 1);
+    auto hr = swapchain_->SetMaximumFrameLatency(frame_latency);
     if (FAILED(hr)) {
-      logwarn("SetMaximumFrameLatency failed. {} {}", hr, buffer_num_);
+      logwarn("SetMaximumFrameLatency failed. {} {}", hr, frame_latency);
     }
   }
   // get frame latency object
@@ -65,13 +63,13 @@ bool Swapchain::Init(DxgiFactory* factory, ID3D12CommandQueue* command_queue_gra
       width_ = desc.Width;
       height_ = desc.Height;
       format_ = desc.Format;
-      buffer_num_ = desc.BufferCount;
+      swapchain_buffer_num_ = desc.BufferCount;
     }
   }
   // get swapchain resource buffers for rtv
   {
-    resources_.reserve(buffer_num_);
-    for (uint32_t i = 0; i < buffer_num_; i++) {
+    resources_.reserve(swapchain_buffer_num_);
+    for (uint32_t i = 0; i < swapchain_buffer_num_; i++) {
       ID3D12Resource* resource = nullptr;
       auto hr = swapchain_->GetBuffer(i, IID_PPV_ARGS(&resource));
       if (FAILED(hr)) {
@@ -84,13 +82,13 @@ bool Swapchain::Init(DxgiFactory* factory, ID3D12CommandQueue* command_queue_gra
   }
   // prepare rtv
   {
-    descriptor_heap_ = CreateDescriptorHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, buffer_num_, D3D12_DESCRIPTOR_HEAP_FLAG_NONE);
+    descriptor_heap_ = CreateDescriptorHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, swapchain_buffer_num_, D3D12_DESCRIPTOR_HEAP_FLAG_NONE);
     ASSERT(descriptor_heap_ && "CreateDescriptorHeap for swapchain rtv failed.");
     descriptor_heap_->SetName(L"descriptorheap_rtv");
     const D3D12_RENDER_TARGET_VIEW_DESC rtv_desc = {format_, D3D12_RTV_DIMENSION_TEXTURE2D, {}};
     auto rtv_handle = descriptor_heap_->GetCPUDescriptorHandleForHeapStart();
     auto rtv_step_size = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-    for (uint32_t i = 0; i < buffer_num_; i++) {
+    for (uint32_t i = 0; i < swapchain_buffer_num_; i++) {
       device->CreateRenderTargetView(resources_[i], &rtv_desc, rtv_handle);
       cpu_handles_rtv_.push_back(rtv_handle);
       rtv_handle.ptr += rtv_step_size;
@@ -128,7 +126,7 @@ bool Swapchain::Present() {
 #include "d3d12_command_queue.h"
 #include "gfx/win32/win32_window.h"
 TEST_CASE("swapchain") {
-  const uint32_t buffer_num = 3;
+  const uint32_t swapchain_buffer_num = 3;
   using namespace illuminate::gfx::d3d12;
   DxgiCore dxgi_core;
   CHECK(dxgi_core.Init());
@@ -139,8 +137,8 @@ TEST_CASE("swapchain") {
   illuminate::gfx::win32::Window window;
   CHECK(window.Init("swapchain test", 160, 90));
   Swapchain swapchain;
-  CHECK(swapchain.Init(dxgi_core.GetFactory(), command_queue.GetCommandQueue(CommandListType::kGraphics), device.GetDevice(), window.GetHwnd(), buffer_num));
-  for (uint32_t i = 0; i < buffer_num + 1; i++) {
+  CHECK(swapchain.Init(dxgi_core.GetFactory(), command_queue.GetCommandQueue(CommandListType::kGraphics), device.GetDevice(), window.GetHwnd(), swapchain_buffer_num, swapchain_buffer_num - 1));
+  for (uint32_t i = 0; i < swapchain_buffer_num + 1; i++) {
     swapchain.UpdateBackBufferIndex();
     CHECK(swapchain.Present());
   }
