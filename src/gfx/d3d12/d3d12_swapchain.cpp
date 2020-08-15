@@ -125,8 +125,6 @@ bool Swapchain::Present() {
 #include "doctest/doctest.h"
 #include "d3d12_dxgi_core.h"
 #include "d3d12_device.h"
-#include "d3d12_command_allocator.h"
-#include "d3d12_command_list.h"
 #include "d3d12_command_queue.h"
 #include "gfx/win32/win32_window.h"
 TEST_CASE("swapchain") {
@@ -142,21 +140,11 @@ TEST_CASE("swapchain") {
   CHECK(window.Init("swapchain test", 160, 90));
   Swapchain swapchain;
   CHECK(swapchain.Init(dxgi_core.GetFactory(), command_queue.GetCommandQueue(CommandListType::kGraphics), device.GetDevice(), window.GetHwnd(), buffer_num));
-  CommandAllocator command_allocator;
-  CHECK(command_allocator.Init(device.GetDevice()));
-  CommandList command_list;
-  CHECK(command_list.Init(device.GetDevice()));
-  auto command_allocators = command_allocator.RetainCommandAllocator(CommandListType::kGraphics, 1);
-  auto command_lists = command_list.RetainCommandList(CommandListType::kGraphics, 1, command_allocators);
   for (uint32_t i = 0; i < buffer_num + 1; i++) {
     swapchain.UpdateBackBufferIndex();
     CHECK(swapchain.Present());
   }
   command_queue.WaitAll();
-  command_list.ReturnCommandList(command_lists);
-  command_allocator.ReturnCommandAllocator(command_allocators);
-  command_list.Term();
-  command_allocator.Term();
   swapchain.Term();
   window.Term();
   command_queue.Term();
