@@ -41,7 +41,7 @@ D3d12CommandList** CommandList::RetainCommandList(const CommandListType command_
       }
       list->Close();
 #endif
-      SET_NAME(list, L"commandlist", d3d12_command_list_type * 1000 + pool_[command_list_type].size());
+      SET_NAME(list, "commandlist", d3d12_command_list_type * 1000 + pool_[command_list_type].size());
       pool_[command_list_type].push_back(list);
     }
   }
@@ -67,7 +67,7 @@ void CommandList::ReturnCommandList(D3d12CommandList** const list) {
 #include "d3d12_dxgi_core.h"
 #include "d3d12_device.h"
 #include "d3d12_command_allocator.h"
-TEST_CASE("device") {
+TEST_CASE("command list") {
   using namespace illuminate::gfx::d3d12;
   DxgiCore dxgi_core;
   CHECK(dxgi_core.Init());

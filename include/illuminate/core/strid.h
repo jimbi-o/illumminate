@@ -5,10 +5,6 @@
 #define STRID_DEBUG_STR_ENABLED
 using size_t = std::size_t;
 namespace illuminate::core {
-template <typename C, typename V>
-constexpr bool IsContaining(const C& container, const V& val) {
-  return container.find(val) != container.end();
-}
 using HashResult = uint32_t;
 // https://xueyouchao.github.io/2016/11/16/CompileTimeString/
 template <size_t N>

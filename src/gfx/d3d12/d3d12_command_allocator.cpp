@@ -31,7 +31,7 @@ ID3D12CommandAllocator** CommandAllocator::RetainCommandAllocator(const CommandL
         logerror("failed to create command allocator {} {} {} {}", hr, d3d12_command_list_type, num * 2, pool_[command_list_type].size());
         ASSERT(false && "CreateCommandAllocator failed.", hr);
       }
-      SET_NAME(allocator, L"commandallocator", d3d12_command_list_type * 1000 + pool_[command_list_type].size());
+      SET_NAME(allocator, "commandallocator", d3d12_command_list_type * 1000 + pool_[command_list_type].size());
       pool_[command_list_type].push_back(allocator);
     }
   }

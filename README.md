@@ -27,7 +27,7 @@ cmake.exe -S src/core -B buildcorevs -A x64 -T"ClangCL" -DCMAKE_CONFIGURATION_TY
 # win32 lib
 
 ## visual studio
-cmake.exe -S src/gfx/win32 -B build -G "Visual Studio 16 2019" -A x64 -T"ClangCL" -DCMAKE_CONFIGURATION_TYPES="Debug;RelWithDebInfo;Release" -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake.exe --build build --config RelWithDebInfo && ./build/RelWithDebInfo/illuminategfxwin32.exe
+cmake.exe -S src/gfx/win32 -B buildwin32 -G "Visual Studio 16 2019" -A x64 -T"ClangCL" -DCMAKE_CONFIGURATION_TYPES="Debug;RelWithDebInfo;Release" -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake.exe --build buildwin32 --config RelWithDebInfo && ./buildwin32/RelWithDebInfo/illuminategfxwin32.exe
 
 # renderer
 

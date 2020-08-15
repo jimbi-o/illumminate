@@ -52,7 +52,9 @@ target_include_directories(illuminategfxwin32
   PRIVATE
   "."
   "../../"
+  "../../../include/illuminate"
   "../../../include/illuminate/gfx/win32"
+  "${doctest_SOURCE_DIR}"
 )
 
 target_sources(illuminategfxwin32 PRIVATE
