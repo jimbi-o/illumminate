@@ -1,4 +1,5 @@
 #include "d3d12_command_queue.h"
+#include <limits>
 #include "gfx/win32/win32_handle.h"
 #include "d3d12_minimal_for_cpp.h"
 namespace illuminate::gfx::d3d12 {
@@ -80,6 +81,14 @@ void CommandQueue::WaitOnCpu(std::unordered_map<CommandListType, uint64_t>&& sig
   }
   auto hr = WaitForSingleObject(handle_, INFINITE);
   ASSERT(SUCCEEDED(hr) && "WaitForSingleObject failed", hr);
+}
+void CommandQueue::WaitAll() {
+  auto signal_val = std::numeric_limits<uint64_t>::max();
+  for (auto& queue_type : kCommandListTypeSet) {
+    RegisterSignal(queue_type, signal_val);
+    WaitOnCpu({{queue_type, signal_val}});
+    RegisterSignal(queue_type, 0);
+  }
 }
 }
 #include "doctest/doctest.h"

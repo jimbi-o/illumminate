@@ -46,6 +46,9 @@ target_compile_features(illuminategfxd3d12 PUBLIC cxx_std_17)
 if (NOT MSVC)
   target_compile_options(illuminategfxd3d12 PRIVATE -msse4.2)
 endif()
+if (MSVC)
+  target_compile_definitions(illuminategfxd3d12 PRIVATE NOMINMAX)
+endif()
 if ("${CMAKE_VS_PLATFORM_TOOLSET}" STREQUAL "ClangCL")
   target_compile_options(illuminategfxd3d12 PRIVATE "/arch:AVX2")
 endif()
@@ -80,4 +83,5 @@ target_sources(illuminategfxd3d12 PRIVATE
   "d3d12_command_allocator.cpp"
   "d3d12_command_list.cpp"
   "d3d12_command_queue.cpp"
+  "d3d12_swapchain.cpp"
 )

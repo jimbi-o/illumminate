@@ -5,11 +5,11 @@
 #include <vector>
 #include <dxgi1_6.h>
 #include <d3d12.h>
-#include "d3d12_util.h"
 #include "gfx_def.h"
 namespace illuminate::gfx::d3d12 {
 using DxgiFactory = IDXGIFactory7;
 using DxgiAdapter = IDXGIAdapter4;
+using DxgiSwapchain = IDXGISwapChain4;
 using D3d12Device = ID3D12Device6;
 using D3d12CommandList = ID3D12GraphicsCommandList5;
 using CommandListType = illuminate::gfx::CommandListType;

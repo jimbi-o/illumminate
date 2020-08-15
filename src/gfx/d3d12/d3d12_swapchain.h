@@ -1,0 +1,26 @@
+#ifndef __ILLUMINATE_D3D12_SWAPCHAIN_H__
+#define __ILLUMINATE_D3D12_SWAPCHAIN_H__
+#include "d3d12_header_common.h"
+namespace illuminate::gfx::d3d12 {
+class Swapchain {
+ public:
+  bool Init(DxgiFactory* factory, ID3D12CommandQueue* command_queue_graphics, D3d12Device* const device, HWND hwnd, const uint32_t buffer_num);
+  void Term();
+  void EnableVsync(const bool b) { vsync_ = b; }
+  void UpdateBackBufferIndex();
+  bool Present();
+ private:
+  DXGI_FORMAT format_ = DXGI_FORMAT_UNKNOWN;
+  uint32_t buffer_num_ = 0;
+  bool vsync_ = true;
+  bool tearing_support_ = false;
+  uint32_t width_ = 0, height_ = 0;
+  DxgiSwapchain* swapchain_ = nullptr;
+  HANDLE frame_latency_waitable_object_ = nullptr;
+  std::vector<ID3D12Resource*> resources_;
+  ID3D12DescriptorHeap* descriptor_heap_ = nullptr;
+  std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> cpu_handles_rtv_;
+  uint32_t buffer_index_ = 0;
+};
+}
+#endif
