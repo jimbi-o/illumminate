@@ -80,7 +80,7 @@ TEST_CASE("execute command list") {
     CAPTURE(i);
     if (i >= buffer_num) {
       command_queue.WaitOnCpu({{CommandListType::kGraphics, i - buffer_num}});
-      for (auto a : allocators.back()) {
+      for (auto a : allocators.front()) {
         command_allocator.ReturnCommandAllocator(a);
       }
       allocators.pop();
@@ -135,7 +135,7 @@ TEST_CASE("execute command list") {
     CHECK(swapchain.Present());
   }
   while (!allocators.empty()) {
-    for (auto a : allocators.back()) {
+    for (auto a : allocators.front()) {
       command_allocator.ReturnCommandAllocator(a);
     }
     allocators.pop();
