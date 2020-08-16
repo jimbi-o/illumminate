@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <unordered_set>
 namespace illuminate::gfx {
-enum class CommandListType : uint8_t { kGraphics, kCompute, kTransfer, };
-const std::unordered_set<CommandListType> kCommandListTypeSet{CommandListType::kGraphics, CommandListType::kCompute, CommandListType::kTransfer};
+enum class CommandQueueType : uint8_t { kGraphics, kCompute, kTransfer, };
+const std::unordered_set<CommandQueueType> kCommandQueueTypeSet{CommandQueueType::kGraphics, CommandQueueType::kCompute, CommandQueueType::kTransfer};
 }
 #endif

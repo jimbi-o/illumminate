@@ -20,8 +20,8 @@ void CommandList::Term() {
     }
   }
 }
-D3d12CommandList** CommandList::RetainCommandList(const CommandListType command_list_type, const uint32_t num, ID3D12CommandAllocator** const allocators) {
-  auto d3d12_command_list_type = ConvertToD3d12CommandListType(command_list_type);
+D3d12CommandList** CommandList::RetainCommandList(const CommandQueueType command_list_type, const uint32_t num, ID3D12CommandAllocator** const allocators) {
+  auto d3d12_command_list_type = ConvertToD3d12CommandQueueType(command_list_type);
   if (pool_[command_list_type].size() < num) {
     loginfo("command list creation. {}({})", num * 2, pool_[command_list_type].size());
     while (pool_[command_list_type].size() < num * 2) {
@@ -77,14 +77,14 @@ TEST_CASE("command list") {
   CHECK(command_allocator.Init(device.GetDevice()));
   CommandList command_list;
   CHECK(command_list.Init(device.GetDevice()));
-  auto command_allocators = command_allocator.RetainCommandAllocator(CommandListType::kGraphics, 3);
-  auto command_lists = command_list.RetainCommandList(CommandListType::kGraphics, 3, command_allocators);
+  auto command_allocators = command_allocator.RetainCommandAllocator(CommandQueueType::kGraphics, 3);
+  auto command_lists = command_list.RetainCommandList(CommandQueueType::kGraphics, 3, command_allocators);
   CHECK(command_lists[0]);
   CHECK(command_lists[1]);
   CHECK(command_lists[2]);
   command_list.ReturnCommandList(command_lists);
-  auto command_allocators_c = command_allocator.RetainCommandAllocator(CommandListType::kCompute, 4);
-  command_lists = command_list.RetainCommandList(CommandListType::kCompute, 4, command_allocators_c);
+  auto command_allocators_c = command_allocator.RetainCommandAllocator(CommandQueueType::kCompute, 4);
+  command_lists = command_list.RetainCommandList(CommandQueueType::kCompute, 4, command_allocators_c);
   CHECK(command_lists[0]);
   CHECK(command_lists[1]);
   CHECK(command_lists[2]);

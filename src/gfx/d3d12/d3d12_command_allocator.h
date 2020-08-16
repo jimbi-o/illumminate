@@ -6,12 +6,12 @@ class CommandAllocator {
  public:
   bool Init(D3d12Device* const);
   void Term();
-  ID3D12CommandAllocator** RetainCommandAllocator(const CommandListType, const uint32_t num);
+  ID3D12CommandAllocator** RetainCommandAllocator(const CommandQueueType, const uint32_t num);
   void ReturnCommandAllocator(ID3D12CommandAllocator** const);
  private:
   D3d12Device* device_ = nullptr;
-  std::unordered_map<CommandListType, std::vector<ID3D12CommandAllocator*>> pool_;
-  std::unordered_map<ID3D12CommandAllocator**, std::tuple<CommandListType, uint32_t>> allocation_info_;
+  std::unordered_map<CommandQueueType, std::vector<ID3D12CommandAllocator*>> pool_;
+  std::unordered_map<ID3D12CommandAllocator**, std::tuple<CommandQueueType, uint32_t>> allocation_info_;
 };
 }
 #endif

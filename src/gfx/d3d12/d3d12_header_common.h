@@ -12,12 +12,12 @@ using DxgiAdapter = IDXGIAdapter4;
 using DxgiSwapchain = IDXGISwapChain4;
 using D3d12Device = ID3D12Device6;
 using D3d12CommandList = ID3D12GraphicsCommandList5;
-using CommandListType = illuminate::gfx::CommandListType;
-constexpr inline D3D12_COMMAND_LIST_TYPE ConvertToD3d12CommandListType(const CommandListType type) {
+using CommandQueueType = illuminate::gfx::CommandQueueType;
+constexpr inline D3D12_COMMAND_LIST_TYPE ConvertToD3d12CommandQueueType(const CommandQueueType type) {
   switch (type) {
-    case CommandListType::kGraphics: return D3D12_COMMAND_LIST_TYPE_DIRECT;
-    case CommandListType::kCompute:  return D3D12_COMMAND_LIST_TYPE_COMPUTE;
-    case CommandListType::kTransfer: return D3D12_COMMAND_LIST_TYPE_COPY;
+    case CommandQueueType::kGraphics: return D3D12_COMMAND_LIST_TYPE_DIRECT;
+    case CommandQueueType::kCompute:  return D3D12_COMMAND_LIST_TYPE_COMPUTE;
+    case CommandQueueType::kTransfer: return D3D12_COMMAND_LIST_TYPE_COPY;
   }
 }
 }
