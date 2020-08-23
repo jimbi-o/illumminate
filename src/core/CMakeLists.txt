@@ -52,6 +52,7 @@ target_include_directories(illuminatecore
   PRIVATE
   "."
   "../"
+  "../../include/illuminate"
   "../../include/illuminate/core"
 )
 

@@ -1,8 +1,10 @@
 #include "strid.h"
 #include <unordered_map>
 #include <unordered_set>
+#include "minimal_for_cpp.h"
 #include "doctest/doctest.h"
 TEST_CASE("strid") {
+  using namespace illuminate;
   using namespace illuminate::core;
   StrId sid("a");
   CHECK(sid == SID("a"));
