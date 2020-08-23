@@ -153,93 +153,93 @@ namespace {
 std::vector<BatchedRendererPass> CreateTestData() {
   return {
     {
-      SID("batch1"),
+      StrId("batch1"),
       {
         {
-          SID("gpass1"),
+          StrId("gpass1"),
           QueueType::kGraphics,
           AsyncCompute::kDisabled,
-          SID("gpass1-func"),
+          StrId("gpass1-func"),
           // viewport size
           { BufferSizeType::kSwapchainRelative,1.0f, 1.0f},
           // pass binded buffers
           {
-            { SID("primary"), BufferState::kRtv, },
-            { SID("reused"),  BufferState::kRtv, },
-            { SID("depth"),   BufferState::kDsv, },
+            { StrId("primary"), BufferState::kRtv, },
+            { StrId("reused"),  BufferState::kRtv, },
+            { StrId("depth"),   BufferState::kDsv, },
           },
         },
         {
-          SID("gpass2"),
+          StrId("gpass2"),
           QueueType::kGraphics,
           AsyncCompute::kDisabled,
-          SID("gpass2-func"),
+          StrId("gpass2-func"),
           // viewport size
           { BufferSizeType::kSwapchainRelative,1.0f, 1.0f},
           // pass binded buffers
           {
-            { SID("primary"), BufferState::kSrv, },
-            { SID("primary"), BufferState::kRtv, },
-            { SID("reused"),  BufferState::kSrv, },
-            { SID("depth"),   BufferState::kDsvReadOnly, },
+            { StrId("primary"), BufferState::kSrv, },
+            { StrId("primary"), BufferState::kRtv, },
+            { StrId("reused"),  BufferState::kSrv, },
+            { StrId("depth"),   BufferState::kDsvReadOnly, },
           },
         },
         {
-          SID("cpass1"),
+          StrId("cpass1"),
           QueueType::kCompute,
           AsyncCompute::kEnabled,
-          SID("cpass1-func"),
+          StrId("cpass1-func"),
           // viewport size
           {},
           // pass binded buffers
           {
-            { SID("buf0"), BufferState::kUav, },
-            { SID("buf1"), BufferState::kUav, },
+            { StrId("buf0"), BufferState::kUav, },
+            { StrId("buf1"), BufferState::kUav, },
           },
         },
       },
       // buffer descs
       {
-        {SID("primary"), {BufferFormat::kRgbLinearSdrDefault, BufferSizeType::kViewportRelative, 1.0f, 1.0f, 1.0f, GetClearValueDefaultDsv()}},
-        {SID("depth"),   {BufferFormat::kDepthBufferDefault, BufferSizeType::kViewportRelative, 1.0f, 1.0f, 1.0f, GetClearValueDefaultRtv()}},
-        {SID("buf0"),    {BufferFormat::kR8G8B8A8_Unorm, BufferSizeType::kAbsolute, 1024.0f, 1024.0f, 1.0f, {}}},
-        {SID("buf1"),    {BufferFormat::kR8G8B8A8_Unorm, BufferSizeType::kSwapchainRelative, 0.5f, 0.5f, 1.0f, {}}},
+        {StrId("primary"), {BufferFormat::kRgbLinearSdrDefault, BufferSizeType::kViewportRelative, 1.0f, 1.0f, 1.0f, GetClearValueDefaultDsv()}},
+        {StrId("depth"),   {BufferFormat::kDepthBufferDefault, BufferSizeType::kViewportRelative, 1.0f, 1.0f, 1.0f, GetClearValueDefaultRtv()}},
+        {StrId("buf0"),    {BufferFormat::kR8G8B8A8_Unorm, BufferSizeType::kAbsolute, 1024.0f, 1024.0f, 1.0f, {}}},
+        {StrId("buf1"),    {BufferFormat::kR8G8B8A8_Unorm, BufferSizeType::kSwapchainRelative, 0.5f, 0.5f, 1.0f, {}}},
       },
     },
     {
-      SID("batch2"),
+      StrId("batch2"),
       {
         {
-          SID("gpass3"),
+          StrId("gpass3"),
           QueueType::kGraphics,
           AsyncCompute::kDisabled,
-          SID("gpass3-func"),
+          StrId("gpass3-func"),
           // viewport size
           { BufferSizeType::kSwapchainRelative,1.0f, 1.0f},
           // pass binded buffers
           {
-            { SID("primary"), BufferState::kSrv, },
-            { SID("primary"), BufferState::kRtv, },
-            { SID("sub"),     BufferState::kRtv, },
-            { SID("buf0"),    BufferState::kUavReadOnly, },
-            { SID("depth"),   BufferState::kDsvReadOnly, },
-            { SID("reused"),  BufferState::kSrv, },
+            { StrId("primary"), BufferState::kSrv, },
+            { StrId("primary"), BufferState::kRtv, },
+            { StrId("sub"),     BufferState::kRtv, },
+            { StrId("buf0"),    BufferState::kUavReadOnly, },
+            { StrId("depth"),   BufferState::kDsvReadOnly, },
+            { StrId("reused"),  BufferState::kSrv, },
           },
         },
         {
-          SID("gpass4"),
+          StrId("gpass4"),
           QueueType::kGraphics,
           AsyncCompute::kDisabled,
-          SID("gpass4-func"),
+          StrId("gpass4-func"),
           // viewport size
           { BufferSizeType::kSwapchainRelative,1.0f, 1.0f},
           // pass binded buffers
           {
-            { SID("primary"), BufferState::kSrv, },
-            { SID("primary"), BufferState::kRtv, },
-            { SID("buf0"),    BufferState::kRtv, },
-            { SID("buf1"),    BufferState::kSrv, },
-            { SID("reused"),  BufferState::kSrv, },
+            { StrId("primary"), BufferState::kSrv, },
+            { StrId("primary"), BufferState::kRtv, },
+            { StrId("buf0"),    BufferState::kRtv, },
+            { StrId("buf1"),    BufferState::kSrv, },
+            { StrId("reused"),  BufferState::kSrv, },
           },
         },
       },
@@ -249,45 +249,45 @@ std::vector<BatchedRendererPass> CreateTestData() {
 std::tuple<std::vector<BatchedRendererPass>, PassBindedBufferIdList, PassBindedBufferStateList> CreateTestDataWithDsvTransition() {
   std::vector<BatchedRendererPass> batches = {
     {
-      SID("batch1"),
+      StrId("batch1"),
       {
         {
-          SID("pass1"),
+          StrId("pass1"),
           QueueType::kGraphics,
           AsyncCompute::kDisabled,
-          SID("func"),
+          StrId("func"),
           // viewport size
           { BufferSizeType::kSwapchainRelative,1.0f, 1.0f},
           // pass binded buffers
           {
-            { SID("primary"), BufferState::kRtv, },
-            { SID("depth"),   BufferState::kDsv, },
+            { StrId("primary"), BufferState::kRtv, },
+            { StrId("depth"),   BufferState::kDsv, },
           },
         },
         {
-          SID("pass2"),
+          StrId("pass2"),
           QueueType::kGraphics,
           AsyncCompute::kDisabled,
-          SID("gpass2-func"),
+          StrId("gpass2-func"),
           // viewport size
           { BufferSizeType::kSwapchainRelative,1.0f, 1.0f},
           // pass binded buffers
           {
-            { SID("primary"), BufferState::kRtv, },
-            { SID("depth"),   BufferState::kDsvReadOnly, },
+            { StrId("primary"), BufferState::kRtv, },
+            { StrId("depth"),   BufferState::kDsvReadOnly, },
           },
         },
         {
-          SID("pass3"),
+          StrId("pass3"),
           QueueType::kGraphics,
           AsyncCompute::kDisabled,
-          SID("cpass1-func"),
+          StrId("cpass1-func"),
           // viewport size
           {},
           // pass binded buffers
           {
-            { SID("primary"), BufferState::kRtv, },
-            { SID("depth"),   BufferState::kSrv, },
+            { StrId("primary"), BufferState::kRtv, },
+            { StrId("depth"),   BufferState::kSrv, },
           },
         },
       },
@@ -370,6 +370,7 @@ TEST_CASE("BufferState test") {
   CHECK(GetBufferViewType(BufferState::kUavReadOnly) == kBufferViewTypeUav);
 }
 TEST_CASE("pass binded buffer id list") {
+  using namespace illuminate;
   using namespace illuminate::gfx;
   RenderPassConfig a{}, b{};
   a.queue_type = QueueType::kGraphics;
@@ -399,103 +400,103 @@ TEST_CASE("pass binded buffer id list") {
   CHECK(!IsPassExecutedOnSameQueue(a, b));
   auto test_data = CreateTestData();
   auto pass_binded_buffer_ids = ExtractDataStoredBuffers(test_data.data(), test_data.size());
-  CHECK(IsContaining(pass_binded_buffer_ids[SID("gpass1")][kBufferViewTypeRtv], SID("primary")));
-  CHECK(IsContaining(pass_binded_buffer_ids[SID("gpass1")][kBufferViewTypeDsv], SID("depth")));
-  CHECK(IsContaining(pass_binded_buffer_ids[SID("gpass1")][kBufferViewTypeRtv], SID("reused")));
-  CHECK(IsContaining(pass_binded_buffer_ids[SID("gpass2")][kBufferViewTypeRtv], SID("primary")));
-  CHECK(IsContaining(pass_binded_buffer_ids[SID("cpass1")][kBufferViewTypeUav], SID("buf0")));
-  CHECK(IsContaining(pass_binded_buffer_ids[SID("cpass1")][kBufferViewTypeUav], SID("buf1")));
-  CHECK(IsContaining(pass_binded_buffer_ids[SID("gpass3")][kBufferViewTypeRtv], SID("primary")));
-  CHECK(IsContaining(pass_binded_buffer_ids[SID("gpass3")][kBufferViewTypeRtv], SID("sub")));
-  CHECK(IsContaining(pass_binded_buffer_ids[SID("gpass4")][kBufferViewTypeRtv], SID("primary")));
-  CHECK(IsContaining(pass_binded_buffer_ids[SID("gpass4")][kBufferViewTypeRtv], SID("buf0")));
-  CHECK(FindBufferIdFromLatestStore(test_data.data(), test_data.size(), 0, 1, SID("primary"), pass_binded_buffer_ids) == pass_binded_buffer_ids[SID("gpass1")][kBufferViewTypeRtv][SID("primary")]);
-  CHECK(FindBufferIdFromLatestStore(test_data.data(), test_data.size(), 0, 1, SID("depth"), pass_binded_buffer_ids)   == pass_binded_buffer_ids[SID("gpass1")][kBufferViewTypeDsv][SID("depth")]);
-  CHECK(FindBufferIdFromLatestStore(test_data.data(), test_data.size(), 0, 1, SID("reused"), pass_binded_buffer_ids)  == pass_binded_buffer_ids[SID("gpass1")][kBufferViewTypeRtv][SID("reused")]);
-  CHECK(FindBufferIdFromLatestStore(test_data.data(), test_data.size(), 1, 0, SID("primary"), pass_binded_buffer_ids) == pass_binded_buffer_ids[SID("gpass2")][kBufferViewTypeRtv][SID("primary")]);
-  CHECK(FindBufferIdFromLatestStore(test_data.data(), test_data.size(), 1, 0, SID("buf0"), pass_binded_buffer_ids)    == pass_binded_buffer_ids[SID("cpass1")][kBufferViewTypeUav][SID("buf0")]);
-  CHECK(FindBufferIdFromLatestStore(test_data.data(), test_data.size(), 1, 0, SID("depth"), pass_binded_buffer_ids)   == pass_binded_buffer_ids[SID("gpass1")][kBufferViewTypeDsv][SID("depth")]);
-  CHECK(FindBufferIdFromLatestStore(test_data.data(), test_data.size(), 1, 0, SID("reused"), pass_binded_buffer_ids)  == pass_binded_buffer_ids[SID("gpass1")][kBufferViewTypeRtv][SID("reused")]);
-  CHECK(FindBufferIdFromLatestStore(test_data.data(), test_data.size(), 1, 1, SID("primary"), pass_binded_buffer_ids) == pass_binded_buffer_ids[SID("gpass3")][kBufferViewTypeRtv][SID("primary")]);
-  CHECK(FindBufferIdFromLatestStore(test_data.data(), test_data.size(), 1, 1, SID("buf1"), pass_binded_buffer_ids)    == pass_binded_buffer_ids[SID("cpass1")][kBufferViewTypeUav][SID("buf1")]);
-  CHECK(FindBufferIdFromLatestStore(test_data.data(), test_data.size(), 1, 1, SID("reused"), pass_binded_buffer_ids)  == pass_binded_buffer_ids[SID("gpass1")][kBufferViewTypeRtv][SID("reused")]);
+  CHECK(IsContaining(pass_binded_buffer_ids[StrId("gpass1")][kBufferViewTypeRtv], StrId("primary")));
+  CHECK(IsContaining(pass_binded_buffer_ids[StrId("gpass1")][kBufferViewTypeDsv], StrId("depth")));
+  CHECK(IsContaining(pass_binded_buffer_ids[StrId("gpass1")][kBufferViewTypeRtv], StrId("reused")));
+  CHECK(IsContaining(pass_binded_buffer_ids[StrId("gpass2")][kBufferViewTypeRtv], StrId("primary")));
+  CHECK(IsContaining(pass_binded_buffer_ids[StrId("cpass1")][kBufferViewTypeUav], StrId("buf0")));
+  CHECK(IsContaining(pass_binded_buffer_ids[StrId("cpass1")][kBufferViewTypeUav], StrId("buf1")));
+  CHECK(IsContaining(pass_binded_buffer_ids[StrId("gpass3")][kBufferViewTypeRtv], StrId("primary")));
+  CHECK(IsContaining(pass_binded_buffer_ids[StrId("gpass3")][kBufferViewTypeRtv], StrId("sub")));
+  CHECK(IsContaining(pass_binded_buffer_ids[StrId("gpass4")][kBufferViewTypeRtv], StrId("primary")));
+  CHECK(IsContaining(pass_binded_buffer_ids[StrId("gpass4")][kBufferViewTypeRtv], StrId("buf0")));
+  CHECK(FindBufferIdFromLatestStore(test_data.data(), test_data.size(), 0, 1, StrId("primary"), pass_binded_buffer_ids) == pass_binded_buffer_ids[StrId("gpass1")][kBufferViewTypeRtv][StrId("primary")]);
+  CHECK(FindBufferIdFromLatestStore(test_data.data(), test_data.size(), 0, 1, StrId("depth"), pass_binded_buffer_ids)   == pass_binded_buffer_ids[StrId("gpass1")][kBufferViewTypeDsv][StrId("depth")]);
+  CHECK(FindBufferIdFromLatestStore(test_data.data(), test_data.size(), 0, 1, StrId("reused"), pass_binded_buffer_ids)  == pass_binded_buffer_ids[StrId("gpass1")][kBufferViewTypeRtv][StrId("reused")]);
+  CHECK(FindBufferIdFromLatestStore(test_data.data(), test_data.size(), 1, 0, StrId("primary"), pass_binded_buffer_ids) == pass_binded_buffer_ids[StrId("gpass2")][kBufferViewTypeRtv][StrId("primary")]);
+  CHECK(FindBufferIdFromLatestStore(test_data.data(), test_data.size(), 1, 0, StrId("buf0"), pass_binded_buffer_ids)    == pass_binded_buffer_ids[StrId("cpass1")][kBufferViewTypeUav][StrId("buf0")]);
+  CHECK(FindBufferIdFromLatestStore(test_data.data(), test_data.size(), 1, 0, StrId("depth"), pass_binded_buffer_ids)   == pass_binded_buffer_ids[StrId("gpass1")][kBufferViewTypeDsv][StrId("depth")]);
+  CHECK(FindBufferIdFromLatestStore(test_data.data(), test_data.size(), 1, 0, StrId("reused"), pass_binded_buffer_ids)  == pass_binded_buffer_ids[StrId("gpass1")][kBufferViewTypeRtv][StrId("reused")]);
+  CHECK(FindBufferIdFromLatestStore(test_data.data(), test_data.size(), 1, 1, StrId("primary"), pass_binded_buffer_ids) == pass_binded_buffer_ids[StrId("gpass3")][kBufferViewTypeRtv][StrId("primary")]);
+  CHECK(FindBufferIdFromLatestStore(test_data.data(), test_data.size(), 1, 1, StrId("buf1"), pass_binded_buffer_ids)    == pass_binded_buffer_ids[StrId("cpass1")][kBufferViewTypeUav][StrId("buf1")]);
+  CHECK(FindBufferIdFromLatestStore(test_data.data(), test_data.size(), 1, 1, StrId("reused"), pass_binded_buffer_ids)  == pass_binded_buffer_ids[StrId("gpass1")][kBufferViewTypeRtv][StrId("reused")]);
   pass_binded_buffer_ids = IdentifyPassBindedBuffers(test_data.data(), test_data.size());
-  CHECK(pass_binded_buffer_ids[SID("gpass1")][kBufferViewTypeRtv][SID("primary")] == pass_binded_buffer_ids[SID("gpass2")][kBufferViewTypeSrv][SID("primary")]);
-  CHECK(pass_binded_buffer_ids[SID("gpass1")][kBufferViewTypeRtv][SID("primary")] != pass_binded_buffer_ids[SID("gpass2")][kBufferViewTypeRtv][SID("primary")]);
-  CHECK(pass_binded_buffer_ids[SID("gpass1")][kBufferViewTypeDsv][SID("depth")]   == pass_binded_buffer_ids[SID("gpass2")][kBufferViewTypeDsv][SID("depth")]);
-  CHECK(pass_binded_buffer_ids[SID("gpass1")][kBufferViewTypeDsv][SID("depth")]   == pass_binded_buffer_ids[SID("gpass3")][kBufferViewTypeDsv][SID("depth")]);
-  CHECK(pass_binded_buffer_ids[SID("gpass1")][kBufferViewTypeRtv][SID("reused")]  == pass_binded_buffer_ids[SID("gpass2")][kBufferViewTypeSrv][SID("reused")]);
-  CHECK(pass_binded_buffer_ids[SID("gpass2")][kBufferViewTypeRtv][SID("primary")] == pass_binded_buffer_ids[SID("gpass3")][kBufferViewTypeSrv][SID("primary")]);
-  CHECK(pass_binded_buffer_ids[SID("gpass2")][kBufferViewTypeSrv][SID("reused")]  == pass_binded_buffer_ids[SID("gpass3")][kBufferViewTypeSrv][SID("reused")]);
-  CHECK(pass_binded_buffer_ids[SID("cpass1")][kBufferViewTypeUav][SID("buf0")]    == pass_binded_buffer_ids[SID("gpass3")][kBufferViewTypeUav][SID("buf0")]);
-  CHECK(pass_binded_buffer_ids[SID("cpass1")][kBufferViewTypeUav][SID("buf0")]    != pass_binded_buffer_ids[SID("gpass4")][kBufferViewTypeRtv][SID("buf0")]);
-  CHECK(pass_binded_buffer_ids[SID("cpass1")][kBufferViewTypeUav][SID("buf1")]    == pass_binded_buffer_ids[SID("gpass4")][kBufferViewTypeSrv][SID("buf1")]);
-  CHECK(pass_binded_buffer_ids[SID("gpass3")][kBufferViewTypeRtv][SID("primary")] == pass_binded_buffer_ids[SID("gpass4")][kBufferViewTypeSrv][SID("primary")]);
-  CHECK(pass_binded_buffer_ids[SID("gpass3")][kBufferViewTypeSrv][SID("reused")]  == pass_binded_buffer_ids[SID("gpass4")][kBufferViewTypeSrv][SID("reused")]);
-  CHECK(pass_binded_buffer_ids[SID("gpass4")][kBufferViewTypeSrv][SID("buf1")]    == pass_binded_buffer_ids[SID("cpass1")][kBufferViewTypeUav][SID("buf1")]);
+  CHECK(pass_binded_buffer_ids[StrId("gpass1")][kBufferViewTypeRtv][StrId("primary")] == pass_binded_buffer_ids[StrId("gpass2")][kBufferViewTypeSrv][StrId("primary")]);
+  CHECK(pass_binded_buffer_ids[StrId("gpass1")][kBufferViewTypeRtv][StrId("primary")] != pass_binded_buffer_ids[StrId("gpass2")][kBufferViewTypeRtv][StrId("primary")]);
+  CHECK(pass_binded_buffer_ids[StrId("gpass1")][kBufferViewTypeDsv][StrId("depth")]   == pass_binded_buffer_ids[StrId("gpass2")][kBufferViewTypeDsv][StrId("depth")]);
+  CHECK(pass_binded_buffer_ids[StrId("gpass1")][kBufferViewTypeDsv][StrId("depth")]   == pass_binded_buffer_ids[StrId("gpass3")][kBufferViewTypeDsv][StrId("depth")]);
+  CHECK(pass_binded_buffer_ids[StrId("gpass1")][kBufferViewTypeRtv][StrId("reused")]  == pass_binded_buffer_ids[StrId("gpass2")][kBufferViewTypeSrv][StrId("reused")]);
+  CHECK(pass_binded_buffer_ids[StrId("gpass2")][kBufferViewTypeRtv][StrId("primary")] == pass_binded_buffer_ids[StrId("gpass3")][kBufferViewTypeSrv][StrId("primary")]);
+  CHECK(pass_binded_buffer_ids[StrId("gpass2")][kBufferViewTypeSrv][StrId("reused")]  == pass_binded_buffer_ids[StrId("gpass3")][kBufferViewTypeSrv][StrId("reused")]);
+  CHECK(pass_binded_buffer_ids[StrId("cpass1")][kBufferViewTypeUav][StrId("buf0")]    == pass_binded_buffer_ids[StrId("gpass3")][kBufferViewTypeUav][StrId("buf0")]);
+  CHECK(pass_binded_buffer_ids[StrId("cpass1")][kBufferViewTypeUav][StrId("buf0")]    != pass_binded_buffer_ids[StrId("gpass4")][kBufferViewTypeRtv][StrId("buf0")]);
+  CHECK(pass_binded_buffer_ids[StrId("cpass1")][kBufferViewTypeUav][StrId("buf1")]    == pass_binded_buffer_ids[StrId("gpass4")][kBufferViewTypeSrv][StrId("buf1")]);
+  CHECK(pass_binded_buffer_ids[StrId("gpass3")][kBufferViewTypeRtv][StrId("primary")] == pass_binded_buffer_ids[StrId("gpass4")][kBufferViewTypeSrv][StrId("primary")]);
+  CHECK(pass_binded_buffer_ids[StrId("gpass3")][kBufferViewTypeSrv][StrId("reused")]  == pass_binded_buffer_ids[StrId("gpass4")][kBufferViewTypeSrv][StrId("reused")]);
+  CHECK(pass_binded_buffer_ids[StrId("gpass4")][kBufferViewTypeSrv][StrId("buf1")]    == pass_binded_buffer_ids[StrId("cpass1")][kBufferViewTypeUav][StrId("buf1")]);
   auto buffer_state_list = ExtractBufferStateList(test_data.data(), test_data.size(), pass_binded_buffer_ids);
-  auto gpass1_rtv_primary = pass_binded_buffer_ids[SID("gpass1")][kBufferViewTypeRtv][SID("primary")];
-  auto gpass1_dsv_depth   = pass_binded_buffer_ids[SID("gpass1")][kBufferViewTypeDsv][SID("depth")];
-  auto gpass1_rtv_reused  = pass_binded_buffer_ids[SID("gpass1")][kBufferViewTypeRtv][SID("reused")];
-  auto gpass2_rtv_primary = pass_binded_buffer_ids[SID("gpass2")][kBufferViewTypeRtv][SID("primary")];
-  auto cpass1_uav_buf0    = pass_binded_buffer_ids[SID("cpass1")][kBufferViewTypeUav][SID("buf0")];
-  auto cpass1_uav_buf1    = pass_binded_buffer_ids[SID("cpass1")][kBufferViewTypeUav][SID("buf1")];
-  auto gpass3_rtv_primary = pass_binded_buffer_ids[SID("gpass3")][kBufferViewTypeRtv][SID("primary")];
-  auto gpass3_rtv_sub     = pass_binded_buffer_ids[SID("gpass3")][kBufferViewTypeRtv][SID("sub")];
-  auto gpass4_rtv_primary = pass_binded_buffer_ids[SID("gpass4")][kBufferViewTypeRtv][SID("primary")];
-  auto gpass4_rtv_buf0    = pass_binded_buffer_ids[SID("gpass4")][kBufferViewTypeRtv][SID("buf0")];
-  CHECK(buffer_state_list[gpass1_rtv_primary][SID("gpass1")] == BufferState::kRtv);
-  CHECK(buffer_state_list[gpass1_dsv_depth][SID("gpass1")]   == BufferState::kDsv);
-  CHECK(buffer_state_list[gpass1_rtv_reused][SID("gpass1")]  == BufferState::kRtv);
-  CHECK(buffer_state_list[gpass1_rtv_primary][SID("gpass2")] == BufferState::kSrv);
-  CHECK(buffer_state_list[gpass2_rtv_primary][SID("gpass2")] == BufferState::kRtv);
-  CHECK(buffer_state_list[gpass1_dsv_depth][SID("gpass2")]   == BufferState::kDsvReadOnly);
-  CHECK(buffer_state_list[gpass1_rtv_reused][SID("gpass2")]  == BufferState::kSrv);
-  CHECK(buffer_state_list[cpass1_uav_buf0][SID("cpass1")]    == BufferState::kUav);
-  CHECK(buffer_state_list[cpass1_uav_buf1][SID("cpass1")]    == BufferState::kUav);
-  CHECK(buffer_state_list[gpass2_rtv_primary][SID("gpass3")] == BufferState::kSrv);
-  CHECK(buffer_state_list[gpass3_rtv_primary][SID("gpass3")] == BufferState::kRtv);
-  CHECK(buffer_state_list[gpass3_rtv_sub][SID("gpass3")]     == BufferState::kRtv);
-  CHECK(buffer_state_list[cpass1_uav_buf0][SID("gpass3")]    == BufferState::kUavReadOnly);
-  CHECK(buffer_state_list[gpass1_dsv_depth][SID("gpass3")]   == BufferState::kDsvReadOnly);
-  CHECK(buffer_state_list[gpass1_rtv_reused][SID("gpass3")]  == BufferState::kSrv);
-  CHECK(buffer_state_list[gpass3_rtv_primary][SID("gpass4")] == BufferState::kSrv);
-  CHECK(buffer_state_list[gpass4_rtv_primary][SID("gpass4")] == BufferState::kRtv);
-  CHECK(buffer_state_list[gpass4_rtv_buf0][SID("gpass4")]    == BufferState::kRtv);
-  CHECK(buffer_state_list[cpass1_uav_buf1][SID("gpass4")]    == BufferState::kSrv);
-  CHECK(buffer_state_list[gpass1_rtv_reused][SID("gpass4")]  == BufferState::kSrv);
+  auto gpass1_rtv_primary = pass_binded_buffer_ids[StrId("gpass1")][kBufferViewTypeRtv][StrId("primary")];
+  auto gpass1_dsv_depth   = pass_binded_buffer_ids[StrId("gpass1")][kBufferViewTypeDsv][StrId("depth")];
+  auto gpass1_rtv_reused  = pass_binded_buffer_ids[StrId("gpass1")][kBufferViewTypeRtv][StrId("reused")];
+  auto gpass2_rtv_primary = pass_binded_buffer_ids[StrId("gpass2")][kBufferViewTypeRtv][StrId("primary")];
+  auto cpass1_uav_buf0    = pass_binded_buffer_ids[StrId("cpass1")][kBufferViewTypeUav][StrId("buf0")];
+  auto cpass1_uav_buf1    = pass_binded_buffer_ids[StrId("cpass1")][kBufferViewTypeUav][StrId("buf1")];
+  auto gpass3_rtv_primary = pass_binded_buffer_ids[StrId("gpass3")][kBufferViewTypeRtv][StrId("primary")];
+  auto gpass3_rtv_sub     = pass_binded_buffer_ids[StrId("gpass3")][kBufferViewTypeRtv][StrId("sub")];
+  auto gpass4_rtv_primary = pass_binded_buffer_ids[StrId("gpass4")][kBufferViewTypeRtv][StrId("primary")];
+  auto gpass4_rtv_buf0    = pass_binded_buffer_ids[StrId("gpass4")][kBufferViewTypeRtv][StrId("buf0")];
+  CHECK(buffer_state_list[gpass1_rtv_primary][StrId("gpass1")] == BufferState::kRtv);
+  CHECK(buffer_state_list[gpass1_dsv_depth][StrId("gpass1")]   == BufferState::kDsv);
+  CHECK(buffer_state_list[gpass1_rtv_reused][StrId("gpass1")]  == BufferState::kRtv);
+  CHECK(buffer_state_list[gpass1_rtv_primary][StrId("gpass2")] == BufferState::kSrv);
+  CHECK(buffer_state_list[gpass2_rtv_primary][StrId("gpass2")] == BufferState::kRtv);
+  CHECK(buffer_state_list[gpass1_dsv_depth][StrId("gpass2")]   == BufferState::kDsvReadOnly);
+  CHECK(buffer_state_list[gpass1_rtv_reused][StrId("gpass2")]  == BufferState::kSrv);
+  CHECK(buffer_state_list[cpass1_uav_buf0][StrId("cpass1")]    == BufferState::kUav);
+  CHECK(buffer_state_list[cpass1_uav_buf1][StrId("cpass1")]    == BufferState::kUav);
+  CHECK(buffer_state_list[gpass2_rtv_primary][StrId("gpass3")] == BufferState::kSrv);
+  CHECK(buffer_state_list[gpass3_rtv_primary][StrId("gpass3")] == BufferState::kRtv);
+  CHECK(buffer_state_list[gpass3_rtv_sub][StrId("gpass3")]     == BufferState::kRtv);
+  CHECK(buffer_state_list[cpass1_uav_buf0][StrId("gpass3")]    == BufferState::kUavReadOnly);
+  CHECK(buffer_state_list[gpass1_dsv_depth][StrId("gpass3")]   == BufferState::kDsvReadOnly);
+  CHECK(buffer_state_list[gpass1_rtv_reused][StrId("gpass3")]  == BufferState::kSrv);
+  CHECK(buffer_state_list[gpass3_rtv_primary][StrId("gpass4")] == BufferState::kSrv);
+  CHECK(buffer_state_list[gpass4_rtv_primary][StrId("gpass4")] == BufferState::kRtv);
+  CHECK(buffer_state_list[gpass4_rtv_buf0][StrId("gpass4")]    == BufferState::kRtv);
+  CHECK(buffer_state_list[cpass1_uav_buf1][StrId("gpass4")]    == BufferState::kSrv);
+  CHECK(buffer_state_list[gpass1_rtv_reused][StrId("gpass4")]  == BufferState::kSrv);
   auto testdata_dsvwrite_dsvread_srv = CreateTestDataWithDsvTransition();
   auto testdata_dsvwrite_dsvread_srv_pass_binded_buffer_ids = std::get<1>(testdata_dsvwrite_dsvread_srv);
   auto testdata_dsvwrite_dsvread_srv_buffer_states = std::get<2>(testdata_dsvwrite_dsvread_srv);
-  auto dsv_buffer_id = testdata_dsvwrite_dsvread_srv_pass_binded_buffer_ids[SID("pass1")][kBufferViewTypeDsv][SID("depth")];
-  CHECK(testdata_dsvwrite_dsvread_srv_buffer_states[dsv_buffer_id][SID("pass1")] == BufferState::kDsv);
-  CHECK(testdata_dsvwrite_dsvread_srv_buffer_states[dsv_buffer_id][SID("pass2")] == BufferState::kDsvReadOnly);
-  CHECK(testdata_dsvwrite_dsvread_srv_buffer_states[dsv_buffer_id][SID("pass3")] == BufferState::kSrv);
+  auto dsv_buffer_id = testdata_dsvwrite_dsvread_srv_pass_binded_buffer_ids[StrId("pass1")][kBufferViewTypeDsv][StrId("depth")];
+  CHECK(testdata_dsvwrite_dsvread_srv_buffer_states[dsv_buffer_id][StrId("pass1")] == BufferState::kDsv);
+  CHECK(testdata_dsvwrite_dsvread_srv_buffer_states[dsv_buffer_id][StrId("pass2")] == BufferState::kDsvReadOnly);
+  CHECK(testdata_dsvwrite_dsvread_srv_buffer_states[dsv_buffer_id][StrId("pass3")] == BufferState::kSrv);
   CombineMergeableBufferStates(std::get<0>(testdata_dsvwrite_dsvread_srv).data(), std::get<0>(testdata_dsvwrite_dsvread_srv).size(), testdata_dsvwrite_dsvread_srv_pass_binded_buffer_ids, &testdata_dsvwrite_dsvread_srv_buffer_states);
-  CHECK(testdata_dsvwrite_dsvread_srv_buffer_states[dsv_buffer_id][SID("pass1")] == BufferState::kDsv);
-  CHECK(testdata_dsvwrite_dsvread_srv_buffer_states[dsv_buffer_id][SID("pass2")] == static_cast<BufferState>(CombineBufferFlags((kBufferViewTypeSrv | kBufferViewTypeDsv), kBufferLoadOpLoad, kBufferStoreOpDontCare)));
-  CHECK(!IsContaining(testdata_dsvwrite_dsvread_srv_buffer_states[dsv_buffer_id], SID("pass3")));
+  CHECK(testdata_dsvwrite_dsvread_srv_buffer_states[dsv_buffer_id][StrId("pass1")] == BufferState::kDsv);
+  CHECK(testdata_dsvwrite_dsvread_srv_buffer_states[dsv_buffer_id][StrId("pass2")] == static_cast<BufferState>(CombineBufferFlags((kBufferViewTypeSrv | kBufferViewTypeDsv), kBufferLoadOpLoad, kBufferStoreOpDontCare)));
+  CHECK(!IsContaining(testdata_dsvwrite_dsvread_srv_buffer_states[dsv_buffer_id], StrId("pass3")));
   CombineMergeableBufferStates(test_data.data(), test_data.size(), pass_binded_buffer_ids, &buffer_state_list);
-  CHECK(buffer_state_list[gpass1_rtv_primary][SID("gpass1")] == BufferState::kRtv);
-  CHECK(buffer_state_list[gpass1_dsv_depth][SID("gpass1")] == BufferState::kDsv);
-  CHECK(buffer_state_list[gpass1_rtv_reused][SID("gpass1")] == BufferState::kRtv);
-  CHECK(buffer_state_list[gpass1_rtv_primary][SID("gpass2")] == BufferState::kSrv);
-  CHECK(buffer_state_list[gpass2_rtv_primary][SID("gpass2")] == BufferState::kRtv);
-  CHECK(buffer_state_list[gpass1_rtv_reused][SID("gpass2")] == BufferState::kSrv);
-  CHECK(buffer_state_list[gpass1_dsv_depth][SID("gpass2")] == BufferState::kDsvReadOnly);
-  CHECK(buffer_state_list[cpass1_uav_buf0][SID("cpass1")] == BufferState::kUav);
-  CHECK(buffer_state_list[cpass1_uav_buf1][SID("cpass1")] == BufferState::kUav);
-  CHECK(buffer_state_list[gpass2_rtv_primary][SID("gpass3")] == BufferState::kSrv);
-  CHECK(buffer_state_list[gpass3_rtv_primary][SID("gpass3")] == BufferState::kRtv);
-  CHECK(buffer_state_list[gpass3_rtv_sub][SID("gpass3")] == BufferState::kRtv);
-  CHECK(buffer_state_list[cpass1_uav_buf0][SID("gpass3")] == BufferState::kUavReadOnly);
-  CHECK(!IsContaining(buffer_state_list[gpass1_dsv_depth], SID("gpass3")));
-  CHECK(!IsContaining(buffer_state_list[gpass1_rtv_reused], SID("gpass3")));
-  CHECK(buffer_state_list[gpass3_rtv_primary][SID("gpass4")] == BufferState::kSrv);
-  CHECK(buffer_state_list[gpass4_rtv_primary][SID("gpass4")] == BufferState::kRtv);
-  CHECK(buffer_state_list[gpass4_rtv_buf0][SID("gpass4")] == BufferState::kRtv);
-  CHECK(buffer_state_list[cpass1_uav_buf1][SID("gpass4")] == BufferState::kSrv);
-  CHECK(!IsContaining(buffer_state_list[gpass1_rtv_reused], SID("gpass4")));
+  CHECK(buffer_state_list[gpass1_rtv_primary][StrId("gpass1")] == BufferState::kRtv);
+  CHECK(buffer_state_list[gpass1_dsv_depth][StrId("gpass1")] == BufferState::kDsv);
+  CHECK(buffer_state_list[gpass1_rtv_reused][StrId("gpass1")] == BufferState::kRtv);
+  CHECK(buffer_state_list[gpass1_rtv_primary][StrId("gpass2")] == BufferState::kSrv);
+  CHECK(buffer_state_list[gpass2_rtv_primary][StrId("gpass2")] == BufferState::kRtv);
+  CHECK(buffer_state_list[gpass1_rtv_reused][StrId("gpass2")] == BufferState::kSrv);
+  CHECK(buffer_state_list[gpass1_dsv_depth][StrId("gpass2")] == BufferState::kDsvReadOnly);
+  CHECK(buffer_state_list[cpass1_uav_buf0][StrId("cpass1")] == BufferState::kUav);
+  CHECK(buffer_state_list[cpass1_uav_buf1][StrId("cpass1")] == BufferState::kUav);
+  CHECK(buffer_state_list[gpass2_rtv_primary][StrId("gpass3")] == BufferState::kSrv);
+  CHECK(buffer_state_list[gpass3_rtv_primary][StrId("gpass3")] == BufferState::kRtv);
+  CHECK(buffer_state_list[gpass3_rtv_sub][StrId("gpass3")] == BufferState::kRtv);
+  CHECK(buffer_state_list[cpass1_uav_buf0][StrId("gpass3")] == BufferState::kUavReadOnly);
+  CHECK(!IsContaining(buffer_state_list[gpass1_dsv_depth], StrId("gpass3")));
+  CHECK(!IsContaining(buffer_state_list[gpass1_rtv_reused], StrId("gpass3")));
+  CHECK(buffer_state_list[gpass3_rtv_primary][StrId("gpass4")] == BufferState::kSrv);
+  CHECK(buffer_state_list[gpass4_rtv_primary][StrId("gpass4")] == BufferState::kRtv);
+  CHECK(buffer_state_list[gpass4_rtv_buf0][StrId("gpass4")] == BufferState::kRtv);
+  CHECK(buffer_state_list[cpass1_uav_buf1][StrId("gpass4")] == BufferState::kSrv);
+  CHECK(!IsContaining(buffer_state_list[gpass1_rtv_reused], StrId("gpass4")));
 #if 0
   // TODO
   auto buffer_desc_impl = GetBufferDescImpl(test_data.data(), test_data.size(), buffer_state_list);
@@ -505,8 +506,8 @@ TEST_CASE("pass binded buffer id list") {
   CHECK(buffer_desc_impl[gpass1_rtv_primary].transitioned_viewtypes == );
   CHECK(buffer_desc_impl[gpass1_rtv_primary].initial_state == );
   CHECK(buffer_desc_impl[gpass1_rtv_primary].clear_value.color == );
-  CHECK(buffer_desc_impl[gpass1_rtv_primary].state_transition[SID("gpass2")].state_before == BufferState::);
-  CHECK(buffer_desc_impl[gpass1_rtv_primary].state_transition[SID("gpass2")].state_after  == BufferState::);
-  CHECK(buffer_desc_impl[gpass1_rtv_primary].state_transition[SID("gpass2")].split_flag   == StateTransitionSplitFlag::);
+  CHECK(buffer_desc_impl[gpass1_rtv_primary].state_transition[StrId("gpass2")].state_before == BufferState::);
+  CHECK(buffer_desc_impl[gpass1_rtv_primary].state_transition[StrId("gpass2")].state_after  == BufferState::);
+  CHECK(buffer_desc_impl[gpass1_rtv_primary].state_transition[StrId("gpass2")].split_flag   == StateTransitionSplitFlag::);
 #endif
 }

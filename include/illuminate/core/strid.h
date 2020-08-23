@@ -18,11 +18,11 @@ class StrId {
 #ifndef STRID_DEBUG_STR_ENABLED
   template <size_t N>
   constexpr explicit StrId(const char (&str)[N]) : hash_(HornerHash(kHashPrime, str)) {}
-  constexpr explicit StrId() : hash_(0) {}
+  constexpr StrId() : hash_(0) {}
 #else
   template <size_t N>
   constexpr explicit StrId(const char (&str)[N]) : hash_(HornerHash(kHashPrime, str)), str_(str) {}
-  explicit StrId() : hash_(0), str_() {}
+  StrId() : hash_(0), str_() {}
 #endif
   constexpr operator uint32_t() const { return hash_; }
   constexpr bool operator==(const StrId& id) const { return hash_ == id.hash_; } // for unordered_map
