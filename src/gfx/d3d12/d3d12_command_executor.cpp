@@ -56,17 +56,17 @@ ParsedRenderGraphInfo ParseRenderGraph(RenderGraphConfig&& graph_config) {
       dst_pass.render_function = std::move(src_pass.render_function);
       dst_pass.resource_config.rtv.reserve(src_pass.resource_config.rtv.size());
       std::unordered_map<StrId, std::vector<PhysicalResourceInfo>> used_resources;
-      used_resources[SID("rtv")].reserve(src_pass.resource_config.rtv.size());
+      used_resources[StrId("rtv")].reserve(src_pass.resource_config.rtv.size());
       for (auto buffer_name : src_pass.resource_config.rtv) {
         auto& physical_resource_info = graph_config.physical_resource_info[buffer_name];
         dst_pass.resource_config.rtv.push_back(physical_resource_info.handle);
-        used_resources[SID("rtv")].push_back(physical_resource_info);
+        used_resources[StrId("rtv")].push_back(physical_resource_info);
       }
       D3D12_RESOURCE_BARRIER barrier{};
       barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
       barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
       barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-      for (auto& physical_resource : used_resources[SID("rtv")]) {
+      for (auto& physical_resource : used_resources[StrId("rtv")]) {
         barrier.Transition.pResource   = physical_resource.resource;
         barrier.Transition.StateBefore = physical_resource.initial_state;
         barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
@@ -134,14 +134,14 @@ TEST_CASE("execute command list") {
                 command_list[0]->ClearRenderTargetView(resource.rtv[0], clear_color, 0, nullptr);
               },
               { // resource_config
-                /*rtv:*/ {{SID("mainbuffer")}}
+                /*rtv:*/ {{StrId("mainbuffer")}}
               }
             }
           }
         }
       },
       { // physical_resource_info
-        {SID("mainbuffer"), {swapchain.GetResource(), swapchain.GetRtvHandle(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT}}
+        {StrId("mainbuffer"), {swapchain.GetResource(), swapchain.GetRtvHandle(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT}}
       }
     };
     auto parsed_render_graph = ParseRenderGraph(std::move(config));
