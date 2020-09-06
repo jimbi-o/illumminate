@@ -1,92 +1,69 @@
 #include "d3d12_minimal_for_cpp.h"
+namespace illuminate::gfx {
+// TODO move to upper layer directory.
+template <typename RenderFunction>
+struct RenderGraphConfig {
+};
+struct BarrierInfo {
+};
+template <typename RenderFunction>
+struct ParsedRenderGraphPass {
+  CommandQueueType command_queue_type;
+  uint32_t command_list_index_main;
+  uint32_t command_list_index_post;
+  RenderFunction render_function;
+  std::vector<BarrierInfo> barriers_pre_pass;
+  std::vector<BarrierInfo> barriers_post_pass;
+};
+template <typename RenderFunction>
+struct ParsedRenderGraphBatch {
+  StrId batch_name;
+  std::vector<std::tuple<CommandQueueType, StrId, CommandQueueType>> wait_queues;
+  std::unordered_map<CommandQueueType, uint32_t> command_list_num;
+  std::vector<ParsedRenderGraphPass<RenderFunction>> pass;
+};
+template <typename RenderFunction>
+struct ParsedRenderGraph {
+  std::vector<ParsedRenderGraphBatch<RenderFunction>> batch;
+  CommandQueueType frame_signal_queue;
+};
+template <typename RenderFunction>
+ParsedRenderGraph<RenderFunction> ParseRenderGraph(RenderGraphConfig<RenderFunction>&& render_graph_config) {
+  // TODO
+  return {};
+}
+}
+#include <queue>
 namespace illuminate::gfx::d3d12 {
-struct RenderPassPhysicalResourceConfig {
+struct PhysicalResources {
   std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> rtv;
 };
-using RenderPassFunction = std::function<void(D3d12CommandList** command_list, const RenderPassPhysicalResourceConfig& resource)>;
-struct RenderPassResourceConfig {
-  std::vector<StrId> rtv;
-};
-struct RenderPassConfig {
-  RenderPassFunction render_function;
-  RenderPassResourceConfig resource_config;
-};
-using RenderPassList = std::vector<RenderPassConfig>;
-struct BatchedRenderPassConfig {
-  RenderPassList pass;
-};
-struct PhysicalResourceInfo {
-  ID3D12Resource* resource;
-  D3D12_CPU_DESCRIPTOR_HANDLE handle;
-  D3D12_RESOURCE_STATES initial_state;
-  D3D12_RESOURCE_STATES final_state;
-};
-using PhysicalResourceInfoList = std::unordered_map<StrId, PhysicalResourceInfo>;
-struct RenderGraphConfig {
-  std::vector<BatchedRenderPassConfig> batch;
-  PhysicalResourceInfoList physical_resource_info;
-};
-using BarrierList = std::vector<D3D12_RESOURCE_BARRIER>;
-struct ParsedRenderGraphPassInfo {
-  std::unordered_map<CommandQueueType, uint32_t> command_list_index_prev_function;
-  std::unordered_map<CommandQueueType, uint32_t> command_list_index_render_function;
-  std::unordered_map<CommandQueueType, uint32_t> command_list_index_post_function;
-  RenderPassFunction render_function;
-  RenderPassPhysicalResourceConfig resource_config;
-  BarrierList barriers_pre_pass;
-  BarrierList barriers_post_pass;
-};
-struct ParsedRenderGraphBatchInfo {
-  std::unordered_map<CommandQueueType, uint32_t> command_list_num;
-  std::vector<ParsedRenderGraphPassInfo> pass;
-};
-struct ParsedRenderGraphInfo {
-  std::vector<ParsedRenderGraphBatchInfo> batch;
-};
-ParsedRenderGraphInfo ParseRenderGraph(RenderGraphConfig&& graph_config) {
-  ParsedRenderGraphInfo parsed_graph{};
-  for (auto& src_batch : graph_config.batch) {
-    ParsedRenderGraphBatchInfo dst_batch{};
-    dst_batch.command_list_num[CommandQueueType::kGraphics] = 1; // TODO consider queue types used, parallel exec
-    for (auto& src_pass : src_batch.pass) {
-      ParsedRenderGraphPassInfo dst_pass{};
-      dst_pass.command_list_index_prev_function[CommandQueueType::kGraphics] = 0; // TODO
-      dst_pass.command_list_index_render_function[CommandQueueType::kGraphics] = 0; // TODO
-      dst_pass.command_list_index_post_function[CommandQueueType::kGraphics] = 0; // TODO
-      dst_pass.render_function = std::move(src_pass.render_function);
-      dst_pass.resource_config.rtv.reserve(src_pass.resource_config.rtv.size());
-      std::unordered_map<StrId, std::vector<PhysicalResourceInfo>> used_resources;
-      used_resources[StrId("rtv")].reserve(src_pass.resource_config.rtv.size());
-      for (auto buffer_name : src_pass.resource_config.rtv) {
-        auto& physical_resource_info = graph_config.physical_resource_info[buffer_name];
-        dst_pass.resource_config.rtv.push_back(physical_resource_info.handle);
-        used_resources[StrId("rtv")].push_back(physical_resource_info);
-      }
-      D3D12_RESOURCE_BARRIER barrier{};
-      barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-      barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-      barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-      for (auto& physical_resource : used_resources[StrId("rtv")]) {
-        barrier.Transition.pResource   = physical_resource.resource;
-        barrier.Transition.StateBefore = physical_resource.initial_state;
-        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
-        dst_pass.barriers_pre_pass.push_back(barrier);
-        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-        barrier.Transition.StateAfter  = physical_resource.final_state;
-        dst_pass.barriers_post_pass.push_back(barrier);
-      }
-      dst_batch.pass.push_back(std::move(dst_pass));
-    }
-    parsed_graph.batch.push_back(std::move(dst_batch));
-  }
-  return parsed_graph;
+using RenderFunction = std::function<void(D3d12CommandList**, const PhysicalResources&)>;
+using PhysicalResourceList = std::queue<std::queue<PhysicalResources>>;
+PhysicalResourceList PreparePhysicalResource(const ParsedRenderGraph<RenderFunction>& render_graph) {
+  // TODO
+  return {};
 }
-void ExecuteResourceBarriers(D3d12CommandList* const command_list, const BarrierList& barriers) {
-  command_list->ResourceBarrier(barriers.size(), barriers.data());
+void ExecuteResourceBarriers(D3d12CommandList* command_list, const std::vector<BarrierInfo>& barriers, const PhysicalResources& physical_resource) {
+  // TODO
 }
+}
+namespace {
+using namespace illuminate::gfx;
+using namespace illuminate::gfx::d3d12;
+RenderFunction GetRenderFunctionClearRtv() {
+  return [](D3d12CommandList** command_list, const PhysicalResources& resources) {
+    const FLOAT clear_color[4] = {0.0f,1.0f,1.0f,1.0f};
+    command_list[0]->ClearRenderTargetView(resources.rtv[0], clear_color, 0, nullptr);
+  };
+}
+// TODO add d3d12 command functions: clear dsv, uav, set rtv|dsv, root sigs (graphics|compute)
+RenderGraphConfig<RenderFunction> GetRenderGraphSimple() {
+  return {};
+}
+using CreateRenderGraphFunc = std::function<RenderGraphConfig<RenderFunction>()>;
 }
 #include "doctest/doctest.h"
-#include <queue>
 #include "d3d12_dxgi_core.h"
 #include "d3d12_device.h"
 #include "d3d12_command_allocator.h"
@@ -97,6 +74,7 @@ void ExecuteResourceBarriers(D3d12CommandList* const command_list, const Barrier
 TEST_CASE("execute command list") {
   const uint32_t buffer_num = 2;
   const uint32_t swapchain_buffer_num = buffer_num + 1;
+  using namespace illuminate::gfx;
   using namespace illuminate::gfx::d3d12;
   DxgiCore dxgi_core;
   CHECK(dxgi_core.Init());
@@ -113,57 +91,70 @@ TEST_CASE("execute command list") {
   CommandList command_list;
   CHECK(command_list.Init(device.GetDevice()));
   std::queue<std::vector<ID3D12CommandAllocator**>> allocators;
-  for (uint32_t i = 0; i < 2 * buffer_num; i++) {
+  std::vector<std::tuple<CommandQueueType, uint64_t>> queue_signal_val(buffer_num);
+  std::unordered_map<CommandQueueType, uint64_t> used_signal_val;
+  CreateRenderGraphFunc create_render_graph_func;
+  SUBCASE("simple graph") {
+    create_render_graph_func = GetRenderGraphSimple;
+  }
+  for (uint32_t i = 0; i < 10 * buffer_num; i++) {
     CAPTURE(i);
-    if (i >= buffer_num) {
-      command_queue.WaitOnCpu({{CommandQueueType::kGraphics, i - buffer_num}});
-      for (auto a : allocators.front()) {
-        command_allocator.ReturnCommandAllocator(a);
+    {
+      const auto [queue_type, val] = queue_signal_val[i % buffer_num];
+      if (val > 0) {
+        command_queue.WaitOnCpu({{queue_type, val}});
+        for (auto a : allocators.front()) {
+          command_allocator.ReturnCommandAllocator(a);
+        }
+        allocators.pop();
       }
-      allocators.pop();
     }
     allocators.push({});
     swapchain.UpdateBackBufferIndex();
-    RenderGraphConfig config {
-      { // batch
-        { // batch[0]
-          { // pass[0]
-            { // render_function
-              [](D3d12CommandList** command_list, const RenderPassPhysicalResourceConfig& resource) {
-                const FLOAT clear_color[4] = {0.0f,1.0f,1.0f,1.0f};
-                command_list[0]->ClearRenderTargetView(resource.rtv[0], clear_color, 0, nullptr);
-              },
-              { // resource_config
-                /*rtv:*/ {{StrId("mainbuffer")}}
-              }
-            }
+    auto parsed_render_graph = ParseRenderGraph(create_render_graph_func());
+    auto physical_resouce = PreparePhysicalResource(parsed_render_graph);
+    std::unordered_map<StrId, std::unordered_map<CommandQueueType, uint64_t>> batch_signaled_val;
+    for (auto& batch : parsed_render_graph.batch) {
+      std::unordered_map<CommandQueueType, D3d12CommandList**> command_lists;
+      for (auto& pair : batch.command_list_num) {
+        auto queue_type = pair.first;
+        auto command_allocators = command_allocator.RetainCommandAllocator(queue_type, batch.command_list_num[queue_type]);
+        command_lists[queue_type] = command_list.RetainCommandList(queue_type, batch.command_list_num[queue_type], command_allocators);
+        allocators.back().push_back(std::move(command_allocators));
+      }
+      for (auto [wait_queue, signaled_batch, signaled_queue] : batch.wait_queues) {
+        command_queue.RegisterWaitOnQueue(signaled_queue, batch_signaled_val[signaled_batch][signaled_queue], wait_queue);
+      }
+      auto&& batch_physical_resource = std::move(physical_resouce.front());
+      physical_resouce.pop();
+      for (auto& pass : batch.pass) {
+        auto queue_type = pass.command_queue_type;
+        auto&& pass_physical_resource = std::move(batch_physical_resource.front());
+        batch_physical_resource.pop();
+        ExecuteResourceBarriers(command_lists[queue_type][pass.command_list_index_main], pass.barriers_pre_pass, pass_physical_resource);
+        pass.render_function(&command_lists[queue_type][pass.command_list_index_main], pass_physical_resource);
+        ExecuteResourceBarriers(command_lists[queue_type][pass.command_list_index_post], pass.barriers_post_pass, pass_physical_resource);
+      }
+      for (auto& pair : batch.command_list_num) {
+        auto queue_type = pair.first;
+        for (uint32_t j = 0; j < pair.second; j++) {
+          auto hr = command_lists[queue_type][j]->Close();
+          if (FAILED(hr)) {
+            logwarn("close command list failed. {}", hr);
+            continue;
           }
         }
-      },
-      { // physical_resource_info
-        {StrId("mainbuffer"), {swapchain.GetResource(), swapchain.GetRtvHandle(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT}}
+        command_queue.GetCommandQueue(queue_type)->ExecuteCommandLists(1, (ID3D12CommandList**)command_lists[queue_type]);
+        auto next_signal_val = used_signal_val[queue_type] + 1;
+        used_signal_val[queue_type] = next_signal_val;
+        command_queue.RegisterSignal(queue_type, next_signal_val);
+        batch_signaled_val[batch.batch_name][queue_type] = next_signal_val;
+        command_list.ReturnCommandList(command_lists[queue_type]);
       }
-    };
-    auto parsed_render_graph = ParseRenderGraph(std::move(config));
-    for (auto& batch : parsed_render_graph.batch) {
-      auto command_allocators = command_allocator.RetainCommandAllocator(CommandQueueType::kGraphics, batch.command_list_num[CommandQueueType::kGraphics]);
-      auto command_lists = command_list.RetainCommandList(CommandQueueType::kGraphics, batch.command_list_num[CommandQueueType::kGraphics], command_allocators);
-      allocators.back().push_back(std::move(command_allocators));
-      for (auto& pass : batch.pass) {
-        ExecuteResourceBarriers(command_lists[pass.command_list_index_prev_function[CommandQueueType::kGraphics]], pass.barriers_pre_pass);
-        pass.render_function(&command_lists[pass.command_list_index_render_function[CommandQueueType::kGraphics]], pass.resource_config);
-        ExecuteResourceBarriers(command_lists[pass.command_list_index_post_function[CommandQueueType::kGraphics]], pass.barriers_post_pass);
-      }
-      for (uint32_t j = 0; j < batch.command_list_num[CommandQueueType::kGraphics]; j++) {
-        auto hr = command_lists[j]->Close();
-        if (FAILED(hr)) {
-          logwarn("close command list failed. {}", hr);
-          continue;
-        }
-      }
-      command_queue.GetCommandQueue(CommandQueueType::kGraphics)->ExecuteCommandLists(1, (ID3D12CommandList**)command_lists);
-      command_queue.RegisterSignal(CommandQueueType::kGraphics, i + 1);
-      command_list.ReturnCommandList(command_lists);
+    }
+    {
+      auto queue_type = parsed_render_graph.frame_signal_queue;
+      queue_signal_val[i % buffer_num] = {queue_type, used_signal_val[queue_type]};
     }
     CHECK(swapchain.Present());
   }

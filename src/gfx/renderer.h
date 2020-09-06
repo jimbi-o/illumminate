@@ -3,34 +3,8 @@
 #include "illuminate.h"
 #include <type_traits>
 #include <vector>
+#include "gfx_def.h"
 namespace illuminate::gfx {
-enum class BufferFormat : uint8_t {
-  kR8G8B8A8_Unorm,
-  kD24S8,
-  kRgbLinearSdrDefault = kR8G8B8A8_Unorm,
-  kDepthBufferDefault = kD24S8,
-  kUseSwapchainFormat,
-};
-enum class BufferSizeType : uint8_t {
-  kSwapchainRelative,
-  kViewportRelative,
-  kAbsolute,
-};
-struct ClearValue {
-  struct DepthStencil { float depth; uint8_t stencil; };
-  union {
-    float color[4];
-    DepthStencil depth_stencil;
-  };
-};
-struct BufferDesc {
-  BufferFormat format;
-  BufferSizeType size_type;
-  float x, y, z;
-  ClearValue clear_value;
-};
-using BufferDescList = std::unordered_map<StrId, BufferDesc>;
-enum class QueueType : uint8_t { kGraphics, kCompute, kTransfer, };
 enum class AsyncCompute : uint8_t { kDisabled, kEnabled };
 using BufferViewType = uint16_t;
 static const BufferViewType kBufferViewTypeSrv = 0x01;
@@ -110,12 +84,6 @@ struct BufferDescImpl {
   ClearValue clear_value;
   StateTransitionList state_transition_list;
 };
-constexpr ClearValue GetClearValueDefaultRtv() {
-  return { .color = {0.0f, 0.0f, 0.0f, 1.0f} };
-}
-constexpr ClearValue GetClearValueDefaultDsv() {
-  return { .depth_stencil = {1.0f, 0} };
-}
 class RendererInterface {
  public:
   virtual ~RendererInterface() {}

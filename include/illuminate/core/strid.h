@@ -46,5 +46,5 @@ struct less<illuminate::core::StrId> {
 };
 }
 using StrId = illuminate::core::StrId;
-#define SID(str) HornerHash(StrId::kHashPrime, str)
+#define SID(str) illuminate::core::HornerHash(StrId::kHashPrime, str)
 #endif
