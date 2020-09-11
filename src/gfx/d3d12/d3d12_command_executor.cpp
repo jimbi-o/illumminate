@@ -27,13 +27,13 @@ using BatchId = uint32_t;
 template <typename RenderFunction>
 struct ParsedRenderGraphBatch {
   BatchId batch_id;
-  std::vector<std::tuple<CommandQueueType, BatchId, CommandQueueType>> wait_queues;
   std::unordered_map<CommandQueueType, uint32_t> command_list_num;
   std::vector<ParsedRenderGraphPass<RenderFunction>> pass;
 };
 template <typename RenderFunction>
 struct ParsedRenderGraph {
   std::vector<ParsedRenderGraphBatch<RenderFunction>> batch;
+  std::unordered_map<BatchId/*consumer*/, std::vector<std::tuple<CommandQueueType/*producer*/, BatchId/*producer*/, CommandQueueType/*consumer*/>>> wait_queue_info;
   CommandQueueType frame_signal_queue;
 };
 template <typename RenderFunction>
@@ -45,6 +45,12 @@ auto SetBatchId(const std::vector<RenderGraphBatch<RenderFunction>>& input_batch
   for (uint32_t i = 0; i < size; i++) {
     (*output_batch_list)[i].batch_id = i;
   }
+}
+template <typename RenderFunction>
+auto ConfigureQueueWaitInfo(const RenderGraphConfig<RenderFunction>& config) {
+  std::unordered_map<BatchId/*consumer*/, std::vector<std::tuple<CommandQueueType/*producer*/, BatchId/*producer*/, CommandQueueType/*consumer*/>>> wait_queue_info;
+  // TODO
+  return wait_queue_info;
 }
 template <typename RenderFunction>
 auto ParseRenderGraph(RenderGraphConfig<RenderFunction>&& render_graph_config) {
@@ -172,6 +178,12 @@ TEST_CASE("batch id") {
   CHECK(parsed.batch[8].batch_id == 8);
   CHECK(parsed.batch[9].batch_id == 9);
 }
+TEST_CASE("wait queue info") {
+  RenderGraphConfig<void*> config;
+  auto info = ConfigureQueueWaitInfo(config);
+  CHECK(info.empty());
+  // TODO
+}
 TEST_CASE("execute command list") {
   const uint32_t buffer_num = 2;
   const uint32_t swapchain_buffer_num = buffer_num + 1;
@@ -220,6 +232,7 @@ TEST_CASE("execute command list") {
     auto physical_resouce = PreparePhysicalResource(parsed_render_graph);
     std::unordered_map<BatchId, std::unordered_map<CommandQueueType, uint64_t>> batch_signaled_val;
     for (auto& batch : parsed_render_graph.batch) {
+      auto batch_id = batch.batch_id;
       std::unordered_map<CommandQueueType, D3d12CommandList**> command_lists;
       for (auto& pair : batch.command_list_num) {
         auto queue_type = pair.first;
@@ -227,8 +240,11 @@ TEST_CASE("execute command list") {
         command_lists[queue_type] = command_list.RetainCommandList(queue_type, batch.command_list_num[queue_type], command_allocators);
         allocators.back().push_back(std::move(command_allocators));
       }
-      for (auto [wait_queue, signaled_batch, signaled_queue] : batch.wait_queues) {
-        command_queue.RegisterWaitOnQueue(signaled_queue, batch_signaled_val[signaled_batch][signaled_queue], wait_queue);
+      {
+        const auto& wait_queue_info = parsed_render_graph.wait_queue_info.at(batch_id);
+        for (auto [wait_queue, signaled_batch, signaled_queue] : wait_queue_info) {
+          command_queue.RegisterWaitOnQueue(signaled_queue, batch_signaled_val[signaled_batch][signaled_queue], wait_queue);
+        }
       }
       auto&& batch_physical_resource = std::move(physical_resouce.front());
       physical_resouce.pop();

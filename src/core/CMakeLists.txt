@@ -33,7 +33,7 @@ else()
   add_library(illuminatecore)
 endif()
 
-target_compile_features(illuminatecore PUBLIC cxx_std_17)
+target_compile_features(illuminatecore PUBLIC cxx_std_20)
 if (NOT MSVC)
   target_compile_options(illuminatecore PRIVATE -msse4.2)
 endif()

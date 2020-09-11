@@ -26,7 +26,7 @@ else()
   add_library(illuminatemath)
 endif()
 
-target_compile_features(illuminatemath PUBLIC cxx_std_17)
+target_compile_features(illuminatemath PUBLIC cxx_std_20)
 if (NOT MSVC)
   target_compile_options(illuminatemath PRIVATE -msse4.2)
 endif()

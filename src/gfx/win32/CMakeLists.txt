@@ -33,7 +33,7 @@ else()
   add_library(illuminategfxwin32)
 endif()
 
-target_compile_features(illuminategfxwin32 PUBLIC cxx_std_17)
+target_compile_features(illuminategfxwin32 PUBLIC cxx_std_20)
 if (NOT MSVC)
   target_compile_options(illuminategfxwin32 PRIVATE -msse4.2)
 endif()
@@ -44,8 +44,6 @@ else()
   target_compile_definitions(illuminategfxwin32 PRIVATE DOCTEST_CONFIG_DISABLE)
 endif()
 
-target_link_libraries(illuminategfxwin32 PRIVATE spdlog)
-
 target_include_directories(illuminategfxwin32
   PUBLIC
   "../../../include"
@@ -55,6 +53,7 @@ target_include_directories(illuminategfxwin32
   "../../../include/illuminate"
   "../../../include/illuminate/gfx/win32"
   "${doctest_SOURCE_DIR}"
+  "${spdlog_SOURCE_DIR}/include"
 )
 
 target_sources(illuminategfxwin32 PRIVATE

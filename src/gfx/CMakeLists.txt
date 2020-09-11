@@ -35,7 +35,7 @@ endif()
 
 add_subdirectory("../core" "${CMAKE_CURRENT_BINARY_DIR}/core")
 
-target_compile_features(illuminategfx PUBLIC cxx_std_17)
+target_compile_features(illuminategfx PUBLIC cxx_std_20)
 if (NOT MSVC)
   target_compile_options(illuminategfx PRIVATE -msse4.2)
 endif()

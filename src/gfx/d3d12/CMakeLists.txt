@@ -42,7 +42,7 @@ else()
   add_library(illuminategfxd3d12)
 endif()
 
-target_compile_features(illuminategfxd3d12 PUBLIC cxx_std_17)
+target_compile_features(illuminategfxd3d12 PUBLIC cxx_std_20)
 if (NOT MSVC)
   target_compile_options(illuminategfxd3d12 PRIVATE -msse4.2)
 endif()
@@ -54,12 +54,11 @@ if ("${CMAKE_VS_PLATFORM_TOOLSET}" STREQUAL "ClangCL")
 endif()
 if (BUILD_WITH_TEST)
   target_compile_definitions(illuminategfxd3d12 PRIVATE BUILD_WITH_TEST)
-  target_link_libraries(illuminategfxd3d12 PRIVATE doctest::doctest)
 else()
   target_compile_definitions(illuminategfxd3d12 PRIVATE DOCTEST_CONFIG_DISABLE)
 endif()
 
-target_link_libraries(illuminategfxd3d12 PRIVATE spdlog dxguid.lib illuminategfxwin32)
+target_link_libraries(illuminategfxd3d12 PRIVATE dxguid.lib illuminategfxwin32)
 
 target_include_directories(illuminategfxd3d12
   PUBLIC
@@ -72,6 +71,7 @@ target_include_directories(illuminategfxd3d12
   "../../../include/illuminate/gfx"
   "../../../include/illuminate/gfx/d3d12"
   "${doctest_SOURCE_DIR}"
+  "${spdlog_SOURCE_DIR}/include"
   "${d3dx12_SOURCE_DIR}/Libraries/D3DX12"
 )
 
