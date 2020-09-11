@@ -76,7 +76,7 @@ target_include_directories(illuminategfxd3d12
 )
 
 target_sources(illuminategfxd3d12 PRIVATE
-  "d3d12_renderer.cpp"
+# "d3d12_renderer.cpp"
   "d3d12_dxgi_core.cpp"
   "d3d12_device.cpp"
   "d3d12_util.cpp"

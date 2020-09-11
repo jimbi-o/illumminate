@@ -2,7 +2,15 @@
 namespace illuminate::gfx {
 // TODO move to upper layer directory.
 template <typename RenderFunction>
+struct RenderGraphPass {
+};
+template <typename RenderFunction>
+struct RenderGraphBatch {
+  std::vector<RenderGraphPass<RenderFunction>> pass;
+};
+template <typename RenderFunction>
 struct RenderGraphConfig {
+  std::vector<RenderGraphBatch<RenderFunction>> batch;
 };
 struct BarrierInfo {
 };
@@ -15,10 +23,11 @@ struct ParsedRenderGraphPass {
   std::vector<BarrierInfo> barriers_pre_pass;
   std::vector<BarrierInfo> barriers_post_pass;
 };
+using BatchId = uint32_t;
 template <typename RenderFunction>
 struct ParsedRenderGraphBatch {
-  StrId batch_name;
-  std::vector<std::tuple<CommandQueueType, StrId, CommandQueueType>> wait_queues;
+  BatchId batch_id;
+  std::vector<std::tuple<CommandQueueType, BatchId, CommandQueueType>> wait_queues;
   std::unordered_map<CommandQueueType, uint32_t> command_list_num;
   std::vector<ParsedRenderGraphPass<RenderFunction>> pass;
 };
@@ -28,38 +37,100 @@ struct ParsedRenderGraph {
   CommandQueueType frame_signal_queue;
 };
 template <typename RenderFunction>
-ParsedRenderGraph<RenderFunction> ParseRenderGraph(RenderGraphConfig<RenderFunction>&& render_graph_config) {
+auto SetBatchId(const std::vector<RenderGraphBatch<RenderFunction>>& input_batch_list, std::vector<ParsedRenderGraphBatch<RenderFunction>>* const output_batch_list) {
+  uint32_t size = input_batch_list.size();
+  if (output_batch_list->size() != size) {
+    output_batch_list->resize(size);
+  }
+  for (uint32_t i = 0; i < size; i++) {
+    (*output_batch_list)[i].batch_id = i;
+  }
+}
+template <typename RenderFunction>
+auto ParseRenderGraph(RenderGraphConfig<RenderFunction>&& render_graph_config) {
+  ParsedRenderGraph<RenderFunction> parsed_graph;
   // TODO
-  return {};
+  return parsed_graph;
 }
 }
 #include <queue>
 namespace illuminate::gfx::d3d12 {
 struct PhysicalResources {
-  std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> rtv;
+  D3D12_GPU_DESCRIPTOR_HANDLE cbv_srv_uav;
+  struct Graphics {
+    D3D12_CPU_DESCRIPTOR_HANDLE* rtv;
+    bool rtv_handle_ordered;
+    D3D12_CPU_DESCRIPTOR_HANDLE dsv;
+  };
+  struct Transfer {
+    ID3D12Resource** copy_src;
+    ID3D12Resource** copy_dst;
+  };
+  struct ClearUav {
+    D3D12_GPU_DESCRIPTOR_HANDLE* gpu_handle;
+    D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle;
+    ID3D12Resource** resource;
+  };
+  union {
+    Graphics graphics;
+    Transfer transfer;
+    ClearUav clear_uav;
+  };
 };
 using RenderFunction = std::function<void(D3d12CommandList**, const PhysicalResources&)>;
 using PhysicalResourceList = std::queue<std::queue<PhysicalResources>>;
-PhysicalResourceList PreparePhysicalResource(const ParsedRenderGraph<RenderFunction>& render_graph) {
+using RenderGraphConfigD3d12 = RenderGraphConfig<RenderFunction>;
+auto PreparePhysicalResource(const ParsedRenderGraph<RenderFunction>& render_graph) {
+  PhysicalResourceList physical_resource_list;
   // TODO
-  return {};
+  return physical_resource_list;
 }
-void ExecuteResourceBarriers(D3d12CommandList* command_list, const std::vector<BarrierInfo>& barriers, const PhysicalResources& physical_resource) {
+auto ExecuteResourceBarriers(D3d12CommandList* command_list, const std::vector<BarrierInfo>& barriers, const PhysicalResources& physical_resource) {
   // TODO
 }
 }
 namespace {
 using namespace illuminate::gfx;
 using namespace illuminate::gfx::d3d12;
-RenderFunction GetRenderFunctionClearRtv() {
+auto GetRenderFunctionClearRtv() {
   return [](D3d12CommandList** command_list, const PhysicalResources& resources) {
     const FLOAT clear_color[4] = {0.0f,1.0f,1.0f,1.0f};
-    command_list[0]->ClearRenderTargetView(resources.rtv[0], clear_color, 0, nullptr);
+    command_list[0]->ClearRenderTargetView(resources.graphics.rtv[0], clear_color, 0, nullptr);
   };
 }
-// TODO add d3d12 command functions: clear dsv, uav, set rtv|dsv, root sigs (graphics|compute)
-RenderGraphConfig<RenderFunction> GetRenderGraphSimple() {
-  return {};
+auto GetRenderFunctionClearDsv() {
+  return [](D3d12CommandList** command_list, const PhysicalResources& resources) {
+    command_list[0]->ClearDepthStencilView(resources.graphics.dsv, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
+  };
+}
+auto GetRenderFunctionClearUav() {
+  return [](D3d12CommandList** command_list, const PhysicalResources& resources) {
+    const UINT clear_color[4]{};
+    command_list[0]->ClearUnorderedAccessViewUint(resources.clear_uav.gpu_handle[0], resources.clear_uav.cpu_handle[0], resources.clear_uav.resource[0], clear_color, 0, nullptr);
+  };
+}
+auto GetRenderFunctionDraw() {
+  return [](D3d12CommandList** command_list, const PhysicalResources& resources) {
+    command_list[0]->OMSetRenderTargets(1, resources.graphics.rtv, resources.graphics.rtv_handle_ordered, &resources.graphics.dsv);
+    command_list[0]->SetGraphicsRootDescriptorTable(0, resources.cbv_srv_uav);
+    command_list[0]->DispatchMesh(1, 1, 1);
+  };
+}
+auto GetRenderFunctionDispatch() {
+  return [](D3d12CommandList** command_list, const PhysicalResources& resources) {
+    command_list[0]->SetComputeRootDescriptorTable(0, resources.cbv_srv_uav);
+    command_list[0]->Dispatch(1, 1, 1);
+  };
+}
+auto GetRenderFunctionCopyResource() {
+  return [](D3d12CommandList** command_list, const PhysicalResources& resources) {
+    command_list[0]->CopyResource(resources.transfer.copy_dst[0], resources.transfer.copy_src[0]);
+  };
+}
+auto GetRenderGraphSimple() {
+  RenderGraphConfigD3d12 config{};
+  // TODO
+  return config;
 }
 using CreateRenderGraphFunc = std::function<RenderGraphConfig<RenderFunction>()>;
 }
@@ -71,6 +142,36 @@ using CreateRenderGraphFunc = std::function<RenderGraphConfig<RenderFunction>()>
 #include "d3d12_command_queue.h"
 #include "gfx/win32/win32_window.h"
 #include "d3d12_swapchain.h"
+TEST_CASE("batch id") {
+  using namespace illuminate::gfx;
+  using namespace illuminate::gfx::d3d12;
+  RenderGraphConfig<void*> config;
+  ParsedRenderGraph<void*> parsed;
+  SetBatchId(config.batch, &parsed.batch);
+  CHECK(parsed.batch.empty());
+  config.batch.resize(1);
+  SetBatchId(config.batch, &parsed.batch);
+  CHECK(parsed.batch.size() == 1);
+  CHECK(parsed.batch[0].batch_id == 0);
+  config.batch.resize(2);
+  SetBatchId(config.batch, &parsed.batch);
+  CHECK(parsed.batch.size() == 2);
+  CHECK(parsed.batch[0].batch_id == 0);
+  CHECK(parsed.batch[1].batch_id == 1);
+  config.batch.resize(10);
+  SetBatchId(config.batch, &parsed.batch);
+  CHECK(parsed.batch.size() == 10);
+  CHECK(parsed.batch[0].batch_id == 0);
+  CHECK(parsed.batch[1].batch_id == 1);
+  CHECK(parsed.batch[2].batch_id == 2);
+  CHECK(parsed.batch[3].batch_id == 3);
+  CHECK(parsed.batch[4].batch_id == 4);
+  CHECK(parsed.batch[5].batch_id == 5);
+  CHECK(parsed.batch[6].batch_id == 6);
+  CHECK(parsed.batch[7].batch_id == 7);
+  CHECK(parsed.batch[8].batch_id == 8);
+  CHECK(parsed.batch[9].batch_id == 9);
+}
 TEST_CASE("execute command list") {
   const uint32_t buffer_num = 2;
   const uint32_t swapchain_buffer_num = buffer_num + 1;
@@ -103,17 +204,21 @@ TEST_CASE("execute command list") {
       const auto [queue_type, val] = queue_signal_val[i % buffer_num];
       if (val > 0) {
         command_queue.WaitOnCpu({{queue_type, val}});
+      }
+    }
+    {
+      if (allocators.size() >= buffer_num) {
         for (auto a : allocators.front()) {
           command_allocator.ReturnCommandAllocator(a);
         }
         allocators.pop();
       }
+      allocators.push({});
     }
-    allocators.push({});
     swapchain.UpdateBackBufferIndex();
     auto parsed_render_graph = ParseRenderGraph(create_render_graph_func());
     auto physical_resouce = PreparePhysicalResource(parsed_render_graph);
-    std::unordered_map<StrId, std::unordered_map<CommandQueueType, uint64_t>> batch_signaled_val;
+    std::unordered_map<BatchId, std::unordered_map<CommandQueueType, uint64_t>> batch_signaled_val;
     for (auto& batch : parsed_render_graph.batch) {
       std::unordered_map<CommandQueueType, D3d12CommandList**> command_lists;
       for (auto& pair : batch.command_list_num) {
@@ -148,7 +253,7 @@ TEST_CASE("execute command list") {
         auto next_signal_val = used_signal_val[queue_type] + 1;
         used_signal_val[queue_type] = next_signal_val;
         command_queue.RegisterSignal(queue_type, next_signal_val);
-        batch_signaled_val[batch.batch_name][queue_type] = next_signal_val;
+        batch_signaled_val[batch.batch_id][queue_type] = next_signal_val;
         command_list.ReturnCommandList(command_lists[queue_type]);
       }
     }

@@ -40,7 +40,6 @@ struct BufferDesc {
   float x, y, z;
   ClearValue clear_value;
 };
-using BufferDescList = std::unordered_map<StrId, BufferDesc>;
 using Size2dUint = Size2d<uint32_t>;
 constexpr Size2dUint GetPhysicalSize(const BufferDesc& desc, const Size2dUint& swapchain_size, const Size2dUint& mainbuffer_size) {
   return {
