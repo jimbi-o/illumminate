@@ -3,6 +3,15 @@ namespace illuminate::gfx {
 // TODO move to upper layer directory.
 template <typename RenderFunction>
 struct RenderGraphPass {
+  CommandQueueType command_queue_type;
+  RenderFunction render_function;
+  std::vector<StrId> srv;
+  std::vector<StrId> rtv;
+  StrId dsv;
+  std::vector<StrId> uav;
+  std::vector<StrId> uav_to_clear;
+  std::vector<StrId> copy_src;
+  std::vector<StrId> copy_dst;
 };
 template <typename RenderFunction>
 struct RenderGraphBatch {
@@ -14,38 +23,23 @@ struct RenderGraphConfig {
 };
 struct BarrierInfo {
 };
-template <typename RenderFunction>
-struct ParsedRenderGraphPass {
-  CommandQueueType command_queue_type;
-  uint32_t command_list_index_main;
-  uint32_t command_list_index_post;
-  RenderFunction render_function;
-  std::vector<BarrierInfo> barriers_pre_pass;
-  std::vector<BarrierInfo> barriers_post_pass;
-};
+using PassId = uint32_t;
 using BatchId = uint32_t;
 template <typename RenderFunction>
-struct ParsedRenderGraphBatch {
-  BatchId batch_id;
-  std::unordered_map<CommandQueueType, uint32_t> command_list_num;
-  std::vector<ParsedRenderGraphPass<RenderFunction>> pass;
-};
-template <typename RenderFunction>
 struct ParsedRenderGraph {
-  std::vector<ParsedRenderGraphBatch<RenderFunction>> batch;
-  std::unordered_map<BatchId/*consumer*/, std::vector<std::tuple<CommandQueueType/*producer*/, BatchId/*producer*/, CommandQueueType/*consumer*/>>> wait_queue_info;
-  CommandQueueType frame_signal_queue;
+  std::vector<BatchId> batch_order;
+  std::unordered_map<BatchId, std::vector<std::tuple<CommandQueueType, uint32_t>>> batch_command_list_num;
+  std::unordered_map<BatchId/*producer*/, std::unordered_set<CommandQueueType/*producer*/>> need_signal_queue_batch;
+  std::unordered_map<BatchId/*consumer*/, std::vector<std::tuple<CommandQueueType/*producer*/, BatchId/*producer*/, CommandQueueType/*consumer*/>>> batch_wait_queue_info;
+  std::unordered_map<BatchId, std::vector<PassId>> pass_order;
+  std::unordered_map<PassId, CommandQueueType> pass_command_queue_type;
+  std::unordered_map<PassId, std::vector<BarrierInfo>> pre_pass_barriers;
+  std::unordered_map<PassId, uint32_t> pass_command_list_index;
+  std::unordered_map<PassId, RenderFunction> pass_render_function;
+  std::unordered_map<BatchId, std::unordered_map<CommandQueueType, std::vector<BarrierInfo>>> post_batch_barriers;
+  std::unordered_map<BatchId, std::unordered_map<CommandQueueType, uint32_t>> post_batch_barriers_command_list_index;
+  CommandQueueType frame_end_signal_queue;
 };
-template <typename RenderFunction>
-auto SetBatchId(const std::vector<RenderGraphBatch<RenderFunction>>& input_batch_list, std::vector<ParsedRenderGraphBatch<RenderFunction>>* const output_batch_list) {
-  uint32_t size = input_batch_list.size();
-  if (output_batch_list->size() != size) {
-    output_batch_list->resize(size);
-  }
-  for (uint32_t i = 0; i < size; i++) {
-    (*output_batch_list)[i].batch_id = i;
-  }
-}
 template <typename RenderFunction>
 auto ConfigureQueueWaitInfo(const RenderGraphConfig<RenderFunction>& config) {
   std::unordered_map<BatchId/*consumer*/, std::vector<std::tuple<CommandQueueType/*producer*/, BatchId/*producer*/, CommandQueueType/*consumer*/>>> wait_queue_info;
@@ -62,83 +56,37 @@ auto ParseRenderGraph(RenderGraphConfig<RenderFunction>&& render_graph_config) {
 #include <queue>
 namespace illuminate::gfx::d3d12 {
 struct PhysicalResources {
-  D3D12_GPU_DESCRIPTOR_HANDLE cbv_srv_uav;
-  struct Graphics {
-    D3D12_CPU_DESCRIPTOR_HANDLE* rtv;
-    bool rtv_handle_ordered;
-    D3D12_CPU_DESCRIPTOR_HANDLE dsv;
-  };
-  struct Transfer {
-    ID3D12Resource** copy_src;
-    ID3D12Resource** copy_dst;
-  };
-  struct ClearUav {
-    D3D12_GPU_DESCRIPTOR_HANDLE* gpu_handle;
-    D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle;
-    ID3D12Resource** resource;
-  };
-  union {
-    Graphics graphics;
-    Transfer transfer;
-    ClearUav clear_uav;
-  };
+  std::unordered_map<PassId, D3D12_GPU_DESCRIPTOR_HANDLE> cbv_srv_uav;
+  std::unordered_map<PassId, D3D12_CPU_DESCRIPTOR_HANDLE> rtv;
+  std::unordered_map<PassId, D3D12_CPU_DESCRIPTOR_HANDLE> dsv;
+  std::unordered_map<PassId, std::vector<ID3D12Resource*>> copy_src;
+  std::unordered_map<PassId, std::vector<ID3D12Resource*>> copy_dst;
+  std::unordered_map<PassId, std::vector<D3D12_GPU_DESCRIPTOR_HANDLE>> uav_to_clear_gpu_handle;
+  std::unordered_map<PassId, std::vector<D3D12_CPU_DESCRIPTOR_HANDLE>> uav_to_clear_cpu_handle;
+  std::unordered_map<PassId, std::vector<ID3D12Resource*>> uav_to_clear_resource;
+  std::unordered_map<PassId, std::vector<ID3D12Resource*>> barrier_resources_pre_render_pass;
+  std::unordered_map<BatchId, std::unordered_map<CommandQueueType, std::vector<ID3D12Resource*>>> barrier_resources_post_batch;
 };
-using RenderFunction = std::function<void(D3d12CommandList**, const PhysicalResources&)>;
-using PhysicalResourceList = std::queue<std::queue<PhysicalResources>>;
+using RenderFunction = std::function<void(D3d12CommandList**, const PhysicalResources&, const uint32_t/*pass_id*/)>;
 using RenderGraphConfigD3d12 = RenderGraphConfig<RenderFunction>;
 auto PreparePhysicalResource(const ParsedRenderGraph<RenderFunction>& render_graph) {
-  PhysicalResourceList physical_resource_list;
+  PhysicalResources physical_resources;
   // TODO
-  return physical_resource_list;
+  return physical_resources;
 }
-auto ExecuteResourceBarriers(D3d12CommandList* command_list, const std::vector<BarrierInfo>& barriers, const PhysicalResources& physical_resource) {
+auto ExecuteResourceBarriers(D3d12CommandList* command_list, const std::vector<BarrierInfo>& barriers, const std::vector<ID3D12Resource*>& resources) {
   // TODO
 }
 }
 namespace {
 using namespace illuminate::gfx;
 using namespace illuminate::gfx::d3d12;
-auto GetRenderFunctionClearRtv() {
-  return [](D3d12CommandList** command_list, const PhysicalResources& resources) {
-    const FLOAT clear_color[4] = {0.0f,1.0f,1.0f,1.0f};
-    command_list[0]->ClearRenderTargetView(resources.graphics.rtv[0], clear_color, 0, nullptr);
-  };
-}
-auto GetRenderFunctionClearDsv() {
-  return [](D3d12CommandList** command_list, const PhysicalResources& resources) {
-    command_list[0]->ClearDepthStencilView(resources.graphics.dsv, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
-  };
-}
-auto GetRenderFunctionClearUav() {
-  return [](D3d12CommandList** command_list, const PhysicalResources& resources) {
-    const UINT clear_color[4]{};
-    command_list[0]->ClearUnorderedAccessViewUint(resources.clear_uav.gpu_handle[0], resources.clear_uav.cpu_handle[0], resources.clear_uav.resource[0], clear_color, 0, nullptr);
-  };
-}
-auto GetRenderFunctionDraw() {
-  return [](D3d12CommandList** command_list, const PhysicalResources& resources) {
-    command_list[0]->OMSetRenderTargets(1, resources.graphics.rtv, resources.graphics.rtv_handle_ordered, &resources.graphics.dsv);
-    command_list[0]->SetGraphicsRootDescriptorTable(0, resources.cbv_srv_uav);
-    command_list[0]->DispatchMesh(1, 1, 1);
-  };
-}
-auto GetRenderFunctionDispatch() {
-  return [](D3d12CommandList** command_list, const PhysicalResources& resources) {
-    command_list[0]->SetComputeRootDescriptorTable(0, resources.cbv_srv_uav);
-    command_list[0]->Dispatch(1, 1, 1);
-  };
-}
-auto GetRenderFunctionCopyResource() {
-  return [](D3d12CommandList** command_list, const PhysicalResources& resources) {
-    command_list[0]->CopyResource(resources.transfer.copy_dst[0], resources.transfer.copy_src[0]);
-  };
-}
 auto GetRenderGraphSimple() {
   RenderGraphConfigD3d12 config{};
   // TODO
   return config;
 }
-using CreateRenderGraphFunc = std::function<RenderGraphConfig<RenderFunction>()>;
+using CreateRenderGraphFunc = std::function<RenderGraphConfigD3d12()>;
 }
 #include "doctest/doctest.h"
 #include "d3d12_dxgi_core.h"
@@ -148,40 +96,20 @@ using CreateRenderGraphFunc = std::function<RenderGraphConfig<RenderFunction>()>
 #include "d3d12_command_queue.h"
 #include "gfx/win32/win32_window.h"
 #include "d3d12_swapchain.h"
-TEST_CASE("batch id") {
-  using namespace illuminate::gfx;
-  using namespace illuminate::gfx::d3d12;
-  RenderGraphConfig<void*> config;
-  ParsedRenderGraph<void*> parsed;
-  SetBatchId(config.batch, &parsed.batch);
-  CHECK(parsed.batch.empty());
-  config.batch.resize(1);
-  SetBatchId(config.batch, &parsed.batch);
-  CHECK(parsed.batch.size() == 1);
-  CHECK(parsed.batch[0].batch_id == 0);
-  config.batch.resize(2);
-  SetBatchId(config.batch, &parsed.batch);
-  CHECK(parsed.batch.size() == 2);
-  CHECK(parsed.batch[0].batch_id == 0);
-  CHECK(parsed.batch[1].batch_id == 1);
-  config.batch.resize(10);
-  SetBatchId(config.batch, &parsed.batch);
-  CHECK(parsed.batch.size() == 10);
-  CHECK(parsed.batch[0].batch_id == 0);
-  CHECK(parsed.batch[1].batch_id == 1);
-  CHECK(parsed.batch[2].batch_id == 2);
-  CHECK(parsed.batch[3].batch_id == 3);
-  CHECK(parsed.batch[4].batch_id == 4);
-  CHECK(parsed.batch[5].batch_id == 5);
-  CHECK(parsed.batch[6].batch_id == 6);
-  CHECK(parsed.batch[7].batch_id == 7);
-  CHECK(parsed.batch[8].batch_id == 8);
-  CHECK(parsed.batch[9].batch_id == 9);
-}
 TEST_CASE("wait queue info") {
   RenderGraphConfig<void*> config;
   auto info = ConfigureQueueWaitInfo(config);
   CHECK(info.empty());
+  config = {
+    {{},{},{},{},{},},
+  };
+  info = ConfigureQueueWaitInfo(config);
+  CHECK(info.empty());
+  config = {
+    // batch 0
+    {
+    },
+  };
   // TODO
 }
 TEST_CASE("execute command list") {
@@ -203,7 +131,7 @@ TEST_CASE("execute command list") {
   CHECK(command_allocator.Init(device.GetDevice()));
   CommandList command_list;
   CHECK(command_list.Init(device.GetDevice()));
-  std::queue<std::vector<ID3D12CommandAllocator**>> allocators;
+  std::vector<std::vector<ID3D12CommandAllocator**>> allocators(buffer_num);
   std::vector<std::tuple<CommandQueueType, uint64_t>> queue_signal_val(buffer_num);
   std::unordered_map<CommandQueueType, uint64_t> used_signal_val;
   CreateRenderGraphFunc create_render_graph_func;
@@ -212,78 +140,71 @@ TEST_CASE("execute command list") {
   }
   for (uint32_t i = 0; i < 10 * buffer_num; i++) {
     CAPTURE(i);
-    {
-      const auto [queue_type, val] = queue_signal_val[i % buffer_num];
-      if (val > 0) {
-        command_queue.WaitOnCpu({{queue_type, val}});
-      }
+    if (const auto [queue_type, val] = queue_signal_val[i % buffer_num]; val > 0) {
+      command_queue.WaitOnCpu({{queue_type, val}});
     }
-    {
-      if (allocators.size() >= buffer_num) {
-        for (auto a : allocators.front()) {
-          command_allocator.ReturnCommandAllocator(a);
-        }
-        allocators.pop();
-      }
-      allocators.push({});
+    for (auto a : allocators.front()) {
+      command_allocator.ReturnCommandAllocator(a);
     }
+    allocators.front().clear();
+    std::rotate(allocators.begin(), allocators.begin() + 1, allocators.end());
     swapchain.UpdateBackBufferIndex();
     auto parsed_render_graph = ParseRenderGraph(create_render_graph_func());
-    auto physical_resouce = PreparePhysicalResource(parsed_render_graph);
-    std::unordered_map<BatchId, std::unordered_map<CommandQueueType, uint64_t>> batch_signaled_val;
-    for (auto& batch : parsed_render_graph.batch) {
-      auto batch_id = batch.batch_id;
+    auto physical_resources = PreparePhysicalResource(parsed_render_graph);
+    for (std::unordered_map<BatchId, std::unordered_map<CommandQueueType, uint64_t>> batch_signaled_val; auto batch_id : parsed_render_graph.batch_order) {
       std::unordered_map<CommandQueueType, D3d12CommandList**> command_lists;
-      for (auto& pair : batch.command_list_num) {
-        auto queue_type = pair.first;
-        auto command_allocators = command_allocator.RetainCommandAllocator(queue_type, batch.command_list_num[queue_type]);
-        command_lists[queue_type] = command_list.RetainCommandList(queue_type, batch.command_list_num[queue_type], command_allocators);
+      for (auto& [queue_type, command_list_num] : parsed_render_graph.batch_command_list_num.at(batch_id)) {
+        auto command_allocators = command_allocator.RetainCommandAllocator(queue_type, command_list_num);
+        command_lists[queue_type] = command_list.RetainCommandList(queue_type, command_list_num, command_allocators);
         allocators.back().push_back(std::move(command_allocators));
       }
-      {
-        const auto& wait_queue_info = parsed_render_graph.wait_queue_info.at(batch_id);
-        for (auto [wait_queue, signaled_batch, signaled_queue] : wait_queue_info) {
-          command_queue.RegisterWaitOnQueue(signaled_queue, batch_signaled_val[signaled_batch][signaled_queue], wait_queue);
+      if (parsed_render_graph.batch_wait_queue_info.contains(batch_id)) {
+        for (auto& [wait_queue, signaled_batch, signaled_queue] : parsed_render_graph.batch_wait_queue_info.at(batch_id)) {
+          command_queue.RegisterWaitOnQueue(signaled_queue, batch_signaled_val.at(signaled_batch).at(signaled_queue), wait_queue);
         }
       }
-      auto&& batch_physical_resource = std::move(physical_resouce.front());
-      physical_resouce.pop();
-      for (auto& pass : batch.pass) {
-        auto queue_type = pass.command_queue_type;
-        auto&& pass_physical_resource = std::move(batch_physical_resource.front());
-        batch_physical_resource.pop();
-        ExecuteResourceBarriers(command_lists[queue_type][pass.command_list_index_main], pass.barriers_pre_pass, pass_physical_resource);
-        pass.render_function(&command_lists[queue_type][pass.command_list_index_main], pass_physical_resource);
-        ExecuteResourceBarriers(command_lists[queue_type][pass.command_list_index_post], pass.barriers_post_pass, pass_physical_resource);
+      for (auto pass_id : parsed_render_graph.pass_order.at(batch_id)) {
+        auto queue_type = parsed_render_graph.pass_command_queue_type.at(pass_id);
+        auto command_list_index = parsed_render_graph.pass_command_list_index.at(pass_id);
+        if (parsed_render_graph.pre_pass_barriers.contains(pass_id)) {
+          ExecuteResourceBarriers(command_lists.at(queue_type)[command_list_index], parsed_render_graph.pre_pass_barriers.at(pass_id), physical_resources.barrier_resources_pre_render_pass.at(pass_id));
+        }
+        parsed_render_graph.pass_render_function.at(pass_id)(&command_lists.at(queue_type)[command_list_index], physical_resources, pass_id);
       }
-      for (auto& pair : batch.command_list_num) {
-        auto queue_type = pair.first;
-        for (uint32_t j = 0; j < pair.second; j++) {
-          auto hr = command_lists[queue_type][j]->Close();
+      if (parsed_render_graph.post_batch_barriers_command_list_index.contains(batch_id)) {
+        for (auto& [queue_type, command_list_index] : parsed_render_graph.post_batch_barriers_command_list_index.at(batch_id)) {
+          ExecuteResourceBarriers(command_lists.at(queue_type)[command_list_index], parsed_render_graph.post_batch_barriers.at(batch_id).at(queue_type), physical_resources.barrier_resources_post_batch.at(batch_id).at(queue_type));
+        }
+      }
+      for (auto& [queue_type, command_list_num] : parsed_render_graph.batch_command_list_num.at(batch_id)) {
+        for (uint32_t j = 0; j < command_list_num; j++) {
+          auto hr = command_lists.at(queue_type)[j]->Close();
           if (FAILED(hr)) {
             logwarn("close command list failed. {}", hr);
             continue;
           }
         }
-        command_queue.GetCommandQueue(queue_type)->ExecuteCommandLists(1, (ID3D12CommandList**)command_lists[queue_type]);
-        auto next_signal_val = used_signal_val[queue_type] + 1;
-        used_signal_val[queue_type] = next_signal_val;
-        command_queue.RegisterSignal(queue_type, next_signal_val);
-        batch_signaled_val[batch.batch_id][queue_type] = next_signal_val;
+        command_queue.GetCommandQueue(queue_type)->ExecuteCommandLists(command_list_num, (ID3D12CommandList**)command_lists.at(queue_type));
         command_list.ReturnCommandList(command_lists[queue_type]);
+        if (parsed_render_graph.need_signal_queue_batch.contains(batch_id) && parsed_render_graph.need_signal_queue_batch[batch_id].contains(queue_type)) {
+          auto next_signal_val = used_signal_val[queue_type] + 1;
+          command_queue.RegisterSignal(queue_type, next_signal_val);
+          used_signal_val.at(queue_type) = next_signal_val;
+          batch_signaled_val[batch_id][queue_type] = next_signal_val;
+        }
       }
     }
     {
-      auto queue_type = parsed_render_graph.frame_signal_queue;
-      queue_signal_val[i % buffer_num] = {queue_type, used_signal_val[queue_type]};
+      auto queue_type = parsed_render_graph.frame_end_signal_queue;
+      queue_signal_val[i % buffer_num] = {queue_type, used_signal_val.at(queue_type)};
     }
     CHECK(swapchain.Present());
   }
   while (!allocators.empty()) {
-    for (auto a : allocators.front()) {
+    for (auto a : allocators.back()) {
       command_allocator.ReturnCommandAllocator(a);
     }
-    allocators.pop();
+    allocators.pop_back();
   }
   command_queue.WaitAll();
   command_list.Term();
