@@ -6,7 +6,7 @@ class Device {
  public:
   bool Init(DxgiAdapter* const);
   void Term();
-  D3d12Device* GetDevice() { return device_; }
+  constexpr D3d12Device* Get() { return device_; }
  private:
   HMODULE library_ = nullptr;
   D3d12Device* device_ = nullptr;

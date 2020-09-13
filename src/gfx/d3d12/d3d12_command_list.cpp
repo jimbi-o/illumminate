@@ -74,9 +74,9 @@ TEST_CASE("command list") {
   Device device;
   CHECK(device.Init(dxgi_core.GetAdapter()));
   CommandAllocator command_allocator;
-  CHECK(command_allocator.Init(device.GetDevice()));
+  CHECK(command_allocator.Init(device.Get()));
   CommandList command_list;
-  CHECK(command_list.Init(device.GetDevice()));
+  CHECK(command_list.Init(device.Get()));
   auto command_allocators = command_allocator.RetainCommandAllocator(CommandQueueType::kGraphics, 3);
   auto command_lists = command_list.RetainCommandList(CommandQueueType::kGraphics, 3, command_allocators);
   CHECK(command_lists[0]);

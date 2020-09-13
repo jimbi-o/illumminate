@@ -101,7 +101,7 @@ TEST_CASE("command queue") {
   Device device;
   CHECK(device.Init(dxgi_core.GetAdapter()));
   CommandQueue command_queue;
-  command_queue.Init(device.GetDevice());
+  command_queue.Init(device.Get());
   SUBCASE("cpu bound (frame bufferred)") {
     command_queue.RegisterSignal(CommandQueueType::kGraphics, 1);
     command_queue.WaitOnCpu({{CommandQueueType::kGraphics, 1},});

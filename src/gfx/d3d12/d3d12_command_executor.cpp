@@ -122,15 +122,15 @@ TEST_CASE("execute command list") {
   Device device;
   CHECK(device.Init(dxgi_core.GetAdapter()));
   CommandQueue command_queue;
-  CHECK(command_queue.Init(device.GetDevice()));
+  CHECK(command_queue.Init(device.Get()));
   illuminate::gfx::win32::Window window;
   CHECK(window.Init("swapchain test", 160, 90));
   Swapchain swapchain;
-  CHECK(swapchain.Init(dxgi_core.GetFactory(), command_queue.GetCommandQueue(CommandQueueType::kGraphics), device.GetDevice(), window.GetHwnd(), swapchain_buffer_num, buffer_num));
+  CHECK(swapchain.Init(dxgi_core.GetFactory(), command_queue.Get(CommandQueueType::kGraphics), device.Get(), window.GetHwnd(), swapchain_buffer_num, buffer_num));
   CommandAllocator command_allocator;
-  CHECK(command_allocator.Init(device.GetDevice()));
+  CHECK(command_allocator.Init(device.Get()));
   CommandList command_list;
-  CHECK(command_list.Init(device.GetDevice()));
+  CHECK(command_list.Init(device.Get()));
   std::vector<std::vector<ID3D12CommandAllocator**>> allocators(buffer_num);
   std::vector<std::tuple<CommandQueueType, uint64_t>> queue_signal_val(buffer_num);
   std::unordered_map<CommandQueueType, uint64_t> used_signal_val;
@@ -184,7 +184,7 @@ TEST_CASE("execute command list") {
             continue;
           }
         }
-        command_queue.GetCommandQueue(queue_type)->ExecuteCommandLists(command_list_num, (ID3D12CommandList**)command_lists.at(queue_type));
+        command_queue.Get(queue_type)->ExecuteCommandLists(command_list_num, (ID3D12CommandList**)command_lists.at(queue_type));
         command_list.ReturnCommandList(command_lists[queue_type]);
         if (parsed_render_graph.need_signal_queue_batch.contains(batch_id) && parsed_render_graph.need_signal_queue_batch[batch_id].contains(queue_type)) {
           auto next_signal_val = used_signal_val[queue_type] + 1;

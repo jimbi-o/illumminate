@@ -133,11 +133,11 @@ TEST_CASE("swapchain") {
   Device device;
   CHECK(device.Init(dxgi_core.GetAdapter()));
   CommandQueue command_queue;
-  CHECK(command_queue.Init(device.GetDevice()));
+  CHECK(command_queue.Init(device.Get()));
   illuminate::gfx::win32::Window window;
   CHECK(window.Init("swapchain test", 160, 90));
   Swapchain swapchain;
-  CHECK(swapchain.Init(dxgi_core.GetFactory(), command_queue.GetCommandQueue(CommandQueueType::kGraphics), device.GetDevice(), window.GetHwnd(), swapchain_buffer_num, swapchain_buffer_num - 1));
+  CHECK(swapchain.Init(dxgi_core.GetFactory(), command_queue.Get(CommandQueueType::kGraphics), device.Get(), window.GetHwnd(), swapchain_buffer_num, swapchain_buffer_num - 1));
   for (uint32_t i = 0; i < swapchain_buffer_num + 1; i++) {
     swapchain.UpdateBackBufferIndex();
     CHECK(swapchain.Present());

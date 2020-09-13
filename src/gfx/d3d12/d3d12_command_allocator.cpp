@@ -62,7 +62,7 @@ TEST_CASE("command allocator") {
   Device device;
   CHECK(device.Init(dxgi_core.GetAdapter()));
   CommandAllocator command_allocator;
-  CHECK(command_allocator.Init(device.GetDevice()));
+  CHECK(command_allocator.Init(device.Get()));
   auto command_allocators = command_allocator.RetainCommandAllocator(CommandQueueType::kGraphics, 3);
   CHECK(command_allocators[0]);
   CHECK(command_allocators[1]);

@@ -6,7 +6,7 @@ class CommandQueue {
  public:
   bool Init(D3d12Device* const device);
   void Term();
-  constexpr ID3D12CommandQueue* GetCommandQueue(const CommandQueueType type) { return command_queue_[type]; }
+  constexpr ID3D12CommandQueue* Get(const CommandQueueType type) { return command_queue_.at(type); }
   void RegisterSignal(const CommandQueueType, const uint64_t);
   void RegisterWaitOnQueue(const CommandQueueType signal_queue, const uint64_t, const CommandQueueType waiting_queue);
   void WaitOnCpu(std::unordered_map<CommandQueueType, uint64_t>&&);
