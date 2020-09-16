@@ -31,7 +31,7 @@ struct ParsedRenderGraph {
   std::unordered_map<BatchId, std::vector<std::tuple<CommandQueueType, uint32_t>>> batch_command_list_num;
   std::unordered_map<BatchId/*producer*/, std::unordered_set<CommandQueueType/*producer*/>> need_signal_queue_batch;
   std::unordered_map<BatchId/*consumer*/, std::vector<std::tuple<CommandQueueType/*producer*/, BatchId/*producer*/, CommandQueueType/*consumer*/>>> batch_wait_queue_info;
-  std::unordered_map<BatchId, std::vector<PassId>> pass_order;
+  std::unordered_map<BatchId, std::vector<PassId>> batched_pass_order;
   std::unordered_map<PassId, CommandQueueType> pass_command_queue_type;
   std::unordered_map<PassId, std::vector<BarrierInfo>> pre_pass_barriers;
   std::unordered_map<PassId, uint32_t> pass_command_list_index;
@@ -41,10 +41,24 @@ struct ParsedRenderGraph {
   CommandQueueType frame_end_signal_queue;
 };
 template <typename RenderFunction>
-auto ConfigureQueueWaitInfo(const RenderGraphConfig<RenderFunction>& config) {
-  std::unordered_map<BatchId/*consumer*/, std::vector<std::tuple<CommandQueueType/*producer*/, BatchId/*producer*/, CommandQueueType/*consumer*/>>> wait_queue_info;
-  // TODO
-  return wait_queue_info;
+auto ConfigureBatchedPassList(RenderGraphConfig<RenderFunction>&& config) {
+  std::vector<BatchId> batch_order;
+  batch_order.reserve(batch_order.size());
+  std::unordered_map<BatchId, std::vector<PassId>> batched_pass_order;
+  batched_pass_order.reserve(batch_order.size());
+  std::unordered_map<PassId, RenderGraphPass<RenderFunction>> pass_list;
+  uint32_t pass_id = 0;
+  for (uint32_t batch_id = 0; auto&& batch : config.batch) {
+    batch_order.push_back(batch_id);
+    batched_pass_order[batch_id] = {};
+    for (auto&& pass : batch.pass) {
+      batched_pass_order.at(batch_id).push_back(pass_id);
+      pass_list[pass_id] = std::move(pass);
+      pass_id++;
+    }
+    batch_id++;
+  }
+  return std::make_tuple(batch_order, batched_pass_order, pass_list);
 }
 template <typename RenderFunction>
 auto ParseRenderGraph(RenderGraphConfig<RenderFunction>&& render_graph_config) {
@@ -96,21 +110,62 @@ using CreateRenderGraphFunc = std::function<RenderGraphConfigD3d12()>;
 #include "d3d12_command_queue.h"
 #include "gfx/win32/win32_window.h"
 #include "d3d12_swapchain.h"
-TEST_CASE("wait queue info") {
-  RenderGraphConfig<void*> config;
-  auto info = ConfigureQueueWaitInfo(config);
-  CHECK(info.empty());
-  config = {
-    {{},{},{},{},{},},
-  };
-  info = ConfigureQueueWaitInfo(config);
-  CHECK(info.empty());
-  config = {
-    // batch 0
-    {
-    },
-  };
-  // TODO
+TEST_CASE("batch-pass") {
+  using namespace illuminate::gfx;
+  using namespace illuminate::gfx::d3d12;
+  {
+    RenderGraphConfig<void*> config;
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    CHECK(batch_order.empty());
+    CHECK(batched_pass_order.empty());
+    CHECK(pass_list.empty());
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    CHECK(batch_order.size() == 1);
+    CHECK(batched_pass_order.size() == 1);
+    CHECK(batched_pass_order[0].size() == 1);
+    CHECK(batched_pass_order[0][0] == 0);
+    CHECK(pass_list.size() == 1);
+    CHECK(pass_list[0].render_function == 1);
+    CHECK(pass_list[0].command_queue_type == CommandQueueType::kGraphics);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1},
+          {CommandQueueType::kCompute,  2},
+        }},
+        {{
+          {CommandQueueType::kCompute,  4},
+          {CommandQueueType::kGraphics, 3},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    CHECK(batch_order.size() == 2);
+    CHECK(batched_pass_order.size() == 2);
+    CHECK(batched_pass_order[0].size() == 2);
+    CHECK(batched_pass_order[0][0] == 0);
+    CHECK(batched_pass_order[0][1] == 1);
+    CHECK(batched_pass_order[1][0] == 2);
+    CHECK(batched_pass_order[1][1] == 3);
+    CHECK(pass_list.size() == 4);
+    CHECK(pass_list[0].render_function == 1);
+    CHECK(pass_list[1].render_function == 2);
+    CHECK(pass_list[2].render_function == 4);
+    CHECK(pass_list[3].render_function == 3);
+    CHECK(pass_list[0].command_queue_type == CommandQueueType::kGraphics);
+    CHECK(pass_list[1].command_queue_type == CommandQueueType::kCompute);
+    CHECK(pass_list[2].command_queue_type == CommandQueueType::kCompute);
+    CHECK(pass_list[3].command_queue_type == CommandQueueType::kGraphics);
+  }
 }
 TEST_CASE("execute command list") {
   const uint32_t buffer_num = 2;
@@ -163,7 +218,7 @@ TEST_CASE("execute command list") {
           command_queue.RegisterWaitOnQueue(signaled_queue, batch_signaled_val.at(signaled_batch).at(signaled_queue), wait_queue);
         }
       }
-      for (auto pass_id : parsed_render_graph.pass_order.at(batch_id)) {
+      for (auto pass_id : parsed_render_graph.batched_pass_order.at(batch_id)) {
         auto queue_type = parsed_render_graph.pass_command_queue_type.at(pass_id);
         auto command_list_index = parsed_render_graph.pass_command_list_index.at(pass_id);
         if (parsed_render_graph.pre_pass_barriers.contains(pass_id)) {
