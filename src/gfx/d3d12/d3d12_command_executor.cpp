@@ -30,6 +30,20 @@ constexpr bool IsResourceReadable(const ResourceStateType type) {
       return false;
   }
 }
+constexpr bool IsResourceWritable(const ResourceStateType type) {
+  switch (type) {
+    case ResourceStateType::kRtvNewBuffer:
+    case ResourceStateType::kRtvPrevResultReused:
+    case ResourceStateType::kDsvNewBuffer:
+    case ResourceStateType::kDsvReadWrite:
+    case ResourceStateType::kUavNewBuffer:
+    case ResourceStateType::kUavReadWrite:
+    case ResourceStateType::kCopyDst:
+      return true;
+    default:
+      return false;
+  }
+}
 template <typename RenderFunction>
 struct RenderGraphPass {
   CommandQueueType command_queue_type;
@@ -94,16 +108,32 @@ auto ConfigureBatchedPassList(RenderGraphConfig<RenderFunction>&& config) {
   return std::make_tuple(batch_order, batched_pass_order, pass_list);
 }
 template <typename RenderFunction>
-auto GetResourceUsingPass(const std::vector<BatchId>& batch_order, const std::unordered_map<BatchId, std::vector<PassId>>& batched_pass_order, const std::unordered_map<PassId, RenderGraphPass<RenderFunction>>& pass_list, const PassId buffer_used_pass, const StrId buffer_name) {
-  std::vector<PassId> used_pass_ids;
-  // for (const auto& pass : batch_order | std::views::reverse) { // std::views not ready yet in VC.
-  for (auto batch_it = batch_order.crbegin(); batch_it != batch_order.crend(); batch_it++) {
-    auto& pass_list = batched_pass_order.at(*batch_it);
-    for (auto pass_it = pass_list.crbegin(); pass_it != pass_list.crend(); pass_it++) {
-      // TODO
+auto GetResourceProducerPassList(const std::vector<BatchId>& batch_order, const std::unordered_map<BatchId, std::vector<PassId>>& batched_pass_order, const std::unordered_map<PassId, RenderGraphPass<RenderFunction>>& pass_list, const PassId resource_consumer_pass, const StrId resource_name) {
+  std::vector<PassId> producer_pass_ids;
+  bool buffer_consumer_pass_found = false, stop_searching = false;
+  // for (const auto& pass : batch_order | std::views::reverse) { // std::views not ready yet in VC2019.
+  for (auto batch_it = batch_order.crbegin(); batch_it != batch_order.crend() && !stop_searching; batch_it++) {
+    auto& pass_id_list = batched_pass_order.at(*batch_it);
+    for (auto pass_it = pass_id_list.crbegin(); pass_it != pass_id_list.crend() && !stop_searching; pass_it++) {
+      auto& pass_id = *pass_it;
+      if (!buffer_consumer_pass_found) {
+        if (pass_id != resource_consumer_pass) continue;
+        buffer_consumer_pass_found = true;
+      }
+      for (bool resource_found = false; auto& [type, vec] : pass_list.at(pass_id).resources) {
+        if (!IsResourceWritable(type)) continue;
+        for (auto& name : vec) {
+          if (name != resource_name) continue;
+          resource_found = true;
+          stop_searching = !IsResourceReadable(type);
+          producer_pass_ids.push_back(pass_id);
+          break;
+        }
+        if (resource_found) break;
+      }
     }
   }
-  return used_pass_ids;
+  return producer_pass_ids;
 }
 template <typename RenderFunction>
 auto ParseRenderGraph(RenderGraphConfig<RenderFunction>&& render_graph_config) {
@@ -282,8 +312,8 @@ TEST_CASE("get pass list writing to a specified buffer") {
   {
     RenderGraphConfig<uint32_t> config;
     auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
-    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, 0, StrId("swapchain"));
-    CHECK(used_pass_id_list.empty());
+    auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, 0, StrId("swapchain"));
+    CHECK(resource_producer_pass_list.empty());
   }
   {
     RenderGraphConfig<uint32_t> config = {{
@@ -293,8 +323,8 @@ TEST_CASE("get pass list writing to a specified buffer") {
       }
     };
     auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
-    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("swapchain"));
-    CHECK(used_pass_id_list.empty());
+    auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("swapchain"));
+    CHECK(resource_producer_pass_list.empty());
   }
   {
     RenderGraphConfig<uint32_t> config = {{
@@ -309,25 +339,26 @@ TEST_CASE("get pass list writing to a specified buffer") {
       }
     };
     auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
-    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("swapchain"));
-    CHECK(used_pass_id_list.empty());
+    auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("swapchain"));
+    CHECK(resource_producer_pass_list.empty());
   }
   {
     RenderGraphConfig<uint32_t> config = {{
         {{
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1},
         }}
       }
     };
     auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
     SUBCASE("buffer exists") {
-      auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("mainbuffer"));
-      CHECK(used_pass_id_list.size() == 1);
-      CHECK(used_pass_id_list[0] == 0);
+      auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("mainbuffer"));
+      CHECK(resource_producer_pass_list.size() == 1);
+      CHECK(resource_producer_pass_list[0] == 0);
     }
     SUBCASE("buffer does not exist") {
-      auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("swapchain"));
-      CHECK(used_pass_id_list.empty());
+      auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("swapchain"));
+      CHECK(resource_producer_pass_list.empty());
     }
   }
   {
@@ -340,10 +371,10 @@ TEST_CASE("get pass list writing to a specified buffer") {
       }
     };
     auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
-    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("mainbuffer"));
-    CHECK(used_pass_id_list.size() == 2);
-    CHECK(used_pass_id_list[0] == 0);
-    CHECK(used_pass_id_list[1] == 1);
+    auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("mainbuffer"));
+    CHECK(resource_producer_pass_list.size() == 2);
+    CHECK(resource_producer_pass_list[0] == 0);
+    CHECK(resource_producer_pass_list[1] == 1);
   }
   {
     RenderGraphConfig<uint32_t> config = {{
@@ -357,15 +388,15 @@ TEST_CASE("get pass list writing to a specified buffer") {
     };
     auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
     SUBCASE("search from back") {
-      auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("mainbuffer"));
-      CHECK(used_pass_id_list.size() == 2);
-      CHECK(used_pass_id_list[0] == 1);
-      CHECK(used_pass_id_list[1] == 2);
+      auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("mainbuffer"));
+      CHECK(resource_producer_pass_list.size() == 2);
+      CHECK(resource_producer_pass_list[0] == 1);
+      CHECK(resource_producer_pass_list[1] == 2);
     }
     SUBCASE("search from in middle") {
-      auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, 0, StrId("mainbuffer"));
-      CHECK(used_pass_id_list.size() == 1);
-      CHECK(used_pass_id_list[0] == 0);
+      auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, 0, StrId("mainbuffer"));
+      CHECK(resource_producer_pass_list.size() == 1);
+      CHECK(resource_producer_pass_list[0] == 0);
     }
   }
   {
@@ -381,11 +412,11 @@ TEST_CASE("get pass list writing to a specified buffer") {
       }
     };
     auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
-    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("mainbuffer"));
-    CHECK(used_pass_id_list.size() == 3);
-    CHECK(used_pass_id_list[0] == 0);
-    CHECK(used_pass_id_list[1] == 1);
-    CHECK(used_pass_id_list[2] == 2);
+    auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("mainbuffer"));
+    CHECK(resource_producer_pass_list.size() == 3);
+    CHECK(resource_producer_pass_list[0] == 0);
+    CHECK(resource_producer_pass_list[1] == 1);
+    CHECK(resource_producer_pass_list[2] == 2);
   }
   {
     RenderGraphConfig<uint32_t> config = {{
@@ -402,30 +433,30 @@ TEST_CASE("get pass list writing to a specified buffer") {
     };
     auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
     SUBCASE("search from back") {
-      auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("mainbuffer"));
-      CHECK(used_pass_id_list.size() == 2);
-      CHECK(used_pass_id_list[0] == 2);
-      CHECK(used_pass_id_list[1] == 3);
+      auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("mainbuffer"));
+      CHECK(resource_producer_pass_list.size() == 2);
+      CHECK(resource_producer_pass_list[0] == 2);
+      CHECK(resource_producer_pass_list[1] == 3);
     }
     SUBCASE("search from in middle") {
-      auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, 3, StrId("mainbuffer"));
-      CHECK(used_pass_id_list.size() == 1);
-      CHECK(used_pass_id_list[0] == 2);
+      auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, 3, StrId("mainbuffer"));
+      CHECK(resource_producer_pass_list.size() == 1);
+      CHECK(resource_producer_pass_list[0] == 2);
     }
     SUBCASE("search from in middle 2") {
-      auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, 2, StrId("mainbuffer"));
-      CHECK(used_pass_id_list.size() == 2);
-      CHECK(used_pass_id_list[0] == 0);
-      CHECK(used_pass_id_list[1] == 1);
+      auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, 2, StrId("mainbuffer"));
+      CHECK(resource_producer_pass_list.size() == 2);
+      CHECK(resource_producer_pass_list[0] == 0);
+      CHECK(resource_producer_pass_list[1] == 1);
     }
     SUBCASE("search from in middle 3") {
-      auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, 1, StrId("mainbuffer"));
-      CHECK(used_pass_id_list.size() == 1);
-      CHECK(used_pass_id_list[0] == 0);
+      auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, 1, StrId("mainbuffer"));
+      CHECK(resource_producer_pass_list.size() == 1);
+      CHECK(resource_producer_pass_list[0] == 0);
     }
     SUBCASE("search from head") {
-      auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, 0, StrId("mainbuffer"));
-      CHECK(used_pass_id_list.empty());
+      auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, 0, StrId("mainbuffer"));
+      CHECK(resource_producer_pass_list.empty());
     }
   }
   {
@@ -439,10 +470,10 @@ TEST_CASE("get pass list writing to a specified buffer") {
       }
     };
     auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
-    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("depth"));
-    CHECK(used_pass_id_list.size() == 2);
-    CHECK(used_pass_id_list[0] == 0);
-    CHECK(used_pass_id_list[1] == 1);
+    auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("depth"));
+    CHECK(resource_producer_pass_list.size() == 2);
+    CHECK(resource_producer_pass_list[0] == 0);
+    CHECK(resource_producer_pass_list[1] == 1);
   }
   {
     RenderGraphConfig<uint32_t> config = {{
@@ -456,10 +487,10 @@ TEST_CASE("get pass list writing to a specified buffer") {
       }
     };
     auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
-    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("depth"));
-    CHECK(used_pass_id_list.size() == 2);
-    CHECK(used_pass_id_list[0] == 1);
-    CHECK(used_pass_id_list[1] == 2);
+    auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("depth"));
+    CHECK(resource_producer_pass_list.size() == 2);
+    CHECK(resource_producer_pass_list[0] == 1);
+    CHECK(resource_producer_pass_list[1] == 2);
   }
   {
     RenderGraphConfig<uint32_t> config = {{
@@ -473,10 +504,10 @@ TEST_CASE("get pass list writing to a specified buffer") {
       }
     };
     auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
-    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("buffer"));
-    CHECK(used_pass_id_list.size() == 2);
-    CHECK(used_pass_id_list[0] == 1);
-    CHECK(used_pass_id_list[1] == 2);
+    auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("buffer"));
+    CHECK(resource_producer_pass_list.size() == 2);
+    CHECK(resource_producer_pass_list[0] == 1);
+    CHECK(resource_producer_pass_list[1] == 2);
   }
   {
     RenderGraphConfig<uint32_t> config = {{
@@ -490,10 +521,10 @@ TEST_CASE("get pass list writing to a specified buffer") {
       }
     };
     auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
-    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("buffer"));
-    CHECK(used_pass_id_list.size() == 2);
-    CHECK(used_pass_id_list[0] == 1);
-    CHECK(used_pass_id_list[1] == 2);
+    auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("buffer"));
+    CHECK(resource_producer_pass_list.size() == 2);
+    CHECK(resource_producer_pass_list[0] == 1);
+    CHECK(resource_producer_pass_list[1] == 2);
   }
   {
     RenderGraphConfig<uint32_t> config = {{
@@ -505,9 +536,9 @@ TEST_CASE("get pass list writing to a specified buffer") {
       }
     };
     auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
-    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("buffer"));
-    CHECK(used_pass_id_list.size() == 1);
-    CHECK(used_pass_id_list[0] == 1);
+    auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("buffer"));
+    CHECK(resource_producer_pass_list.size() == 1);
+    CHECK(resource_producer_pass_list[0] == 1);
   }
   {
     RenderGraphConfig<uint32_t> config = {{
@@ -519,9 +550,9 @@ TEST_CASE("get pass list writing to a specified buffer") {
       }
     };
     auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
-    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("buffer"));
-    CHECK(used_pass_id_list.size() == 1);
-    CHECK(used_pass_id_list[0] == 1);
+    auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("buffer"));
+    CHECK(resource_producer_pass_list.size() == 1);
+    CHECK(resource_producer_pass_list[0] == 1);
   }
   {
     RenderGraphConfig<uint32_t> config = {{
@@ -535,10 +566,10 @@ TEST_CASE("get pass list writing to a specified buffer") {
       }
     };
     auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
-    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("buffer"));
-    CHECK(used_pass_id_list.size() == 2);
-    CHECK(used_pass_id_list[0] == 0);
-    CHECK(used_pass_id_list[1] == 1);
+    auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("buffer"));
+    CHECK(resource_producer_pass_list.size() == 2);
+    CHECK(resource_producer_pass_list[0] == 0);
+    CHECK(resource_producer_pass_list[1] == 1);
   }
   {
     RenderGraphConfig<uint32_t> config = {{
@@ -552,10 +583,10 @@ TEST_CASE("get pass list writing to a specified buffer") {
       }
     };
     auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
-    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("buffer"));
-    CHECK(used_pass_id_list.size() == 2);
-    CHECK(used_pass_id_list[0] == 0);
-    CHECK(used_pass_id_list[1] == 1);
+    auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("buffer"));
+    CHECK(resource_producer_pass_list.size() == 2);
+    CHECK(resource_producer_pass_list[0] == 0);
+    CHECK(resource_producer_pass_list[1] == 1);
   }
 }
 TEST_CASE("validate render graph config") {
