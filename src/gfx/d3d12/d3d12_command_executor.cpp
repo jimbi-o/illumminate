@@ -109,7 +109,8 @@ auto ConfigureBatchedPassList(RenderGraphConfig<RenderFunction>&& config) {
 }
 template <typename RenderFunction>
 auto GetResourceProducerPassList(const std::vector<BatchId>& batch_order, const std::unordered_map<BatchId, std::vector<PassId>>& batched_pass_order, const std::unordered_map<PassId, RenderGraphPass<RenderFunction>>& pass_list, const PassId resource_consumer_pass, const StrId resource_name) {
-  // TODO consider queue type on same batch
+  BatchId resource_consumer_batch = ~0u;
+  CommandQueueType resource_consumer_pass_queue_type = CommandQueueType::kGraphics;
   std::vector<PassId> producer_pass_ids;
   bool buffer_consumer_pass_found = false, stop_searching = false;
   // for (const auto& pass : batch_order | std::views::reverse) { // std::views not ready yet in VC2019.
@@ -119,10 +120,16 @@ auto GetResourceProducerPassList(const std::vector<BatchId>& batch_order, const 
       auto& pass_id = *pass_it;
       if (!buffer_consumer_pass_found) {
         buffer_consumer_pass_found = (pass_id == resource_consumer_pass);
+        if (buffer_consumer_pass_found) {
+          resource_consumer_batch = *batch_it;
+          resource_consumer_pass_queue_type = pass_list.at(pass_id).command_queue_type;
+        }
         continue;
       }
-      for (bool resource_found = false; auto& [type, vec] : pass_list.at(pass_id).resources) {
+      auto& pass = pass_list.at(pass_id);
+      for (bool resource_found = false; auto& [type, vec] : pass.resources) {
         if (!IsResourceWritable(type)) continue;
+        if (*batch_it == resource_consumer_batch && pass.command_queue_type != resource_consumer_pass_queue_type) continue;
         for (auto& name : vec) {
           if (name != resource_name) continue;
           resource_found = true;
@@ -395,7 +402,12 @@ TEST_CASE("get pass list writing to a specified buffer") {
       CHECK(std::find(resource_producer_pass_list.begin(), resource_producer_pass_list.end(), 2) != resource_producer_pass_list.end());
     }
     SUBCASE("search from in middle") {
-      auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, 0, StrId("mainbuffer"));
+      auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, 2, StrId("mainbuffer"));
+      CHECK(resource_producer_pass_list.size() == 1);
+      CHECK(std::find(resource_producer_pass_list.begin(), resource_producer_pass_list.end(), 1) != resource_producer_pass_list.end());
+    }
+    SUBCASE("search from in middle2") {
+      auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, 1, StrId("mainbuffer"));
       CHECK(resource_producer_pass_list.size() == 1);
       CHECK(std::find(resource_producer_pass_list.begin(), resource_producer_pass_list.end(), 0) != resource_producer_pass_list.end());
     }
@@ -532,7 +544,7 @@ TEST_CASE("get pass list writing to a specified buffer") {
         {{
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("buffer")}}}},
           {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("buffer")}}}},
-          {CommandQueueType::kGraphics, 1},
+          {CommandQueueType::kCompute, 1},
         }}
       }
     };
@@ -544,8 +556,8 @@ TEST_CASE("get pass list writing to a specified buffer") {
   {
     RenderGraphConfig<uint32_t> config = {{
         {{
-          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("buffer")}}}},
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("buffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("buffer")}}}},
           {CommandQueueType::kGraphics, 1},
         }}
       }
@@ -553,7 +565,7 @@ TEST_CASE("get pass list writing to a specified buffer") {
     auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
     auto resource_producer_pass_list = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("buffer"));
     CHECK(resource_producer_pass_list.size() == 1);
-    CHECK(std::find(resource_producer_pass_list.begin(), resource_producer_pass_list.end(), 1) != resource_producer_pass_list.end());
+    CHECK(std::find(resource_producer_pass_list.begin(), resource_producer_pass_list.end(), 0) != resource_producer_pass_list.end());
   }
   {
     RenderGraphConfig<uint32_t> config = {{
@@ -562,7 +574,7 @@ TEST_CASE("get pass list writing to a specified buffer") {
         }},
         {{
           {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("buffer")}}}},
-          {CommandQueueType::kGraphics, 1},
+          {CommandQueueType::kCompute, 1},
         }}
       }
     };
