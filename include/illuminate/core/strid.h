@@ -12,7 +12,7 @@ constexpr inline StrHash HornerHash(const StrHash prime, const char (&str)[N], c
 {
   return (len <= 1) ? str[0] : (prime * HornerHash(prime, str, len-1) + str[len-1]);
 }
-class StrId {
+class StrId final {
  public:
   static const StrHash kHashPrime = 31;
 #ifndef STRID_DEBUG_STR_ENABLED
@@ -24,6 +24,7 @@ class StrId {
   constexpr explicit StrId(const char (&str)[N]) : hash_(HornerHash(kHashPrime, str)), str_(str) {}
   StrId() : hash_(0), str_() {}
 #endif
+  ~StrId() {}
   constexpr operator uint32_t() const { return hash_; }
   constexpr bool operator==(const StrId& id) const { return hash_ == id.hash_; } // for unordered_map
   constexpr StrHash GetHash() const { return hash_; }

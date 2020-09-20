@@ -1,17 +1,40 @@
 #include "d3d12_minimal_for_cpp.h"
-namespace illuminate::gfx {
+#include <ranges>
 // TODO move to upper layer directory.
+namespace illuminate::gfx {
+enum class ResourceStateType : uint8_t {
+  kSrv = 0,
+  kRtvNewBuffer,
+  kRtvPrevResultReused,
+  kDsvNewBuffer,
+  kDsvReadWrite,
+  kDsvReadOnly,
+  kUavNewBuffer,
+  kUavReadWrite,
+  kUavReadOnly,
+  kCopySrc,
+  kCopyDst,
+  // kUavToClear, // implement if needed
+};
+constexpr bool IsResourceReadable(const ResourceStateType type) {
+  switch (type) {
+    case ResourceStateType::kSrv:
+    case ResourceStateType::kRtvPrevResultReused:
+    case ResourceStateType::kDsvReadWrite:
+    case ResourceStateType::kDsvReadOnly:
+    case ResourceStateType::kUavReadWrite:
+    case ResourceStateType::kUavReadOnly:
+    case ResourceStateType::kCopySrc:
+      return true;
+    default:
+      return false;
+  }
+}
 template <typename RenderFunction>
 struct RenderGraphPass {
   CommandQueueType command_queue_type;
   RenderFunction render_function;
-  std::vector<StrId> srv;
-  std::vector<StrId> rtv;
-  StrId dsv;
-  std::vector<StrId> uav;
-  std::vector<StrId> uav_to_clear;
-  std::vector<StrId> copy_src;
-  std::vector<StrId> copy_dst;
+  std::unordered_map<ResourceStateType, std::vector<StrId>> resources;
 };
 template <typename RenderFunction>
 struct RenderGraphBatch {
@@ -41,6 +64,16 @@ struct ParsedRenderGraph {
   CommandQueueType frame_end_signal_queue;
 };
 template <typename RenderFunction>
+auto GetPassInputResourceList(const RenderGraphPass<RenderFunction>& pass) {
+  std::vector<StrId> input_resource_names;
+  for (auto& [type, vec] : pass.resources) {
+    if (!IsResourceReadable(type)) continue;
+    input_resource_names.reserve(input_resource_names.size() + vec.size());
+    input_resource_names.insert(input_resource_names.end(), vec.begin(), vec.end());
+  }
+  return input_resource_names;
+}
+template <typename RenderFunction>
 auto ConfigureBatchedPassList(RenderGraphConfig<RenderFunction>&& config) {
   std::vector<BatchId> batch_order;
   batch_order.reserve(batch_order.size());
@@ -59,6 +92,18 @@ auto ConfigureBatchedPassList(RenderGraphConfig<RenderFunction>&& config) {
     batch_id++;
   }
   return std::make_tuple(batch_order, batched_pass_order, pass_list);
+}
+template <typename RenderFunction>
+auto GetResourceUsingPass(const std::vector<BatchId>& batch_order, const std::unordered_map<BatchId, std::vector<PassId>>& batched_pass_order, const std::unordered_map<PassId, RenderGraphPass<RenderFunction>>& pass_list, const PassId buffer_used_pass, const StrId buffer_name) {
+  std::vector<PassId> used_pass_ids;
+  // for (const auto& pass : batch_order | std::views::reverse) { // std::views not ready yet in VC.
+  for (auto batch_it = batch_order.crbegin(); batch_it != batch_order.crend(); batch_it++) {
+    auto& pass_list = batched_pass_order.at(*batch_it);
+    for (auto pass_it = pass_list.crbegin(); pass_it != pass_list.crend(); pass_it++) {
+      // TODO
+    }
+  }
+  return used_pass_ids;
 }
 template <typename RenderFunction>
 auto ParseRenderGraph(RenderGraphConfig<RenderFunction>&& render_graph_config) {
@@ -166,6 +211,355 @@ TEST_CASE("batch-pass") {
     CHECK(pass_list[2].command_queue_type == CommandQueueType::kCompute);
     CHECK(pass_list[3].command_queue_type == CommandQueueType::kGraphics);
   }
+}
+TEST_CASE("get pass list writing to a specified buffer") {
+  using namespace illuminate::gfx;
+  using namespace illuminate::gfx::d3d12;
+  {
+    RenderGraphPass<uint32_t> pass{
+    };
+    auto input_list = GetPassInputResourceList(pass);
+    CHECK(input_list.empty());
+  }
+  {
+    RenderGraphPass<uint32_t> pass{
+      CommandQueueType::kGraphics, 0,
+      {
+        {ResourceStateType::kRtvNewBuffer, {StrId("dmyA"), StrId("dmyB"), StrId("dmyC"), }},
+      },
+    };
+    auto input_list = GetPassInputResourceList(pass);
+    CHECK(input_list.empty());
+  }
+  {
+    RenderGraphPass<uint32_t> pass{
+      CommandQueueType::kGraphics, 0,
+      {
+        {ResourceStateType::kRtvNewBuffer, {StrId("dmyA"), StrId("dmyB"), StrId("dmyC"), }},
+        {ResourceStateType::kRtvPrevResultReused, {StrId("dmyD"), StrId("dmyE"), StrId("dmyF"), }},
+        {ResourceStateType::kSrv, {StrId("dmyG"), }},
+      },
+    };
+    auto input_list = GetPassInputResourceList(pass);
+    CHECK(input_list.size() == 4);
+    CHECK(std::find(input_list.begin(), input_list.end(), StrId("dmyD")) != input_list.end());
+    CHECK(std::find(input_list.begin(), input_list.end(), StrId("dmyE")) != input_list.end());
+    CHECK(std::find(input_list.begin(), input_list.end(), StrId("dmyF")) != input_list.end());
+    CHECK(std::find(input_list.begin(), input_list.end(), StrId("dmyG")) != input_list.end());
+  }
+  {
+    RenderGraphPass<uint32_t> pass{
+      CommandQueueType::kGraphics, 0,
+      {
+        {ResourceStateType::kSrv, {StrId("dmyA"), StrId("dmyB"), }},
+        {ResourceStateType::kRtvNewBuffer, {StrId("dmyC"), StrId("dmyD"), StrId("dmyE"), }},
+        {ResourceStateType::kRtvPrevResultReused, {StrId("dmyF"), StrId("dmyG"), }},
+        {ResourceStateType::kDsvNewBuffer, {StrId("dmyH"), StrId("dmyI"), }},
+        {ResourceStateType::kDsvReadWrite, {StrId("dmyJ"), StrId("dmyK"), }},
+        {ResourceStateType::kDsvReadOnly, {StrId("dmyL"), StrId("dmyM"), StrId("dmyN"), }},
+        {ResourceStateType::kUavNewBuffer, {StrId("dmyO"), StrId("dmyP"), }},
+        {ResourceStateType::kUavReadWrite, {StrId("dmyQ"), StrId("dmyR"), }},
+        {ResourceStateType::kCopySrc, {StrId("dmyS"), StrId("dmyT"), }},
+        {ResourceStateType::kCopyDst, {StrId("dmyU"), StrId("dmyV"), StrId("dmyW"), }},
+      },
+    };
+    auto input_list = GetPassInputResourceList(pass);
+    CHECK(input_list.size() == 13);
+    CHECK(std::find(input_list.begin(), input_list.end(), StrId("dmyA")) != input_list.end());
+    CHECK(std::find(input_list.begin(), input_list.end(), StrId("dmyB")) != input_list.end());
+    CHECK(std::find(input_list.begin(), input_list.end(), StrId("dmyF")) != input_list.end());
+    CHECK(std::find(input_list.begin(), input_list.end(), StrId("dmyG")) != input_list.end());
+    CHECK(std::find(input_list.begin(), input_list.end(), StrId("dmyJ")) != input_list.end());
+    CHECK(std::find(input_list.begin(), input_list.end(), StrId("dmyK")) != input_list.end());
+    CHECK(std::find(input_list.begin(), input_list.end(), StrId("dmyL")) != input_list.end());
+    CHECK(std::find(input_list.begin(), input_list.end(), StrId("dmyM")) != input_list.end());
+    CHECK(std::find(input_list.begin(), input_list.end(), StrId("dmyN")) != input_list.end());
+    CHECK(std::find(input_list.begin(), input_list.end(), StrId("dmyQ")) != input_list.end());
+    CHECK(std::find(input_list.begin(), input_list.end(), StrId("dmyR")) != input_list.end());
+    CHECK(std::find(input_list.begin(), input_list.end(), StrId("dmyS")) != input_list.end());
+    CHECK(std::find(input_list.begin(), input_list.end(), StrId("dmyT")) != input_list.end());
+  }
+  {
+    RenderGraphConfig<uint32_t> config;
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, 0, StrId("swapchain"));
+    CHECK(used_pass_id_list.empty());
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("swapchain"));
+    CHECK(used_pass_id_list.empty());
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1},
+          {CommandQueueType::kCompute,  2},
+        }},
+        {{
+          {CommandQueueType::kCompute,  4},
+          {CommandQueueType::kGraphics, 3},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("swapchain"));
+    CHECK(used_pass_id_list.empty());
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    SUBCASE("buffer exists") {
+      auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("mainbuffer"));
+      CHECK(used_pass_id_list.size() == 1);
+      CHECK(used_pass_id_list[0] == 0);
+    }
+    SUBCASE("buffer does not exist") {
+      auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("swapchain"));
+      CHECK(used_pass_id_list.empty());
+    }
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("mainbuffer"));
+    CHECK(used_pass_id_list.size() == 2);
+    CHECK(used_pass_id_list[0] == 0);
+    CHECK(used_pass_id_list[1] == 1);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    SUBCASE("search from back") {
+      auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("mainbuffer"));
+      CHECK(used_pass_id_list.size() == 2);
+      CHECK(used_pass_id_list[0] == 1);
+      CHECK(used_pass_id_list[1] == 2);
+    }
+    SUBCASE("search from in middle") {
+      auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, 0, StrId("mainbuffer"));
+      CHECK(used_pass_id_list.size() == 1);
+      CHECK(used_pass_id_list[0] == 0);
+    }
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+        }},
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("mainbuffer"));
+    CHECK(used_pass_id_list.size() == 3);
+    CHECK(used_pass_id_list[0] == 0);
+    CHECK(used_pass_id_list[1] == 1);
+    CHECK(used_pass_id_list[2] == 2);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("dmy"), StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("dmy"), StrId("mainbuffer")}}}},
+        }},
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    SUBCASE("search from back") {
+      auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("mainbuffer"));
+      CHECK(used_pass_id_list.size() == 2);
+      CHECK(used_pass_id_list[0] == 2);
+      CHECK(used_pass_id_list[1] == 3);
+    }
+    SUBCASE("search from in middle") {
+      auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, 3, StrId("mainbuffer"));
+      CHECK(used_pass_id_list.size() == 1);
+      CHECK(used_pass_id_list[0] == 2);
+    }
+    SUBCASE("search from in middle 2") {
+      auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, 2, StrId("mainbuffer"));
+      CHECK(used_pass_id_list.size() == 2);
+      CHECK(used_pass_id_list[0] == 0);
+      CHECK(used_pass_id_list[1] == 1);
+    }
+    SUBCASE("search from in middle 3") {
+      auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, 1, StrId("mainbuffer"));
+      CHECK(used_pass_id_list.size() == 1);
+      CHECK(used_pass_id_list[0] == 0);
+    }
+    SUBCASE("search from head") {
+      auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, 0, StrId("mainbuffer"));
+      CHECK(used_pass_id_list.empty());
+    }
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kDsvNewBuffer, {StrId("depth")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kDsvReadWrite, {StrId("depth")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kDsvReadOnly, {StrId("depth")}}}},
+          {CommandQueueType::kGraphics, 1},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("depth"));
+    CHECK(used_pass_id_list.size() == 2);
+    CHECK(used_pass_id_list[0] == 0);
+    CHECK(used_pass_id_list[1] == 1);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("depth")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kDsvNewBuffer, {StrId("depth")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kDsvReadWrite, {StrId("depth")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kDsvReadOnly, {StrId("depth")}}}},
+          {CommandQueueType::kGraphics, 1},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("depth"));
+    CHECK(used_pass_id_list.size() == 2);
+    CHECK(used_pass_id_list[0] == 1);
+    CHECK(used_pass_id_list[1] == 2);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("buffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kUavNewBuffer, {StrId("buffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kUavReadWrite, {StrId("buffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kUavReadOnly, {StrId("buffer")}}}},
+          {CommandQueueType::kGraphics, 1},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("buffer"));
+    CHECK(used_pass_id_list.size() == 2);
+    CHECK(used_pass_id_list[0] == 1);
+    CHECK(used_pass_id_list[1] == 2);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("buffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kCopyDst, {StrId("buffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kUavReadWrite, {StrId("buffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kUavReadOnly, {StrId("buffer")}}}},
+          {CommandQueueType::kGraphics, 1},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("buffer"));
+    CHECK(used_pass_id_list.size() == 2);
+    CHECK(used_pass_id_list[0] == 1);
+    CHECK(used_pass_id_list[1] == 2);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("buffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("buffer")}}}},
+          {CommandQueueType::kGraphics, 1},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("buffer"));
+    CHECK(used_pass_id_list.size() == 1);
+    CHECK(used_pass_id_list[0] == 1);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("buffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("buffer")}}}},
+          {CommandQueueType::kGraphics, 1},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("buffer"));
+    CHECK(used_pass_id_list.size() == 1);
+    CHECK(used_pass_id_list[0] == 1);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("buffer")}}}},
+        }},
+        {{
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("buffer")}}}},
+          {CommandQueueType::kGraphics, 1},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("buffer"));
+    CHECK(used_pass_id_list.size() == 2);
+    CHECK(used_pass_id_list[0] == 0);
+    CHECK(used_pass_id_list[1] == 1);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("buffer")}}}},
+        }},
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("buffer")}}}},
+          {CommandQueueType::kGraphics, 1},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto used_pass_id_list = GetResourceUsingPass(batch_order, batched_pass_order, pass_list, batched_pass_order.at(batch_order.back()).back(), StrId("buffer"));
+    CHECK(used_pass_id_list.size() == 2);
+    CHECK(used_pass_id_list[0] == 0);
+    CHECK(used_pass_id_list[1] == 1);
+  }
+}
+TEST_CASE("validate render graph config") {
+  // TODO CorrectBatchedConsumerProducerNotInSameQueue()
 }
 TEST_CASE("execute command list") {
   const uint32_t buffer_num = 2;
