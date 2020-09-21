@@ -1,5 +1,5 @@
-#ifndef __ILLUMINATE_MATH_VECTOR_H__
-#define __ILLUMINATE_MATH_VECTOR_H__
+#ifndef ILLUMINATE_MATH_VECTOR_H
+#define ILLUMINATE_MATH_VECTOR_H
 #include <cstdint>
 #include <math.h>
 #include "immintrin.h"

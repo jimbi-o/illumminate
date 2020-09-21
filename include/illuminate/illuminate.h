@@ -1,5 +1,5 @@
-#ifndef __ILLUMINATE_H__
-#define __ILLUMINATE_H__
+#ifndef ILLUMINATE_H
+#define ILLUMINATE_H
 #include "core/strid.h"
 #include "math/vector.h"
 #endif

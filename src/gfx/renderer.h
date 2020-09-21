@@ -1,5 +1,5 @@
-#ifndef __ILLUMINATE_RENDERER_H__
-#define __ILLUMINATE_RENDERER_H__
+#ifndef ILLUMINATE_RENDERER_H
+#define ILLUMINATE_RENDERER_H
 #include "illuminate.h"
 #include <type_traits>
 #include <vector>

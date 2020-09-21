@@ -1,5 +1,5 @@
-#ifndef __ILLUMINATE_WIN32_H__
-#define __ILLUMINATE_WIN32_H__
+#ifndef ILLUMINATE_WIN32_H
+#define ILLUMINATE_WIN32_H
 #include <cstdint>
 #include <string>
 #include <functional>

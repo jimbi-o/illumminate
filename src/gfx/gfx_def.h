@@ -1,5 +1,5 @@
-#ifndef __ILLUMINATE_GFX_DEF_H__
-#define __ILLUMINATE_GFX_DEF_H__
+#ifndef ILLUMINATE_GFX_DEF_H
+#define ILLUMINATE_GFX_DEF_H
 #include <cstdint>
 #include <unordered_set>
 namespace illuminate::gfx {

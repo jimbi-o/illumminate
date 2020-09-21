@@ -1,5 +1,5 @@
-#ifndef __ILLUMINATE_CORE_STRID_H__
-#define __ILLUMINATE_CORE_STRID_H__
+#ifndef ILLUMINATE_CORE_STRID_H
+#define ILLUMINATE_CORE_STRID_H
 #include <cstdint>
 #include <functional>
 #define STRID_DEBUG_STR_ENABLED

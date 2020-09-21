@@ -1,5 +1,5 @@
-#ifndef __ILLUMINATE_HEADER_COMMON_H__
-#define __ILLUMINATE_HEADER_COMMON_H__
+#ifndef ILLUMINATE_HEADER_COMMON_H
+#define ILLUMINATE_HEADER_COMMON_H
 #include <tuple>
 #include <unordered_map>
 #include <vector>

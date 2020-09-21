@@ -1,5 +1,5 @@
-#ifndef __ILLUMINATE_CORE_MEMORY_H__
-#define __ILLUMINATE_CORE_MEMORY_H__
+#ifndef ILLUMINATE_CORE_MEMORY_H
+#define ILLUMINATE_CORE_MEMORY_H
 #include <cstdint>
 #include <set>
 #include <vector>
