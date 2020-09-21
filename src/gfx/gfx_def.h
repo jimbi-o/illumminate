@@ -21,7 +21,7 @@ constexpr uint32_t GetPhysicalSize(const BufferSizeType type, const float size, 
     case BufferSizeType::kMainbufferRelative: return static_cast<uint32_t>(static_cast<float>(mainbuffer_size) * size);
     case BufferSizeType::kAbsolute:           return static_cast<uint32_t>(size);
   }
-  return size;
+  return static_cast<uint32_t>(size);
 }
 template <typename T>
 struct Size2d {
@@ -48,7 +48,7 @@ constexpr Size2dUint GetPhysicalSize(const BufferDesc& desc, const Size2dUint& s
   };
 }
 enum class CommandQueueType : uint8_t { kGraphics, kCompute, kTransfer, };
-const std::unordered_set<CommandQueueType> kCommandQueueTypeSet{CommandQueueType::kGraphics, CommandQueueType::kCompute, CommandQueueType::kTransfer};
+static const CommandQueueType kCommandQueueTypeSet[]{CommandQueueType::kGraphics, CommandQueueType::kCompute, CommandQueueType::kTransfer};
 constexpr ClearValue GetClearValueDefaultRtv() {
   return { .color = {0.0f, 0.0f, 0.0f, 1.0f} };
 }

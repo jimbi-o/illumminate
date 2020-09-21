@@ -26,7 +26,10 @@ constexpr bool IsResourceReadable(const ResourceStateType type) {
     case ResourceStateType::kUavReadOnly:
     case ResourceStateType::kCopySrc:
       return true;
-    default:
+    case ResourceStateType::kRtvNewBuffer:
+    case ResourceStateType::kDsvNewBuffer:
+    case ResourceStateType::kUavNewBuffer:
+    case ResourceStateType::kCopyDst:
       return false;
   }
 }
@@ -40,7 +43,10 @@ constexpr bool IsResourceWritable(const ResourceStateType type) {
     case ResourceStateType::kUavReadWrite:
     case ResourceStateType::kCopyDst:
       return true;
-    default:
+    case ResourceStateType::kSrv:
+    case ResourceStateType::kDsvReadOnly:
+    case ResourceStateType::kUavReadOnly:
+    case ResourceStateType::kCopySrc:
       return false;
   }
 }
@@ -117,8 +123,9 @@ auto IterateBatchedPassListBackward(const std::vector<BatchId>& batch_order, con
   }
   return std::make_tuple(batch_order.crend(), std::vector<PassId>::const_reverse_iterator{});
 }
+auto GetResourceConsumerPassIteratorsBackward(const std::vector<BatchId>& batch_order, const std::unordered_map<BatchId, std::vector<PassId>>& batched_pass_order, const PassId resource_consumer_pass);
 auto GetResourceConsumerPassIteratorsBackward(const std::vector<BatchId>& batch_order, const std::unordered_map<BatchId, std::vector<PassId>>& batched_pass_order, const PassId resource_consumer_pass) {
-  return IterateBatchedPassListBackward(batch_order, batched_pass_order, batch_order.crbegin(), batched_pass_order.at(*batch_order.crbegin()).crbegin(), [=](auto batch_it, auto pass_it){
+  return IterateBatchedPassListBackward(batch_order, batched_pass_order, batch_order.crbegin(), batched_pass_order.at(*batch_order.crbegin()).crbegin(), [=](auto, auto pass_it){
       return *pass_it == resource_consumer_pass;
     });
 }
@@ -173,6 +180,8 @@ struct PhysicalResources {
 };
 using RenderFunction = std::function<void(D3d12CommandList**, const PhysicalResources&, const uint32_t/*pass_id*/)>;
 using RenderGraphConfigD3d12 = RenderGraphConfig<RenderFunction>;
+auto PreparePhysicalResource(const ParsedRenderGraph<RenderFunction>& render_graph);
+auto ExecuteResourceBarriers(D3d12CommandList* command_list, const std::vector<BarrierInfo>& barriers, const std::vector<ID3D12Resource*>& resources);
 auto PreparePhysicalResource(const ParsedRenderGraph<RenderFunction>& render_graph) {
   PhysicalResources physical_resources;
   // TODO
@@ -185,7 +194,7 @@ auto ExecuteResourceBarriers(D3d12CommandList* command_list, const std::vector<B
 namespace {
 using namespace illuminate::gfx;
 using namespace illuminate::gfx::d3d12;
-auto GetRenderGraphSimple() {
+static auto GetRenderGraphSimple() {
   RenderGraphConfigD3d12 config{};
   // TODO
   return config;
@@ -213,7 +222,7 @@ TEST_CASE("batch-pass") {
   {
     RenderGraphConfig<uint32_t> config = {{
         {{
-          {CommandQueueType::kGraphics, 1},
+          {CommandQueueType::kGraphics, 1, {}},
         }}
       }
     };
@@ -229,12 +238,12 @@ TEST_CASE("batch-pass") {
   {
     RenderGraphConfig<uint32_t> config = {{
         {{
-          {CommandQueueType::kGraphics, 1},
-          {CommandQueueType::kCompute,  2},
+          {CommandQueueType::kGraphics, 1, {}},
+          {CommandQueueType::kCompute,  2, {}},
         }},
         {{
-          {CommandQueueType::kCompute,  4},
-          {CommandQueueType::kGraphics, 3},
+          {CommandQueueType::kCompute,  4, {}},
+          {CommandQueueType::kGraphics, 3, {}},
         }}
       }
     };
@@ -333,7 +342,7 @@ TEST_CASE("get pass list writing to a specified buffer") {
   {
     RenderGraphConfig<uint32_t> config = {{
         {{
-          {CommandQueueType::kGraphics, 1},
+          {CommandQueueType::kGraphics, 1, {}},
         }}
       }
     };
@@ -348,12 +357,12 @@ TEST_CASE("get pass list writing to a specified buffer") {
   {
     RenderGraphConfig<uint32_t> config = {{
         {{
-          {CommandQueueType::kGraphics, 1},
-          {CommandQueueType::kCompute,  2},
+          {CommandQueueType::kGraphics, 1, {}},
+          {CommandQueueType::kCompute,  2, {}},
         }},
         {{
-          {CommandQueueType::kCompute,  4},
-          {CommandQueueType::kGraphics, 3},
+          {CommandQueueType::kCompute,  4, {}},
+          {CommandQueueType::kGraphics, 3, {}},
         }}
       }
     };
@@ -369,7 +378,7 @@ TEST_CASE("get pass list writing to a specified buffer") {
     RenderGraphConfig<uint32_t> config = {{
         {{
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
-          {CommandQueueType::kGraphics, 1},
+          {CommandQueueType::kGraphics, 1, {}},
         }}
       }
     };
@@ -393,7 +402,7 @@ TEST_CASE("get pass list writing to a specified buffer") {
         {{
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
-          {CommandQueueType::kGraphics, 1},
+          {CommandQueueType::kGraphics, 1, {}},
         }}
       }
     };
@@ -413,7 +422,7 @@ TEST_CASE("get pass list writing to a specified buffer") {
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
-          {CommandQueueType::kGraphics, 1},
+          {CommandQueueType::kGraphics, 1, {}},
         }}
       }
     };
@@ -455,7 +464,7 @@ TEST_CASE("get pass list writing to a specified buffer") {
         {{
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
-          {CommandQueueType::kGraphics, 1},
+          {CommandQueueType::kGraphics, 1, {}},
         }}
       }
     };
@@ -537,7 +546,7 @@ TEST_CASE("get pass list writing to a specified buffer") {
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kDsvNewBuffer, {StrId("depth")}}}},
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kDsvReadWrite, {StrId("depth")}}}},
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kDsvReadOnly, {StrId("depth")}}}},
-          {CommandQueueType::kGraphics, 1},
+          {CommandQueueType::kGraphics, 1, {}},
         }}
       }
     };
@@ -558,7 +567,7 @@ TEST_CASE("get pass list writing to a specified buffer") {
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kDsvNewBuffer, {StrId("depth")}}}},
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kDsvReadWrite, {StrId("depth")}}}},
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kDsvReadOnly, {StrId("depth")}}}},
-          {CommandQueueType::kGraphics, 1},
+          {CommandQueueType::kGraphics, 1, {}},
         }}
       }
     };
@@ -579,7 +588,7 @@ TEST_CASE("get pass list writing to a specified buffer") {
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kUavNewBuffer, {StrId("buffer")}}}},
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kUavReadWrite, {StrId("buffer")}}}},
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kUavReadOnly, {StrId("buffer")}}}},
-          {CommandQueueType::kGraphics, 1},
+          {CommandQueueType::kGraphics, 1, {}},
         }}
       }
     };
@@ -600,7 +609,7 @@ TEST_CASE("get pass list writing to a specified buffer") {
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kCopyDst, {StrId("buffer")}}}},
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kUavReadWrite, {StrId("buffer")}}}},
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kUavReadOnly, {StrId("buffer")}}}},
-          {CommandQueueType::kGraphics, 1},
+          {CommandQueueType::kGraphics, 1, {}},
         }}
       }
     };
@@ -619,7 +628,7 @@ TEST_CASE("get pass list writing to a specified buffer") {
         {{
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("buffer")}}}},
           {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("buffer")}}}},
-          {CommandQueueType::kCompute, 1},
+          {CommandQueueType::kCompute, 1, {}},
         }}
       }
     };
@@ -637,7 +646,7 @@ TEST_CASE("get pass list writing to a specified buffer") {
         {{
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("buffer")}}}},
           {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("buffer")}}}},
-          {CommandQueueType::kGraphics, 1},
+          {CommandQueueType::kGraphics, 1, {}},
         }}
       }
     };
@@ -657,7 +666,7 @@ TEST_CASE("get pass list writing to a specified buffer") {
         }},
         {{
           {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("buffer")}}}},
-          {CommandQueueType::kCompute, 1},
+          {CommandQueueType::kCompute, 1, {}},
         }}
       }
     };
@@ -678,7 +687,7 @@ TEST_CASE("get pass list writing to a specified buffer") {
         }},
         {{
           {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("buffer")}}}},
-          {CommandQueueType::kGraphics, 1},
+          {CommandQueueType::kGraphics, 1, {}},
         }}
       }
     };
@@ -768,8 +777,9 @@ TEST_CASE("execute command list") {
             continue;
           }
         }
-        command_queue.Get(queue_type)->ExecuteCommandLists(command_list_num, (ID3D12CommandList**)command_lists.at(queue_type));
-        command_list.ReturnCommandList(command_lists[queue_type]);
+        auto command_lists_to_execute = command_lists.at(queue_type);
+        command_queue.Get(queue_type)->ExecuteCommandLists(command_list_num, reinterpret_cast<ID3D12CommandList**>(command_lists_to_execute));
+        command_list.ReturnCommandList(command_lists_to_execute);
         if (parsed_render_graph.need_signal_queue_batch.contains(batch_id) && parsed_render_graph.need_signal_queue_batch[batch_id].contains(queue_type)) {
           auto next_signal_val = used_signal_val[queue_type] + 1;
           command_queue.RegisterSignal(queue_type, next_signal_val);

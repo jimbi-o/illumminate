@@ -10,7 +10,7 @@ using StrHash = uint32_t;
 template <size_t N>
 constexpr inline StrHash HornerHash(const StrHash prime, const char (&str)[N], const size_t len = N-1)
 {
-  return (len <= 1) ? str[0] : (prime * HornerHash(prime, str, len-1) + str[len-1]);
+  return (len <= 1) ? static_cast<std::make_unsigned_t<char>>(str[0]) : (prime * HornerHash(prime, str, len-1) + static_cast<std::make_unsigned_t<char>>(str[len-1]));
 }
 class StrId final {
  public:
@@ -24,7 +24,6 @@ class StrId final {
   constexpr explicit StrId(const char (&str)[N]) : hash_(HornerHash(kHashPrime, str)), str_(str) {}
   StrId() : hash_(0), str_() {}
 #endif
-  ~StrId() {}
   constexpr operator uint32_t() const { return hash_; }
   constexpr bool operator==(const StrId& id) const { return hash_ == id.hash_; } // for unordered_map
   constexpr StrHash GetHash() const { return hash_; }
