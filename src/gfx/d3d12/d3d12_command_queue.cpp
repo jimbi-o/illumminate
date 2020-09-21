@@ -52,7 +52,7 @@ void CommandQueue::RegisterWaitOnQueue(const CommandQueueType signal_queue, cons
 }
 void CommandQueue::WaitOnCpu(std::unordered_map<CommandQueueType, uint64_t>&& signals) {
   for (auto& queue_type : kCommandQueueTypeSet) {
-    if (!IsContaining(signals, queue_type)) continue;
+    if (!signals.contains(queue_type)) continue;
     auto comp_val = fence_[queue_type]->GetCompletedValue();
     auto signal_val = signals[queue_type];
     logtrace("fence@{}. comp:{} wait:{}", queue_type, comp_val, signal_val);

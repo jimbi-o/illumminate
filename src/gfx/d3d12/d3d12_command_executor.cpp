@@ -159,7 +159,7 @@ auto GetResourceProducerPassList(const std::vector<BatchId>& batch_order, const 
 }
 template <typename RenderFunction>
 auto CreateConsumerProducerPassAdjacancyList(const std::vector<BatchId>& batch_order, const std::unordered_map<BatchId, std::vector<PassId>>& batched_pass_order, const std::unordered_map<PassId, RenderGraphPass<RenderFunction>>& pass_list) {
-  std::unordered_map<PassId, std::vector<PassId>> consumer_producer_pass_adjacancy_list;
+  std::unordered_map<PassId, std::unordered_set<PassId>> consumer_producer_pass_adjacancy_list;
   consumer_producer_pass_adjacancy_list.reserve(pass_list.size());
   for (auto& [pass_id, pass] : pass_list) {
     auto input_resources = GetPassInputResourceList(pass);
@@ -167,7 +167,7 @@ auto CreateConsumerProducerPassAdjacancyList(const std::vector<BatchId>& batch_o
     for (auto& buffer_name : input_resources) {
       auto producer_pass = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, pass_id, buffer_name);
       if (producer_pass.empty()) continue;
-      consumer_producer_pass_adjacancy_list.at(pass_id).insert(consumer_producer_pass_adjacancy_list.at(pass_id).end(), producer_pass.begin(), producer_pass.end());
+      consumer_producer_pass_adjacancy_list.at(pass_id).insert(producer_pass.begin(), producer_pass.end());
     }
   }
   return consumer_producer_pass_adjacancy_list;
@@ -754,10 +754,10 @@ TEST_CASE("create adjacancy list") {
     CHECK(consumer_producer_pass_adjacancy_list.size() == 3);
     CHECK(consumer_producer_pass_adjacancy_list.at(0).empty());
     CHECK(consumer_producer_pass_adjacancy_list.at(1).size() == 1);
-    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(1), 0));
+    CHECK(consumer_producer_pass_adjacancy_list.at(1).contains(0));
     CHECK(consumer_producer_pass_adjacancy_list.at(2).size() == 2);
-    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(2), 0));
-    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(2), 1));
+    CHECK(consumer_producer_pass_adjacancy_list.at(2).contains(0));
+    CHECK(consumer_producer_pass_adjacancy_list.at(2).contains(1));
   }
   {
     RenderGraphConfig<uint32_t> config = {{
@@ -779,16 +779,16 @@ TEST_CASE("create adjacancy list") {
     CHECK(consumer_producer_pass_adjacancy_list.at(1).empty());
     CHECK(consumer_producer_pass_adjacancy_list.contains(2));
     CHECK(consumer_producer_pass_adjacancy_list.at(2).size() == 1);
-    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(2), 1));
+    CHECK(consumer_producer_pass_adjacancy_list.at(2).contains(1));
     CHECK(consumer_producer_pass_adjacancy_list.contains(3));
     CHECK(consumer_producer_pass_adjacancy_list.at(3).size() == 1);
-    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(3), 0));
+    CHECK(consumer_producer_pass_adjacancy_list.at(3).contains(0));
     CHECK(consumer_producer_pass_adjacancy_list.contains(4));
     CHECK(consumer_producer_pass_adjacancy_list.at(4).size() == 4);
-    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(4), 0));
-    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(4), 1));
-    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(4), 2));
-    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(4), 3));
+    CHECK(consumer_producer_pass_adjacancy_list.at(4).contains(0));
+    CHECK(consumer_producer_pass_adjacancy_list.at(4).contains(1));
+    CHECK(consumer_producer_pass_adjacancy_list.at(4).contains(2));
+    CHECK(consumer_producer_pass_adjacancy_list.at(4).contains(3));
   }
   {
     RenderGraphConfig<uint32_t> config = {{
@@ -814,15 +814,15 @@ TEST_CASE("create adjacancy list") {
     CHECK(consumer_producer_pass_adjacancy_list.contains(4));
     CHECK(consumer_producer_pass_adjacancy_list.contains(5));
     CHECK(consumer_producer_pass_adjacancy_list.at(2).size() == 1);
-    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(2), 1));
+    CHECK(consumer_producer_pass_adjacancy_list.at(2).contains(1));
     CHECK(consumer_producer_pass_adjacancy_list.at(3).size() == 1);
-    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(3), 0));
+    CHECK(consumer_producer_pass_adjacancy_list.at(3).contains(0));
     CHECK(consumer_producer_pass_adjacancy_list.at(4).size() == 2);
-    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(4), 1));
-    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(4), 2));
+    CHECK(consumer_producer_pass_adjacancy_list.at(4).contains(1));
+    CHECK(consumer_producer_pass_adjacancy_list.at(4).contains(2));
     CHECK(consumer_producer_pass_adjacancy_list.at(5).size() == 2);
-    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(5), 0));
-    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(5), 3));
+    CHECK(consumer_producer_pass_adjacancy_list.at(5).contains(0));
+    CHECK(consumer_producer_pass_adjacancy_list.at(5).contains(3));
   }
 }
 TEST_CASE("validate render graph config") {
