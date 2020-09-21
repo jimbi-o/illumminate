@@ -158,6 +158,21 @@ auto GetResourceProducerPassList(const std::vector<BatchId>& batch_order, const 
   return producer_pass_ids;
 }
 template <typename RenderFunction>
+auto CreateConsumerProducerPassAdjacancyList(const std::vector<BatchId>& batch_order, const std::unordered_map<BatchId, std::vector<PassId>>& batched_pass_order, const std::unordered_map<PassId, RenderGraphPass<RenderFunction>>& pass_list) {
+  std::unordered_map<PassId, std::vector<PassId>> consumer_producer_pass_adjacancy_list;
+  consumer_producer_pass_adjacancy_list.reserve(pass_list.size());
+  for (auto& [pass_id, pass] : pass_list) {
+    auto input_resources = GetPassInputResourceList(pass);
+    consumer_producer_pass_adjacancy_list[pass_id] = {};
+    for (auto& buffer_name : input_resources) {
+      auto producer_pass = GetResourceProducerPassList(batch_order, batched_pass_order, pass_list, pass_id, buffer_name);
+      if (producer_pass.empty()) continue;
+      consumer_producer_pass_adjacancy_list.at(pass_id).insert(consumer_producer_pass_adjacancy_list.at(pass_id).end(), producer_pass.begin(), producer_pass.end());
+    }
+  }
+  return consumer_producer_pass_adjacancy_list;
+}
+template <typename RenderFunction>
 auto ParseRenderGraph(RenderGraphConfig<RenderFunction>&& render_graph_config) {
   ParsedRenderGraph<RenderFunction> parsed_graph;
   // TODO
@@ -700,6 +715,113 @@ TEST_CASE("get pass list writing to a specified buffer") {
     CHECK(resource_producer_pass_list.size() == 2);
     CHECK(std::find(resource_producer_pass_list.begin(), resource_producer_pass_list.end(), 0) != resource_producer_pass_list.end());
     CHECK(std::find(resource_producer_pass_list.begin(), resource_producer_pass_list.end(), 1) != resource_producer_pass_list.end());
+  }
+}
+TEST_CASE("create adjacancy list") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  using namespace illuminate::gfx::d3d12;
+  {
+    RenderGraphConfig<uint32_t> config;
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto consumer_producer_pass_adjacancy_list = CreateConsumerProducerPassAdjacancyList(batch_order, batched_pass_order, pass_list);
+    CHECK(consumer_producer_pass_adjacancy_list.empty());
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto consumer_producer_pass_adjacancy_list = CreateConsumerProducerPassAdjacancyList(batch_order, batched_pass_order, pass_list);
+    CHECK(consumer_producer_pass_adjacancy_list.size() == 1);
+    CHECK(consumer_producer_pass_adjacancy_list.at(0).empty());
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kSrv, {StrId("mainbuffer")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto consumer_producer_pass_adjacancy_list = CreateConsumerProducerPassAdjacancyList(batch_order, batched_pass_order, pass_list);
+    CHECK(consumer_producer_pass_adjacancy_list.size() == 3);
+    CHECK(consumer_producer_pass_adjacancy_list.at(0).empty());
+    CHECK(consumer_producer_pass_adjacancy_list.at(1).size() == 1);
+    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(1), 0));
+    CHECK(consumer_producer_pass_adjacancy_list.at(2).size() == 2);
+    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(2), 0));
+    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(2), 1));
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("subbuffer")}}}},
+        }},
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("subbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kSrv, {StrId("mainbuffer"), StrId("subbuffer")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto consumer_producer_pass_adjacancy_list = CreateConsumerProducerPassAdjacancyList(batch_order, batched_pass_order, pass_list);
+    CHECK(consumer_producer_pass_adjacancy_list.size() == 5);
+    CHECK(consumer_producer_pass_adjacancy_list.at(0).empty());
+    CHECK(consumer_producer_pass_adjacancy_list.at(1).empty());
+    CHECK(consumer_producer_pass_adjacancy_list.contains(2));
+    CHECK(consumer_producer_pass_adjacancy_list.at(2).size() == 1);
+    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(2), 1));
+    CHECK(consumer_producer_pass_adjacancy_list.contains(3));
+    CHECK(consumer_producer_pass_adjacancy_list.at(3).size() == 1);
+    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(3), 0));
+    CHECK(consumer_producer_pass_adjacancy_list.contains(4));
+    CHECK(consumer_producer_pass_adjacancy_list.at(4).size() == 4);
+    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(4), 0));
+    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(4), 1));
+    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(4), 2));
+    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(4), 3));
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("subbuffer")}}}},
+        }},
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("subbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kSrv, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kSrv, {StrId("subbuffer")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto consumer_producer_pass_adjacancy_list = CreateConsumerProducerPassAdjacancyList(batch_order, batched_pass_order, pass_list);
+    CHECK(consumer_producer_pass_adjacancy_list.size() == 6);
+    CHECK(consumer_producer_pass_adjacancy_list.at(0).empty());
+    CHECK(consumer_producer_pass_adjacancy_list.at(1).empty());
+    CHECK(consumer_producer_pass_adjacancy_list.contains(2));
+    CHECK(consumer_producer_pass_adjacancy_list.contains(3));
+    CHECK(consumer_producer_pass_adjacancy_list.contains(4));
+    CHECK(consumer_producer_pass_adjacancy_list.contains(5));
+    CHECK(consumer_producer_pass_adjacancy_list.at(2).size() == 1);
+    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(2), 1));
+    CHECK(consumer_producer_pass_adjacancy_list.at(3).size() == 1);
+    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(3), 0));
+    CHECK(consumer_producer_pass_adjacancy_list.at(4).size() == 2);
+    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(4), 1));
+    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(4), 2));
+    CHECK(consumer_producer_pass_adjacancy_list.at(5).size() == 2);
+    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(5), 0));
+    CHECK(IsContaining(consumer_producer_pass_adjacancy_list.at(5), 3));
   }
 }
 TEST_CASE("validate render graph config") {

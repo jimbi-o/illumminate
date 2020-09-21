@@ -8,4 +8,8 @@ template <typename C, typename V>
 constexpr bool IsContaining(const C& container, const V& val) {
   return container.find(val) != container.end();
 }
+template <typename T, typename U>
+constexpr bool IsContaining(const std::vector<T>& vec, const U& val) {
+  return std::find(vec.begin(), vec.end(), val) != vec.end();
+}
 }
