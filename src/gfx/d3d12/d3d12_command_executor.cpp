@@ -84,16 +84,6 @@ struct ParsedRenderGraph {
   CommandQueueType frame_end_signal_queue;
 };
 template <typename RenderFunction>
-auto GetPassInputResourceList(const RenderGraphPass<RenderFunction>& pass) {
-  std::vector<StrId> input_resource_names;
-  for (auto& [type, vec] : pass.resources) {
-    if (!IsResourceReadable(type)) continue;
-    input_resource_names.reserve(input_resource_names.size() + vec.size());
-    input_resource_names.insert(input_resource_names.end(), vec.begin(), vec.end());
-  }
-  return input_resource_names;
-}
-template <typename RenderFunction>
 auto ConfigureBatchedPassList(RenderGraphConfig<RenderFunction>&& config) {
   std::vector<BatchId> batch_order;
   batch_order.reserve(batch_order.size());
@@ -113,6 +103,21 @@ auto ConfigureBatchedPassList(RenderGraphConfig<RenderFunction>&& config) {
   }
   return std::make_tuple(batch_order, batched_pass_order, pass_list);
 }
+template <typename RenderFunction>
+auto CorrectConsumerProducerInSameBatchDifferentQueue(std::vector<BatchId>&& batch_order, std::unordered_map<BatchId, std::vector<PassId>>&& batched_pass_order, const std::unordered_map<PassId, RenderGraphPass<RenderFunction>>& pass_list) {
+  // TODO
+  return std::make_tuple(batch_order, batched_pass_order);
+}
+template <typename RenderFunction>
+auto GetPassInputResourceList(const RenderGraphPass<RenderFunction>& pass) {
+  std::vector<StrId> input_resource_names;
+  for (auto& [type, vec] : pass.resources) {
+    if (!IsResourceReadable(type)) continue;
+    input_resource_names.reserve(input_resource_names.size() + vec.size());
+    input_resource_names.insert(input_resource_names.end(), vec.begin(), vec.end());
+  }
+  return input_resource_names;
+}
 template <typename InnerLoopFunction>
 auto IterateBatchedPassListBackward(const std::vector<BatchId>& batch_order, const std::unordered_map<BatchId, std::vector<PassId>>& batched_pass_order, std::vector<BatchId>::const_reverse_iterator batch_it_begin, std::vector<PassId>::const_reverse_iterator pass_it_begin, InnerLoopFunction&& inner_loop_func) {
   for (auto batch_it = batch_it_begin; batch_it != batch_order.crend(); batch_it++) {
@@ -123,8 +128,7 @@ auto IterateBatchedPassListBackward(const std::vector<BatchId>& batch_order, con
   }
   return std::make_tuple(batch_order.crend(), std::vector<PassId>::const_reverse_iterator{});
 }
-auto GetResourceConsumerPassIteratorsBackward(const std::vector<BatchId>& batch_order, const std::unordered_map<BatchId, std::vector<PassId>>& batched_pass_order, const PassId resource_consumer_pass);
-auto GetResourceConsumerPassIteratorsBackward(const std::vector<BatchId>& batch_order, const std::unordered_map<BatchId, std::vector<PassId>>& batched_pass_order, const PassId resource_consumer_pass) {
+static auto GetResourceConsumerPassIteratorsBackward(const std::vector<BatchId>& batch_order, const std::unordered_map<BatchId, std::vector<PassId>>& batched_pass_order, const PassId resource_consumer_pass) {
   return IterateBatchedPassListBackward(batch_order, batched_pass_order, batch_order.crbegin(), batched_pass_order.at(*batch_order.crbegin()).crbegin(), [=](auto, auto pass_it){
       return *pass_it == resource_consumer_pass;
     });
@@ -195,14 +199,12 @@ struct PhysicalResources {
 };
 using RenderFunction = std::function<void(D3d12CommandList**, const PhysicalResources&, const uint32_t/*pass_id*/)>;
 using RenderGraphConfigD3d12 = RenderGraphConfig<RenderFunction>;
-auto PreparePhysicalResource(const ParsedRenderGraph<RenderFunction>& render_graph);
-auto ExecuteResourceBarriers(D3d12CommandList* command_list, const std::vector<BarrierInfo>& barriers, const std::vector<ID3D12Resource*>& resources);
-auto PreparePhysicalResource(const ParsedRenderGraph<RenderFunction>& render_graph) {
+static auto PreparePhysicalResource(const ParsedRenderGraph<RenderFunction>& render_graph) {
   PhysicalResources physical_resources;
   // TODO
   return physical_resources;
 }
-auto ExecuteResourceBarriers(D3d12CommandList* command_list, const std::vector<BarrierInfo>& barriers, const std::vector<ID3D12Resource*>& resources) {
+static auto ExecuteResourceBarriers(D3d12CommandList* command_list, const std::vector<BarrierInfo>& barriers, const std::vector<ID3D12Resource*>& resources) {
   // TODO
 }
 }
@@ -826,7 +828,519 @@ TEST_CASE("create adjacancy list") {
   }
 }
 TEST_CASE("validate render graph config") {
-  // TODO CorrectConsumerProducerInSameBatchDifferentQueue();
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    std::tie(batch_order, batched_pass_order) = CorrectConsumerProducerInSameBatchDifferentQueue(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(batch_order.size() == 1);
+    CHECK(batch_order[0] == 0);
+    CHECK(batched_pass_order.at(0).size() == 2);
+    CHECK(batched_pass_order.at(0)[0] == 0);
+    CHECK(batched_pass_order.at(0)[1] == 1);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("subbuffer")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    std::tie(batch_order, batched_pass_order) = CorrectConsumerProducerInSameBatchDifferentQueue(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(batch_order.size() == 1);
+    CHECK(batch_order[0] == 0);
+    CHECK(batched_pass_order.at(0).size() == 2);
+    CHECK(batched_pass_order.at(0)[0] == 0);
+    CHECK(batched_pass_order.at(0)[1] == 1);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("mainbuffer")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    std::tie(batch_order, batched_pass_order) = CorrectConsumerProducerInSameBatchDifferentQueue(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(batch_order.size() == 1);
+    CHECK(batch_order[0] == 0);
+    CHECK(batched_pass_order.at(0).size() == 2);
+    CHECK(batched_pass_order.at(0)[0] == 0);
+    CHECK(batched_pass_order.at(0)[1] == 1);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    std::tie(batch_order, batched_pass_order) = CorrectConsumerProducerInSameBatchDifferentQueue(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(batch_order.size() == 2);
+    CHECK(batch_order[0] == 0);
+    CHECK(batch_order[1] == 1);
+    CHECK(batched_pass_order.at(0).size() == 1);
+    CHECK(batched_pass_order.at(1).size() == 1);
+    CHECK(batched_pass_order.at(0)[0] == 0);
+    CHECK(batched_pass_order.at(1)[0] == 1);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+        }},
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    std::tie(batch_order, batched_pass_order) = CorrectConsumerProducerInSameBatchDifferentQueue(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(batch_order.size() == 2);
+    CHECK(batch_order[0] == 0);
+    CHECK(batch_order[1] == 1);
+    CHECK(batched_pass_order.at(0).size() == 1);
+    CHECK(batched_pass_order.at(1).size() == 2);
+    CHECK(batched_pass_order.at(0)[0] == 0);
+    CHECK(batched_pass_order.at(1)[0] == 1);
+    CHECK(batched_pass_order.at(1)[1] == 2);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    std::tie(batch_order, batched_pass_order) = CorrectConsumerProducerInSameBatchDifferentQueue(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(batch_order.size() == 2);
+    CHECK(batch_order[0] == 0);
+    CHECK(batch_order[1] == 1);
+    CHECK(batched_pass_order.at(0).size() == 2);
+    CHECK(batched_pass_order.at(1).size() == 1);
+    CHECK(batched_pass_order.at(0)[0] == 0);
+    CHECK(batched_pass_order.at(0)[1] == 1);
+    CHECK(batched_pass_order.at(1)[0] == 2);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    std::tie(batch_order, batched_pass_order) = CorrectConsumerProducerInSameBatchDifferentQueue(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(batch_order.size() == 2);
+    CHECK(batch_order[0] == 0);
+    CHECK(batch_order[1] == 1);
+    CHECK(batched_pass_order.at(0).size() == 1);
+    CHECK(batched_pass_order.at(1).size() == 2);
+    CHECK(batched_pass_order.at(0)[0] == 0);
+    CHECK(batched_pass_order.at(1)[0] == 1);
+    CHECK(batched_pass_order.at(1)[1] == 2);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    std::tie(batch_order, batched_pass_order) = CorrectConsumerProducerInSameBatchDifferentQueue(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(batch_order.size() == 2);
+    CHECK(batch_order[0] == 0);
+    CHECK(batch_order[1] == 1);
+    CHECK(batched_pass_order.at(0).size() == 2);
+    CHECK(batched_pass_order.at(1).size() == 2);
+    CHECK(batched_pass_order.at(0)[0] == 0);
+    CHECK(batched_pass_order.at(0)[1] == 1);
+    CHECK(batched_pass_order.at(1)[0] == 2);
+    CHECK(batched_pass_order.at(1)[1] == 3);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("subbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    std::tie(batch_order, batched_pass_order) = CorrectConsumerProducerInSameBatchDifferentQueue(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(batch_order.size() == 2);
+    CHECK(batch_order[0] == 0);
+    CHECK(batch_order[1] == 1);
+    CHECK(batched_pass_order.at(0).size() == 3);
+    CHECK(batched_pass_order.at(1).size() == 2);
+    CHECK(batched_pass_order.at(0)[0] == 0);
+    CHECK(batched_pass_order.at(0)[1] == 1);
+    CHECK(batched_pass_order.at(0)[2] == 2);
+    CHECK(batched_pass_order.at(1)[0] == 3);
+    CHECK(batched_pass_order.at(1)[1] == 4);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    std::tie(batch_order, batched_pass_order) = CorrectConsumerProducerInSameBatchDifferentQueue(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(batch_order.size() == 1);
+    CHECK(batch_order[0] == 0);
+    CHECK(batched_pass_order.at(0).size() == 4);
+    CHECK(batched_pass_order.at(0)[0] == 0);
+    CHECK(batched_pass_order.at(0)[1] == 1);
+    CHECK(batched_pass_order.at(0)[2] == 2);
+    CHECK(batched_pass_order.at(0)[3] == 3);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    std::tie(batch_order, batched_pass_order) = CorrectConsumerProducerInSameBatchDifferentQueue(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(batch_order.size() == 2);
+    CHECK(batch_order[0] == 0);
+    CHECK(batch_order[1] == 1);
+    CHECK(batched_pass_order.at(0).size() == 1);
+    CHECK(batched_pass_order.at(1).size() == 1);
+    CHECK(batched_pass_order.at(0)[0] == 0);
+    CHECK(batched_pass_order.at(1)[0] == 1);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    std::tie(batch_order, batched_pass_order) = CorrectConsumerProducerInSameBatchDifferentQueue(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(batch_order.size() == 2);
+    CHECK(batch_order[0] == 0);
+    CHECK(batch_order[1] == 1);
+    CHECK(batched_pass_order.at(0).size() == 1);
+    CHECK(batched_pass_order.at(1).size() == 1);
+    CHECK(batched_pass_order.at(0)[0] == 0);
+    CHECK(batched_pass_order.at(1)[0] == 1);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}},
+        }},
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("mainbuffer")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    std::tie(batch_order, batched_pass_order) = CorrectConsumerProducerInSameBatchDifferentQueue(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(batch_order.size() == 3);
+    CHECK(batch_order[0] == 0);
+    CHECK(batch_order[1] == 2);
+    CHECK(batch_order[2] == 1);
+    CHECK(batched_pass_order.at(0).size() == 1);
+    CHECK(batched_pass_order.at(2).size() == 1);
+    CHECK(batched_pass_order.at(1).size() == 2);
+    CHECK(batched_pass_order.at(0)[0] == 0);
+    CHECK(batched_pass_order.at(2)[0] == 1);
+    CHECK(batched_pass_order.at(1)[0] == 2);
+    CHECK(batched_pass_order.at(1)[1] == 3);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer"), StrId("dmyA")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("subbuffer")}}, {ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}},
+        }},
+        {{
+            {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("dmyC")}}, {ResourceStateType::kUavReadWrite, {StrId("subbuffer")}}}},
+            {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer"), StrId("dmyB")}}}},
+            {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer"), StrId("subbuffer")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    std::tie(batch_order, batched_pass_order) = CorrectConsumerProducerInSameBatchDifferentQueue(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(batch_order.size() == 3);
+    CHECK(batch_order[0] == 0);
+    CHECK(batch_order[1] == 2);
+    CHECK(batch_order[2] == 1);
+    CHECK(batched_pass_order.at(0).size() == 1);
+    CHECK(batched_pass_order.at(2).size() == 1);
+    CHECK(batched_pass_order.at(1).size() == 3);
+    CHECK(batched_pass_order.at(0)[0] == 0);
+    CHECK(batched_pass_order.at(2)[0] == 1);
+    CHECK(batched_pass_order.at(1)[0] == 2);
+    CHECK(batched_pass_order.at(1)[1] == 3);
+    CHECK(batched_pass_order.at(1)[2] == 4);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("dmyA"), StrId("dmyC")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("dmyB"), StrId("dmyD")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("dmyE")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer"), StrId("dmyF")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("dmyG"), StrId("dmyH")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("dmyI")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    std::tie(batch_order, batched_pass_order) = CorrectConsumerProducerInSameBatchDifferentQueue(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(batch_order.size() == 2);
+    CHECK(batch_order[0] == 0);
+    CHECK(batch_order[1] == 1);
+    CHECK(batched_pass_order.at(0).size() == 4);
+    CHECK(batched_pass_order.at(1).size() == 3);
+    CHECK(batched_pass_order.at(0)[0] == 0);
+    CHECK(batched_pass_order.at(0)[1] == 1);
+    CHECK(batched_pass_order.at(0)[2] == 2);
+    CHECK(batched_pass_order.at(0)[3] == 3);
+    CHECK(batched_pass_order.at(1)[0] == 4);
+    CHECK(batched_pass_order.at(1)[1] == 5);
+    CHECK(batched_pass_order.at(1)[2] == 6);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("dmyA"), StrId("dmyC")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("dmyB"), StrId("dmyD")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("dmyE")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer"), StrId("dmyF")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("dmyG"), StrId("dmyH")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("dmyI")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    std::tie(batch_order, batched_pass_order) = CorrectConsumerProducerInSameBatchDifferentQueue(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(batch_order.size() == 1);
+    CHECK(batch_order[0] == 0);
+    CHECK(batched_pass_order.at(0).size() == 7);
+    CHECK(batched_pass_order.at(0)[0] == 0);
+    CHECK(batched_pass_order.at(0)[1] == 1);
+    CHECK(batched_pass_order.at(0)[2] == 2);
+    CHECK(batched_pass_order.at(0)[3] == 3);
+    CHECK(batched_pass_order.at(0)[4] == 4);
+    CHECK(batched_pass_order.at(0)[5] == 5);
+    CHECK(batched_pass_order.at(0)[6] == 6);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("dmyA"), StrId("dmyC")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("dmyB"), StrId("dmyD")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("dmyE")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer"), StrId("dmyF")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer"), StrId("dmyF")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("dmyG"), StrId("dmyH")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("dmyI")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    std::tie(batch_order, batched_pass_order) = CorrectConsumerProducerInSameBatchDifferentQueue(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(batch_order.size() == 1);
+    CHECK(batched_pass_order.at(0).size() == 8);
+    CHECK(batched_pass_order.at(0)[0] == 0);
+    CHECK(batched_pass_order.at(0)[1] == 1);
+    CHECK(batched_pass_order.at(0)[2] == 2);
+    CHECK(batched_pass_order.at(0)[3] == 3);
+    CHECK(batched_pass_order.at(0)[4] == 4);
+    CHECK(batched_pass_order.at(0)[5] == 5);
+    CHECK(batched_pass_order.at(0)[6] == 6);
+    CHECK(batched_pass_order.at(0)[7] == 7);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("dmyA"), StrId("dmyC")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("dmyB"), StrId("dmyD")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("dmyE")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer"), StrId("dmyF")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer"), StrId("dmyF")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("dmyG"), StrId("dmyH")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("dmyI")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer"), StrId("dmyF")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    std::tie(batch_order, batched_pass_order) = CorrectConsumerProducerInSameBatchDifferentQueue(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(batch_order.size() == 1);
+    CHECK(batched_pass_order.at(0).size() == 8);
+    CHECK(batched_pass_order.at(0)[0] == 0);
+    CHECK(batched_pass_order.at(0)[1] == 1);
+    CHECK(batched_pass_order.at(0)[2] == 2);
+    CHECK(batched_pass_order.at(0)[3] == 3);
+    CHECK(batched_pass_order.at(0)[4] == 4);
+    CHECK(batched_pass_order.at(0)[5] == 5);
+    CHECK(batched_pass_order.at(0)[6] == 6);
+    CHECK(batched_pass_order.at(0)[7] == 7);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("subbuffer"), StrId("dmyC")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("dmyB"), StrId("dmyD")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("dbuffer"), StrId("cbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("cbuffer")}}, {ResourceStateType::kUavReadWrite, {StrId("mainbuffer"), StrId("dbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("subbuffer"), StrId("cbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer"), StrId("dmyF")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("dmyG"), StrId("dmyH")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("dmyI")}}, {ResourceStateType::kUavReadWrite, {StrId("cbuffer")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    std::tie(batch_order, batched_pass_order) = CorrectConsumerProducerInSameBatchDifferentQueue(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(batch_order.size() == 2);
+    CHECK(batch_order[0] == 0);
+    CHECK(batch_order[1] == 1);
+    CHECK(batched_pass_order.at(0).size() == 4);
+    CHECK(batched_pass_order.at(1).size() == 4);
+    CHECK(batched_pass_order.at(0)[0] == 0);
+    CHECK(batched_pass_order.at(0)[1] == 1);
+    CHECK(batched_pass_order.at(0)[2] == 2);
+    CHECK(batched_pass_order.at(0)[3] == 3);
+    CHECK(batched_pass_order.at(1)[0] == 4);
+    CHECK(batched_pass_order.at(1)[1] == 5);
+    CHECK(batched_pass_order.at(1)[2] == 6);
+    CHECK(batched_pass_order.at(1)[3] == 7);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("subbuffer"), StrId("dmyC")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("dmyB"), StrId("dmyD")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("dbuffer"), StrId("cbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("cbuffer")}}, {ResourceStateType::kUavReadWrite, {StrId("mainbuffer"), StrId("dbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("subbuffer"), StrId("cbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer"), StrId("dmyF")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("dmyG"), StrId("dmyH")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("dmyI")}}, {ResourceStateType::kUavReadWrite, {StrId("cbuffer")}}}},
+        }},
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("subbuffer"), StrId("dmyC")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("dmyB"), StrId("dmyD")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("dbuffer"), StrId("cbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("cbuffer")}}, {ResourceStateType::kUavReadWrite, {StrId("mainbuffer"), StrId("dbuffer")}}}},
+        }},
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("subbuffer"), StrId("dmyC")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("dmyB"), StrId("dmyD")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("dbuffer"), StrId("cbuffer")}}}},
+        }},
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    SUBCASE("sequential id") {
+      std::tie(batch_order, batched_pass_order) = CorrectConsumerProducerInSameBatchDifferentQueue(std::move(batch_order), std::move(batched_pass_order), pass_list);
+      CHECK(batch_order.size() == 4);
+      CHECK(batch_order[0] == 0);
+      CHECK(batch_order[1] == 3);
+      CHECK(batch_order[2] == 1);
+      CHECK(batch_order[3] == 2);
+      CHECK(batched_pass_order.at(0).size() == 4);
+      CHECK(batched_pass_order.at(3).size() == 4);
+      CHECK(batched_pass_order.at(1).size() == 4);
+      CHECK(batched_pass_order.at(2).size() == 3);
+      CHECK(batched_pass_order.at(0)[0] == 0);
+      CHECK(batched_pass_order.at(0)[1] == 1);
+      CHECK(batched_pass_order.at(0)[2] == 2);
+      CHECK(batched_pass_order.at(0)[3] == 3);
+      CHECK(batched_pass_order.at(3)[0] == 4);
+      CHECK(batched_pass_order.at(3)[1] == 5);
+      CHECK(batched_pass_order.at(3)[2] == 6);
+      CHECK(batched_pass_order.at(3)[3] == 7);
+      CHECK(batched_pass_order.at(1)[0] == 8);
+      CHECK(batched_pass_order.at(1)[1] == 9);
+      CHECK(batched_pass_order.at(1)[2] == 10);
+      CHECK(batched_pass_order.at(1)[3] == 11);
+      CHECK(batched_pass_order.at(2)[0] == 12);
+      CHECK(batched_pass_order.at(2)[1] == 13);
+      CHECK(batched_pass_order.at(2)[2] == 14);
+    }
+    SUBCASE("non-sequential id") {
+      batch_order.push_back(10);
+      batch_order.push_back(9);
+      batched_pass_order[10] = {};
+      batched_pass_order[9] = {};
+      std::tie(batch_order, batched_pass_order) = CorrectConsumerProducerInSameBatchDifferentQueue(std::move(batch_order), std::move(batched_pass_order), pass_list);
+      CHECK(batch_order.size() == 6);
+      CHECK(batch_order[0] == 0);
+      CHECK(batch_order[1] == 11);
+      CHECK(batch_order[2] == 1);
+      CHECK(batch_order[3] == 2);
+      CHECK(batch_order[4] == 10);
+      CHECK(batch_order[5] == 9);
+      CHECK(batched_pass_order.at(0).size() == 4);
+      CHECK(batched_pass_order.at(11).size() == 4);
+      CHECK(batched_pass_order.at(1).size() == 4);
+      CHECK(batched_pass_order.at(2).size() == 3);
+      CHECK(batched_pass_order.at(9).empty());
+      CHECK(batched_pass_order.at(10).empty());
+      CHECK(batched_pass_order.at(0)[0] == 0);
+      CHECK(batched_pass_order.at(0)[1] == 1);
+      CHECK(batched_pass_order.at(0)[2] == 2);
+      CHECK(batched_pass_order.at(0)[3] == 3);
+      CHECK(batched_pass_order.at(11)[0] == 4);
+      CHECK(batched_pass_order.at(11)[1] == 5);
+      CHECK(batched_pass_order.at(11)[2] == 6);
+      CHECK(batched_pass_order.at(11)[3] == 7);
+      CHECK(batched_pass_order.at(1)[0] == 8);
+      CHECK(batched_pass_order.at(1)[1] == 9);
+      CHECK(batched_pass_order.at(1)[2] == 10);
+      CHECK(batched_pass_order.at(1)[3] == 11);
+      CHECK(batched_pass_order.at(2)[0] == 12);
+      CHECK(batched_pass_order.at(2)[1] == 13);
+      CHECK(batched_pass_order.at(2)[2] == 14);
+    }
+  }
 }
 TEST_CASE("execute command list") {
   const uint32_t buffer_num = 2;
