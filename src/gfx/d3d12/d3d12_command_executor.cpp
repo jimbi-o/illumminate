@@ -183,24 +183,21 @@ auto CorrectConsumerProducerInSameBatchDifferentQueue(std::vector<BatchId>&& bat
   if (batch_dividing_pass.empty()) {
     return std::make_tuple(batch_order, batched_pass_order);
   }
+  // divide batches
   batch_order.reserve(batch_order.size() + batch_dividing_pass.size());
   batched_pass_order.reserve(batched_pass_order.size() + batch_dividing_pass.size());
-  // divide batches
-  for (auto new_batch_id = *std::max_element(batch_order.begin(), batch_order.end()); auto& pass_id : batch_dividing_pass) {
-    for (auto batch_it = batch_order.begin(); batch_it != batch_order.end(); batch_it++) {
-      bool pass_found = false;
-      auto& pass_id_list = batched_pass_order.at(*batch_it);
+  for (auto used_batch_id = *std::max_element(batch_order.begin(), batch_order.end()); auto& pass_id : batch_dividing_pass) {
+    for (auto& [batch_id, pass_id_list] : batched_pass_order) {
       if (auto batch_dividing_head_pass_it = std::find(pass_id_list.begin(), pass_id_list.end(), pass_id); batch_dividing_head_pass_it != pass_id_list.end()) {
-        pass_found = true;
-        new_batch_id++;
-        auto [it, result] = batched_pass_order.insert({new_batch_id, {}});
+        used_batch_id++;
+        auto [it, result] = batched_pass_order.insert({used_batch_id, {}});
         it->second.resize(static_cast<size_t>(pass_id_list.end() - batch_dividing_head_pass_it));
         std::move(batch_dividing_head_pass_it, pass_id_list.end(), it->second.begin());
         pass_id_list.erase(batch_dividing_head_pass_it, pass_id_list.end());
-        batch_order.insert(batch_it + 1, new_batch_id);
+        auto batch_it = std::find(batch_order.begin(), batch_order.end(), batch_id);
+        batch_order.insert(batch_it + 1, used_batch_id);
         break;
       }
-      if (pass_found) break;
     }
   }
   return std::make_tuple(batch_order, batched_pass_order);
