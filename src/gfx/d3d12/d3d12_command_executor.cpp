@@ -1,4 +1,5 @@
 #include "d3d12_minimal_for_cpp.h"
+#include <optional>
 #include <ranges>
 // TODO move to upper layer directory.
 namespace illuminate::gfx {
@@ -104,11 +105,6 @@ auto ConfigureBatchedPassList(RenderGraphConfig<RenderFunction>&& config) {
   return std::make_tuple(batch_order, batched_pass_order, pass_list);
 }
 template <typename RenderFunction>
-auto CorrectConsumerProducerInSameBatchDifferentQueue(std::vector<BatchId>&& batch_order, std::unordered_map<BatchId, std::vector<PassId>>&& batched_pass_order, const std::unordered_map<PassId, RenderGraphPass<RenderFunction>>& pass_list) {
-  // TODO
-  return std::make_tuple(batch_order, batched_pass_order);
-}
-template <typename RenderFunction>
 auto GetPassInputResourceList(const RenderGraphPass<RenderFunction>& pass) {
   std::vector<StrId> input_resource_names;
   for (auto& [type, vec] : pass.resources) {
@@ -117,6 +113,97 @@ auto GetPassInputResourceList(const RenderGraphPass<RenderFunction>& pass) {
     input_resource_names.insert(input_resource_names.end(), vec.begin(), vec.end());
   }
   return input_resource_names;
+}
+template <typename RenderFunction>
+auto GetPassOutputResourceList(const RenderGraphPass<RenderFunction>& pass) {
+  std::vector<StrId> output_resource_names;
+  for (auto& [type, vec] : pass.resources) {
+    if (!IsResourceWritable(type)) continue;
+    output_resource_names.reserve(output_resource_names.size() + vec.size());
+    output_resource_names.insert(output_resource_names.end(), vec.begin(), vec.end());
+  }
+  return output_resource_names;
+}
+template <typename RenderFunction>
+auto CorrectConsumerProducerInSameBatchDifferentQueue(std::vector<BatchId>&& batch_order_src, std::unordered_map<BatchId, std::vector<PassId>>&& batched_pass_order_src, const std::unordered_map<PassId, RenderGraphPass<RenderFunction>>& pass_list) {
+  auto batch_order = std::move(batch_order_src);
+  auto batched_pass_order = std::move(batched_pass_order_src);
+  using ReadWriteFlag = uint32_t;
+  struct ResourceInfoForDividingBatches {
+    BatchId batch_id;
+    PassId pass_id;
+    CommandQueueType command_queue_type;
+    ReadWriteFlag flag;
+  };
+  std::unordered_map<StrId, std::vector<ResourceInfoForDividingBatches>> resource_read_write_history;
+  const ReadWriteFlag read = 1, write = 2;
+  // make resource read/write history
+  for (auto& batch_id : batch_order) {
+    auto& pass_id_list = batched_pass_order.at(batch_id);
+    for (auto& pass_id : pass_id_list) {
+      auto& pass = pass_list.at(pass_id);
+      for (auto& [type, vec] : pass.resources) {
+        if (IsResourceReadable(type)) {
+          for (auto& resource : vec) {
+            if (!resource_read_write_history.contains(resource)) {
+              resource_read_write_history[resource] = {};
+            }
+            resource_read_write_history.at(resource).push_back({batch_id, pass_id, pass.command_queue_type, read});
+          }
+        }
+        if (IsResourceWritable(type)) {
+          for (auto& resource : vec) {
+            if (!resource_read_write_history.contains(resource)) {
+              resource_read_write_history[resource] = {};
+            }
+            resource_read_write_history.at(resource).push_back({batch_id, pass_id, pass.command_queue_type, write});
+          }
+        }
+      }
+    }
+  }
+  // determine batch dividing passes
+  std::unordered_set<PassId> batch_dividing_pass;
+  for (auto& [resource_id, resource_history] : resource_read_write_history) {
+    std::optional<BatchId> resource_created_batch;
+    std::unordered_set<CommandQueueType> resource_touched_queue;
+    for (auto& resource_info : resource_history) {
+      if (resource_created_batch) {
+        if (resource_info.flag == read && resource_info.batch_id == resource_created_batch && !resource_touched_queue.contains(resource_info.command_queue_type)) {
+          batch_dividing_pass.insert(resource_info.pass_id);
+        }
+      } else {
+        if (resource_info.flag == write) {
+          resource_created_batch = resource_info.batch_id;
+        }
+      }
+      resource_touched_queue.insert(resource_info.command_queue_type);
+    }
+  }
+  if (batch_dividing_pass.empty()) {
+    return std::make_tuple(batch_order, batched_pass_order);
+  }
+  batch_order.reserve(batch_order.size() + batch_dividing_pass.size());
+  batched_pass_order.reserve(batched_pass_order.size() + batch_dividing_pass.size());
+  // divide batches
+  for (auto new_batch_id = *std::max_element(batch_order.begin(), batch_order.end()); auto& pass_id : batch_dividing_pass) {
+    for (auto batch_it = batch_order.begin(); batch_it != batch_order.end(); batch_it++) {
+      bool pass_found = false;
+      auto& pass_id_list = batched_pass_order.at(*batch_it);
+      if (auto batch_dividing_head_pass_it = std::find(pass_id_list.begin(), pass_id_list.end(), pass_id); batch_dividing_head_pass_it != pass_id_list.end()) {
+        pass_found = true;
+        new_batch_id++;
+        auto [it, result] = batched_pass_order.insert({new_batch_id, {}});
+        it->second.resize(static_cast<size_t>(pass_id_list.end() - batch_dividing_head_pass_it));
+        std::move(batch_dividing_head_pass_it, pass_id_list.end(), it->second.begin());
+        pass_id_list.erase(batch_dividing_head_pass_it, pass_id_list.end());
+        batch_order.insert(batch_it + 1, new_batch_id);
+        break;
+      }
+      if (pass_found) break;
+    }
+  }
+  return std::make_tuple(batch_order, batched_pass_order);
 }
 template <typename InnerLoopFunction>
 auto IterateBatchedPassListBackward(const std::vector<BatchId>& batch_order, const std::unordered_map<BatchId, std::vector<PassId>>& batched_pass_order, std::vector<BatchId>::const_reverse_iterator batch_it_begin, std::vector<PassId>::const_reverse_iterator pass_it_begin, InnerLoopFunction&& inner_loop_func) {
@@ -1032,13 +1119,11 @@ TEST_CASE("validate render graph config") {
     };
     auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
     std::tie(batch_order, batched_pass_order) = CorrectConsumerProducerInSameBatchDifferentQueue(std::move(batch_order), std::move(batched_pass_order), pass_list);
-    CHECK(batch_order.size() == 2);
+    CHECK(batch_order.size() == 1);
     CHECK(batch_order[0] == 0);
-    CHECK(batch_order[1] == 1);
-    CHECK(batched_pass_order.at(0).size() == 1);
-    CHECK(batched_pass_order.at(1).size() == 1);
+    CHECK(batched_pass_order.at(0).size() == 2);
     CHECK(batched_pass_order.at(0)[0] == 0);
-    CHECK(batched_pass_order.at(1)[0] == 1);
+    CHECK(batched_pass_order.at(0)[1] == 1);
   }
   {
     RenderGraphConfig<uint32_t> config = {{
@@ -1212,7 +1297,7 @@ TEST_CASE("validate render graph config") {
     auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
     std::tie(batch_order, batched_pass_order) = CorrectConsumerProducerInSameBatchDifferentQueue(std::move(batch_order), std::move(batched_pass_order), pass_list);
     CHECK(batch_order.size() == 1);
-    CHECK(batched_pass_order.at(0).size() == 8);
+    CHECK(batched_pass_order.at(0).size() == 10);
     CHECK(batched_pass_order.at(0)[0] == 0);
     CHECK(batched_pass_order.at(0)[1] == 1);
     CHECK(batched_pass_order.at(0)[2] == 2);
@@ -1221,6 +1306,8 @@ TEST_CASE("validate render graph config") {
     CHECK(batched_pass_order.at(0)[5] == 5);
     CHECK(batched_pass_order.at(0)[6] == 6);
     CHECK(batched_pass_order.at(0)[7] == 7);
+    CHECK(batched_pass_order.at(0)[8] == 8);
+    CHECK(batched_pass_order.at(0)[9] == 9);
   }
   {
     RenderGraphConfig<uint32_t> config = {{
