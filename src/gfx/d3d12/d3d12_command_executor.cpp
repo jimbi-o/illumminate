@@ -69,6 +69,7 @@ struct BarrierInfo {
 };
 using PassId = uint32_t;
 using BatchId = uint32_t;
+using ResourceId = uint32_t;
 template <typename RenderFunction>
 struct ParsedRenderGraph {
   std::vector<BatchId> batch_order;
@@ -259,6 +260,32 @@ auto CreateConsumerProducerPassAdjacancyList(const std::vector<BatchId>& batch_o
     }
   }
   return consumer_producer_pass_adjacancy_list;
+}
+template <typename RenderFunction>
+auto IdentifyPassResources(const std::vector<BatchId>& batch_order, const std::unordered_map<BatchId, std::vector<PassId>>& batched_pass_order, const std::unordered_map<PassId, RenderGraphPass<RenderFunction>>& pass_list) {
+  std::unordered_map<PassId, std::unordered_map<ResourceStateType, std::vector<ResourceId>>> pass_binded_resource_id_list;
+  ResourceId next_id = 0;
+  std::unordered_map<StrId, ResourceId> touched_resources;
+  for (auto& batch_id : batch_order) {
+    auto& pass_id_list = batched_pass_order.at(batch_id);
+    for (auto& pass_id : pass_id_list) {
+      auto& pass = pass_list.at(pass_id);
+      pass_binded_resource_id_list[pass_id].reserve(pass.resources.size());
+      for (auto& [resource_type, resources] : pass.resources) {
+        pass_binded_resource_id_list.at(pass_id)[resource_type].reserve(resources.size());
+        auto write_only = !IsResourceReadable(resource_type) && IsResourceWritable(resource_type);
+        for (auto& resource_name : resources) {
+          auto need_new_id = write_only || !touched_resources.contains(resource_name);
+          if (need_new_id) {
+            touched_resources[resource_name] = next_id;
+            next_id++;
+          }
+          pass_binded_resource_id_list.at(pass_id).at(resource_type).push_back(touched_resources.at(resource_name));
+        }
+      }
+    }
+  }
+  return pass_binded_resource_id_list;
 }
 template <typename RenderFunction>
 auto ParseRenderGraph(RenderGraphConfig<RenderFunction>&& render_graph_config) {
@@ -1424,6 +1451,127 @@ TEST_CASE("validate render graph config") {
       CHECK(batched_pass_order.at(2)[1] == 13);
       CHECK(batched_pass_order.at(2)[2] == 14);
     }
+  }
+}
+TEST_CASE("set id to resources") {
+  {
+    RenderGraphConfig<uint32_t> config;
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto resource_id_list = IdentifyPassResources(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(resource_id_list.empty());
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("A"), StrId("C")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kUavNewBuffer, {StrId("B"), StrId("D")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto resource_id_list = IdentifyPassResources(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(resource_id_list.size() == 2);
+    CHECK(resource_id_list.at(0).size() == 1);
+    CHECK(resource_id_list.at(0).contains(ResourceStateType::kRtvNewBuffer));
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer).size() == 2);
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer)[0] == 0);
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer)[1] == 1);
+    CHECK(resource_id_list.at(1).size() == 1);
+    CHECK(resource_id_list.at(1).contains(ResourceStateType::kUavNewBuffer));
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kUavNewBuffer).size() == 2);
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kUavNewBuffer)[0] == 2);
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kUavNewBuffer)[1] == 3);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("A"), StrId("B")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kUavNewBuffer, {StrId("A"), StrId("B")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto resource_id_list = IdentifyPassResources(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(resource_id_list.size() == 2);
+    CHECK(resource_id_list.at(0).size() == 1);
+    CHECK(resource_id_list.at(0).contains(ResourceStateType::kRtvNewBuffer));
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer).size() == 2);
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer)[0] == 0);
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer)[1] == 1);
+    CHECK(resource_id_list.at(1).size() == 1);
+    CHECK(resource_id_list.at(1).contains(ResourceStateType::kUavNewBuffer));
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kUavNewBuffer).size() == 2);
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kUavNewBuffer)[0] == 2);
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kUavNewBuffer)[1] == 3);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("A"), StrId("B")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("A"), StrId("B")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto resource_id_list = IdentifyPassResources(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(resource_id_list.size() == 2);
+    CHECK(resource_id_list.at(0).size() == 1);
+    CHECK(resource_id_list.at(0).contains(ResourceStateType::kRtvNewBuffer));
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer).size() == 2);
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer)[0] == 0);
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer)[1] == 1);
+    CHECK(resource_id_list.at(1).size() == 1);
+    CHECK(resource_id_list.at(1).contains(ResourceStateType::kRtvPrevResultReused));
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kRtvPrevResultReused).size() == 2);
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kRtvPrevResultReused)[0] == 0);
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kRtvPrevResultReused)[1] == 1);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("A"), StrId("B")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("A"), StrId("B")}}}},
+        }},
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("A"), StrId("B"), StrId("C")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kUavNewBuffer, {StrId("C"), StrId("D")}}, {ResourceStateType::kRtvNewBuffer, {StrId("E"), StrId("F")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kUavReadWrite, {StrId("B"), StrId("C")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto resource_id_list = IdentifyPassResources(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(resource_id_list.size() == 5);
+    CHECK(resource_id_list.at(0).size() == 1);
+    CHECK(resource_id_list.at(0).contains(ResourceStateType::kRtvNewBuffer));
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer).size() == 2);
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer)[0] == 0);
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer)[1] == 1);
+    CHECK(resource_id_list.at(1).size() == 1);
+    CHECK(resource_id_list.at(1).contains(ResourceStateType::kRtvPrevResultReused));
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kRtvPrevResultReused).size() == 2);
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kRtvPrevResultReused)[0] == 0);
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kRtvPrevResultReused)[1] == 1);
+    CHECK(resource_id_list.at(2).size() == 1);
+    CHECK(resource_id_list.at(2).contains(ResourceStateType::kRtvPrevResultReused));
+    CHECK(resource_id_list.at(2).at(ResourceStateType::kRtvPrevResultReused).size() == 3);
+    CHECK(resource_id_list.at(2).at(ResourceStateType::kRtvPrevResultReused)[0] == 0);
+    CHECK(resource_id_list.at(2).at(ResourceStateType::kRtvPrevResultReused)[1] == 1);
+    CHECK(resource_id_list.at(2).at(ResourceStateType::kRtvPrevResultReused)[2] == 2);
+    CHECK(resource_id_list.at(3).size() == 2);
+    CHECK(resource_id_list.at(3).contains(ResourceStateType::kUavNewBuffer));
+    CHECK(resource_id_list.at(3).at(ResourceStateType::kUavNewBuffer).size() == 2);
+    CHECK(resource_id_list.at(3).at(ResourceStateType::kUavNewBuffer)[0] == 3);
+    CHECK(resource_id_list.at(3).at(ResourceStateType::kUavNewBuffer)[1] == 4);
+    CHECK(resource_id_list.at(3).contains(ResourceStateType::kRtvNewBuffer));
+    CHECK(resource_id_list.at(3).at(ResourceStateType::kRtvNewBuffer).size() == 2);
+    CHECK(resource_id_list.at(3).at(ResourceStateType::kRtvNewBuffer)[0] == 5);
+    CHECK(resource_id_list.at(3).at(ResourceStateType::kRtvNewBuffer)[1] == 6);
+    CHECK(resource_id_list.at(4).size() == 1);
+    CHECK(resource_id_list.at(4).contains(ResourceStateType::kUavReadWrite));
+    CHECK(resource_id_list.at(4).at(ResourceStateType::kUavReadWrite).size() == 2);
+    CHECK(resource_id_list.at(4).at(ResourceStateType::kUavReadWrite)[0] == 1);
+    CHECK(resource_id_list.at(4).at(ResourceStateType::kUavReadWrite)[1] == 3);
   }
 }
 TEST_CASE("execute command list") {
