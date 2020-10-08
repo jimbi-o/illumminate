@@ -3,6 +3,7 @@
 #include <ranges>
 // TODO move to upper layer directory.
 namespace illuminate::gfx {
+enum AllowDisallow : uint8_t { kAllowed = 0, kDisallowed = 1, };
 enum class ResourceStateType : uint8_t {
   kSrv = 0,
   kRtvNewBuffer,
@@ -51,11 +52,13 @@ constexpr bool IsResourceWritable(const ResourceStateType type) {
       return false;
   }
 }
+using AsyncComputeAllowed = AllowDisallow;
 template <typename RenderFunction>
 struct RenderGraphPass {
   CommandQueueType command_queue_type;
   RenderFunction render_function;
   std::unordered_map<ResourceStateType, std::vector<StrId>> resources;
+  AsyncComputeAllowed async_compute_allowed;
 };
 template <typename RenderFunction>
 struct RenderGraphBatch {
@@ -289,6 +292,7 @@ auto IdentifyPassResources(const std::vector<BatchId>& batch_order, const std::u
 }
 template <typename RenderFunction>
 auto ParseRenderGraph(RenderGraphConfig<RenderFunction>&& render_graph_config) {
+  (void) render_graph_config;
   ParsedRenderGraph<RenderFunction> parsed_graph;
   // TODO
   return parsed_graph;
@@ -311,11 +315,15 @@ struct PhysicalResources {
 using RenderFunction = std::function<void(D3d12CommandList**, const PhysicalResources&, const uint32_t/*pass_id*/)>;
 using RenderGraphConfigD3d12 = RenderGraphConfig<RenderFunction>;
 static auto PreparePhysicalResource(const ParsedRenderGraph<RenderFunction>& render_graph) {
+  (void) render_graph;
   PhysicalResources physical_resources;
   // TODO
   return physical_resources;
 }
 static auto ExecuteResourceBarriers(D3d12CommandList* command_list, const std::vector<BarrierInfo>& barriers, const std::vector<ID3D12Resource*>& resources) {
+  (void) command_list;
+  (void) barriers;
+  (void) resources;
   // TODO
 }
 }
@@ -337,6 +345,10 @@ using CreateRenderGraphFunc = std::function<RenderGraphConfigD3d12()>;
 #include "d3d12_command_queue.h"
 #include "gfx/win32/win32_window.h"
 #include "d3d12_swapchain.h"
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-field-initializers"
+#endif
 TEST_CASE("batch-pass") {
   using namespace illuminate::gfx;
   using namespace illuminate::gfx::d3d12;
@@ -1529,13 +1541,256 @@ TEST_CASE("set id to resources") {
   {
     RenderGraphConfig<uint32_t> config = {{
         {{
-          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("A"), StrId("B")}}}},
-          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("A"), StrId("B")}}}},
+          // g-buffer
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("gbuf0-f1"), StrId("gbuf1-f1"), StrId("gbuf2-f1")}}, {ResourceStateType::kDsvReadOnly, {StrId("depth-f1")}}}},
+          // linear depth
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kSrv, {StrId("depth-f1")}}, {ResourceStateType::kUavNewBuffer, {StrId("lineardepth-f1")}}}, AsyncComputeAllowed::kAllowed},
+          // light clustering
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kSrv, {StrId("lineardepth-f1")}}, {ResourceStateType::kUavNewBuffer, {StrId("lightcluster-f1")}}}, AsyncComputeAllowed::kAllowed},
         }},
         {{
-          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("A"), StrId("B"), StrId("C")}}}},
-          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kUavNewBuffer, {StrId("C"), StrId("D")}}, {ResourceStateType::kRtvNewBuffer, {StrId("E"), StrId("F")}}}},
-          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kUavReadWrite, {StrId("B"), StrId("C")}}}},
+          // pre-z (next frame)
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kDsvNewBuffer, {StrId("depth-f0")}}}},
+          // shadow map (next frame)
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kDsvNewBuffer, {StrId("shadowmap-f0")}}}},
+          // deferred shadow
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kSrv, {StrId("shadowmap-f1")}}, {ResourceStateType::kUavNewBuffer, {StrId("shadowtex-f1")}}}, AsyncComputeAllowed::kAllowed},
+          // lighting
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kSrv, {StrId("gbuf0-f1"), StrId("gbuf1-f1"), StrId("gbuf2-f1"), StrId("lineardepth-f1"), StrId("shadowtex-f1"), StrId("lightcluster-f1")}}, {ResourceStateType::kUavNewBuffer, {StrId("mainbuffer-f1")}}}, AsyncComputeAllowed::kAllowed},
+          // transparent geometry
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer-f1")}}, {ResourceStateType::kDsvReadOnly, {StrId("depth-f1")}}}},
+          // post process
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kSrv, {StrId("mainbuffer-f1")}}, {ResourceStateType::kUavNewBuffer, {StrId("mainbuffer-f1")}}}, AsyncComputeAllowed::kAllowed},
+        }},
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto resource_id_list = IdentifyPassResources(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(resource_id_list.size() == 9);
+    // g-buffer
+    CHECK(resource_id_list.at(0).size() == 2);
+    CHECK(resource_id_list.at(0).contains(ResourceStateType::kRtvNewBuffer));
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer).size() == 3);
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer)[0] + 1 == resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer)[1]);
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer)[1] + 1 == resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer)[2]);
+    CHECK(resource_id_list.at(0).contains(ResourceStateType::kDsvReadOnly));
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kDsvReadOnly).size() == 1);
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kDsvReadOnly)[0] != resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer)[0]);
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kDsvReadOnly)[0] != resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer)[1]);
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kDsvReadOnly)[0] != resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer)[2]);
+    // linear depth
+    CHECK(resource_id_list.at(1).size() == 2);
+    CHECK(resource_id_list.at(1).contains(ResourceStateType::kSrv));
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kSrv).size() == 1);
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kSrv)[0] > resource_id_list.at(2).at(ResourceStateType::kDsvNewBuffer)[0]);
+    CHECK(resource_id_list.at(1).contains(ResourceStateType::kUavNewBuffer));
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kUavNewBuffer).size() == 1);
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kUavNewBuffer)[0] > resource_id_list.at(2).at(ResourceStateType::kDsvNewBuffer)[0]);
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kSrv)[0] != resource_id_list.at(1).at(ResourceStateType::kUavNewBuffer)[0]);
+    // light clustering
+    CHECK(resource_id_list.at(2).size() == 2);
+    CHECK(resource_id_list.at(2).contains(ResourceStateType::kSrv));
+    CHECK(resource_id_list.at(2).at(ResourceStateType::kSrv).size() == 1);
+    CHECK(resource_id_list.at(2).at(ResourceStateType::kSrv)[0] == resource_id_list.at(1).at(ResourceStateType::kUavNewBuffer)[0]);
+    CHECK(resource_id_list.at(2).contains(ResourceStateType::kUavNewBuffer));
+    CHECK(resource_id_list.at(2).at(ResourceStateType::kUavNewBuffer).size() == 1);
+    CHECK(resource_id_list.at(2).at(ResourceStateType::kUavNewBuffer)[0] > resource_id_list.at(2).at(ResourceStateType::kDsvNewBuffer)[0]);
+    CHECK(resource_id_list.at(2).at(ResourceStateType::kSrv)[0] != resource_id_list.at(2).at(ResourceStateType::kUavNewBuffer)[0]);
+    // pre-z
+    CHECK(resource_id_list.at(3).size() == 1);
+    CHECK(resource_id_list.at(3).contains(ResourceStateType::kDsvNewBuffer));
+    CHECK(resource_id_list.at(3).at(ResourceStateType::kDsvNewBuffer).size() == 1);
+    CHECK(resource_id_list.at(3).at(ResourceStateType::kDsvNewBuffer)[0] == 4);
+    // shadow map
+    CHECK(resource_id_list.at(4).size() == 1);
+    CHECK(resource_id_list.at(4).contains(ResourceStateType::kDsvNewBuffer));
+    CHECK(resource_id_list.at(4).at(ResourceStateType::kDsvNewBuffer).size() == 1);
+    CHECK(resource_id_list.at(4).at(ResourceStateType::kDsvNewBuffer)[0] == 5);
+    // deferred shadow
+    CHECK(resource_id_list.at(5).size() == 2);
+    CHECK(resource_id_list.at(5).contains(ResourceStateType::kSrv));
+    CHECK(resource_id_list.at(5).at(ResourceStateType::kSrv).size() == 1);
+    CHECK(resource_id_list.at(5).at(ResourceStateType::kSrv)[0] > resource_id_list.at(3).at(ResourceStateType::kDsvNewBuffer)[0]);
+    CHECK(resource_id_list.at(5).at(ResourceStateType::kSrv)[0] > resource_id_list.at(3).at(ResourceStateType::kUavNewBuffer)[0]);
+    CHECK(resource_id_list.at(5).contains(ResourceStateType::kUavNewBuffer));
+    CHECK(resource_id_list.at(5).at(ResourceStateType::kUavNewBuffer).size() == 1);
+    CHECK(resource_id_list.at(5).at(ResourceStateType::kUavNewBuffer)[0] > resource_id_list.at(3).at(ResourceStateType::kDsvNewBuffer)[0]);
+    CHECK(resource_id_list.at(5).at(ResourceStateType::kUavNewBuffer)[0] > resource_id_list.at(3).at(ResourceStateType::kUavNewBuffer)[0]);
+    CHECK(resource_id_list.at(5).at(ResourceStateType::kSrv)[0] != resource_id_list.at(5).at(ResourceStateType::kUavNewBuffer)[0]);
+    // lighting
+    CHECK(resource_id_list.at(6).size() == 2);
+    CHECK(resource_id_list.at(6).contains(ResourceStateType::kSrv));
+    CHECK(resource_id_list.at(6).at(ResourceStateType::kSrv).size() == 6);
+    CHECK(resource_id_list.at(6).at(ResourceStateType::kSrv)[0] == resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer)[0]);
+    CHECK(resource_id_list.at(6).at(ResourceStateType::kSrv)[1] == resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer)[1]);
+    CHECK(resource_id_list.at(6).at(ResourceStateType::kSrv)[2] == resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer)[2]);
+    CHECK(resource_id_list.at(6).at(ResourceStateType::kSrv)[3] == resource_id_list.at(0).at(ResourceStateType::kDsvReadOnly)[0]);
+    CHECK(resource_id_list.at(6).at(ResourceStateType::kSrv)[4] == resource_id_list.at(5).at(ResourceStateType::kUavNewBuffer)[0]);
+    CHECK(resource_id_list.at(6).at(ResourceStateType::kSrv)[5] == resource_id_list.at(2).at(ResourceStateType::kUavNewBuffer)[0]);
+    CHECK(resource_id_list.at(6).contains(ResourceStateType::kUavNewBuffer));
+    CHECK(resource_id_list.at(6).at(ResourceStateType::kUavNewBuffer).size() == 1);
+    CHECK(resource_id_list.at(6).at(ResourceStateType::kUavNewBuffer)[0] == resource_id_list.at(5).at(ResourceStateType::kUavNewBuffer)[0] + 1);
+    // transparent geometry
+    CHECK(resource_id_list.at(7).size() == 2);
+    CHECK(resource_id_list.at(7).contains(ResourceStateType::kRtvNewBuffer));
+    CHECK(resource_id_list.at(7).at(ResourceStateType::kRtvNewBuffer).size() == 1);
+    CHECK(resource_id_list.at(7).at(ResourceStateType::kRtvNewBuffer)[0] == resource_id_list.at(6).at(ResourceStateType::kUavNewBuffer)[0] + 1);
+    CHECK(resource_id_list.at(7).contains(ResourceStateType::kDsvReadOnly));
+    CHECK(resource_id_list.at(7).at(ResourceStateType::kDsvReadOnly).size() == 1);
+    CHECK(resource_id_list.at(7).at(ResourceStateType::kDsvReadOnly)[0] == resource_id_list.at(0).at(ResourceStateType::kDsvReadOnly)[0]);
+    // post process
+    CHECK(resource_id_list.at(8).size() == 2);
+    CHECK(resource_id_list.at(8).contains(ResourceStateType::kSrv));
+    CHECK(resource_id_list.at(8).at(ResourceStateType::kSrv).size() == 1);
+    CHECK(resource_id_list.at(8).at(ResourceStateType::kSrv)[0] == resource_id_list.at(7).at(ResourceStateType::kRtvNewBuffer)[0]);
+    CHECK(resource_id_list.at(8).contains(ResourceStateType::kUavNewBuffer));
+    CHECK(resource_id_list.at(8).at(ResourceStateType::kUavNewBuffer).size() == 1);
+    CHECK(resource_id_list.at(8).at(ResourceStateType::kUavNewBuffer)[0] == resource_id_list.at(7).at(ResourceStateType::kRtvNewBuffer)[0] + 1);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("mainbuffer")}}}, AsyncComputeAllowed::kAllowed},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}, AsyncComputeAllowed::kAllowed},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}, AsyncComputeAllowed::kDisallowed},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto resource_id_list = IdentifyPassResources(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(resource_id_list.size() == 7);
+    CHECK(resource_id_list.at(0).size() == 1);
+    CHECK(resource_id_list.at(0).contains(ResourceStateType::kRtvNewBuffer));
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer).size() == 1);
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer)[0] == 0);
+    CHECK(resource_id_list.at(1).size() == 1);
+    CHECK(resource_id_list.at(1).contains(ResourceStateType::kRtvPrevResultReused));
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kRtvPrevResultReused).size() == 1);
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kRtvPrevResultReused)[0] == 0);
+    CHECK(resource_id_list.at(2).size() == 1);
+    CHECK(resource_id_list.at(2).contains(ResourceStateType::kUavNewBuffer));
+    CHECK(resource_id_list.at(2).at(ResourceStateType::kUavNewBuffer).size() == 1);
+    CHECK(resource_id_list.at(2).at(ResourceStateType::kUavNewBuffer)[0] == 1);
+    CHECK(resource_id_list.at(3).size() == 1);
+    CHECK(resource_id_list.at(3).contains(ResourceStateType::kUavReadWrite));
+    CHECK(resource_id_list.at(3).at(ResourceStateType::kUavReadWrite).size() == 1);
+    CHECK(resource_id_list.at(3).at(ResourceStateType::kUavReadWrite)[0] == 1);
+    CHECK(resource_id_list.at(4).size() == 1);
+    CHECK(resource_id_list.at(4).contains(ResourceStateType::kRtvPrevResultReused));
+    CHECK(resource_id_list.at(4).at(ResourceStateType::kRtvPrevResultReused).size() == 1);
+    CHECK(resource_id_list.at(4).at(ResourceStateType::kRtvPrevResultReused)[0] == 0);
+    CHECK(resource_id_list.at(5).size() == 1);
+    CHECK(resource_id_list.at(5).contains(ResourceStateType::kUavReadWrite));
+    CHECK(resource_id_list.at(5).at(ResourceStateType::kUavReadWrite).size() == 1);
+    CHECK(resource_id_list.at(5).at(ResourceStateType::kUavReadWrite)[0] == 1);
+    CHECK(resource_id_list.at(6).size() == 1);
+    CHECK(resource_id_list.at(6).contains(ResourceStateType::kUavReadWrite));
+    CHECK(resource_id_list.at(6).at(ResourceStateType::kUavReadWrite).size() == 1);
+    CHECK(resource_id_list.at(6).at(ResourceStateType::kUavReadWrite)[0] == 0);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("mainbuffer")}}}, AsyncComputeAllowed::kAllowed},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}, AsyncComputeAllowed::kAllowed},
+        }},
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}, AsyncComputeAllowed::kAllowed},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}, AsyncComputeAllowed::kDisallowed},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto resource_id_list = IdentifyPassResources(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(resource_id_list.size() == 7);
+    CHECK(resource_id_list.at(0).size() == 1);
+    CHECK(resource_id_list.at(0).contains(ResourceStateType::kRtvNewBuffer));
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer).size() == 1);
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer)[0] == 0);
+    CHECK(resource_id_list.at(1).size() == 1);
+    CHECK(resource_id_list.at(1).contains(ResourceStateType::kRtvPrevResultReused));
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kRtvPrevResultReused).size() == 1);
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kRtvPrevResultReused)[0] == 0);
+    CHECK(resource_id_list.at(2).size() == 1);
+    CHECK(resource_id_list.at(2).contains(ResourceStateType::kUavNewBuffer));
+    CHECK(resource_id_list.at(2).at(ResourceStateType::kUavNewBuffer).size() == 1);
+    CHECK(resource_id_list.at(2).at(ResourceStateType::kUavNewBuffer)[0] == 1);
+    CHECK(resource_id_list.at(3).size() == 1);
+    CHECK(resource_id_list.at(3).contains(ResourceStateType::kUavReadWrite));
+    CHECK(resource_id_list.at(3).at(ResourceStateType::kUavReadWrite).size() == 1);
+    CHECK(resource_id_list.at(3).at(ResourceStateType::kUavReadWrite)[0] == 1);
+    CHECK(resource_id_list.at(4).size() == 1);
+    CHECK(resource_id_list.at(4).contains(ResourceStateType::kRtvPrevResultReused));
+    CHECK(resource_id_list.at(4).at(ResourceStateType::kRtvPrevResultReused).size() == 1);
+    CHECK(resource_id_list.at(4).at(ResourceStateType::kRtvPrevResultReused)[0] == 0);
+    CHECK(resource_id_list.at(5).size() == 1);
+    CHECK(resource_id_list.at(5).contains(ResourceStateType::kUavReadWrite));
+    CHECK(resource_id_list.at(5).at(ResourceStateType::kUavReadWrite).size() == 1);
+    CHECK(resource_id_list.at(5).at(ResourceStateType::kUavReadWrite)[0] == 0);
+    CHECK(resource_id_list.at(6).size() == 1);
+    CHECK(resource_id_list.at(6).contains(ResourceStateType::kUavReadWrite));
+    CHECK(resource_id_list.at(6).at(ResourceStateType::kUavReadWrite).size() == 1);
+    CHECK(resource_id_list.at(6).at(ResourceStateType::kUavReadWrite)[0] == 0);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}},
+        }},
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}},
+        }}
+      }
+    };
+    auto [batch_order, batched_pass_order, pass_list] = ConfigureBatchedPassList(std::move(config));
+    auto resource_id_list = IdentifyPassResources(std::move(batch_order), std::move(batched_pass_order), pass_list);
+    CHECK(resource_id_list.size() == 6);
+    CHECK(resource_id_list.at(0).size() == 1);
+    CHECK(resource_id_list.at(0).contains(ResourceStateType::kUavNewBuffer));
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kUavNewBuffer).size() == 1);
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kUavNewBuffer)[0] == 0);
+    CHECK(resource_id_list.at(1).size() == 1);
+    CHECK(resource_id_list.at(1).contains(ResourceStateType::kRtvNewBuffer));
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kRtvNewBuffer).size() == 1);
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kRtvNewBuffer)[0] == 1);
+    CHECK(resource_id_list.at(2).size() == 1);
+    CHECK(resource_id_list.at(2).contains(ResourceStateType::kRtvPrevResultReused));
+    CHECK(resource_id_list.at(2).at(ResourceStateType::kRtvPrevResultReused).size() == 1);
+    CHECK(resource_id_list.at(2).at(ResourceStateType::kRtvPrevResultReused)[0] == 1);
+    CHECK(resource_id_list.at(3).size() == 1);
+    CHECK(resource_id_list.at(3).contains(ResourceStateType::kUavReadWrite));
+    CHECK(resource_id_list.at(3).at(ResourceStateType::kUavReadWrite).size() == 1);
+    CHECK(resource_id_list.at(3).at(ResourceStateType::kUavReadWrite)[0] == 0);
+    CHECK(resource_id_list.at(4).size() == 1);
+    CHECK(resource_id_list.at(4).contains(ResourceStateType::kRtvPrevResultReused));
+    CHECK(resource_id_list.at(4).at(ResourceStateType::kRtvPrevResultReused).size() == 1);
+    CHECK(resource_id_list.at(4).at(ResourceStateType::kRtvPrevResultReused)[0] == 0);
+    CHECK(resource_id_list.at(5).size() == 1);
+    CHECK(resource_id_list.at(5).contains(ResourceStateType::kUavReadWrite));
+    CHECK(resource_id_list.at(5).at(ResourceStateType::kUavReadWrite).size() == 1);
+    CHECK(resource_id_list.at(5).at(ResourceStateType::kUavReadWrite)[0] == 0);
+  }
+  {
+    RenderGraphConfig<uint32_t> config = {{
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvNewBuffer, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}, AsyncComputeAllowed::kDisallowed},
+        }},
+        {{
+          {CommandQueueType::kGraphics, 1, {{ResourceStateType::kRtvPrevResultReused, {StrId("mainbuffer")}}}},
+          {CommandQueueType::kCompute, 1, {{ResourceStateType::kUavReadWrite, {StrId("mainbuffer")}}}, AsyncComputeAllowed::kAllowed},
         }}
       }
     };
@@ -1544,34 +1799,24 @@ TEST_CASE("set id to resources") {
     CHECK(resource_id_list.size() == 5);
     CHECK(resource_id_list.at(0).size() == 1);
     CHECK(resource_id_list.at(0).contains(ResourceStateType::kRtvNewBuffer));
-    CHECK(resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer).size() == 2);
+    CHECK(resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer).size() == 1);
     CHECK(resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer)[0] == 0);
-    CHECK(resource_id_list.at(0).at(ResourceStateType::kRtvNewBuffer)[1] == 1);
     CHECK(resource_id_list.at(1).size() == 1);
     CHECK(resource_id_list.at(1).contains(ResourceStateType::kRtvPrevResultReused));
-    CHECK(resource_id_list.at(1).at(ResourceStateType::kRtvPrevResultReused).size() == 2);
+    CHECK(resource_id_list.at(1).at(ResourceStateType::kRtvPrevResultReused).size() == 1);
     CHECK(resource_id_list.at(1).at(ResourceStateType::kRtvPrevResultReused)[0] == 0);
-    CHECK(resource_id_list.at(1).at(ResourceStateType::kRtvPrevResultReused)[1] == 1);
     CHECK(resource_id_list.at(2).size() == 1);
-    CHECK(resource_id_list.at(2).contains(ResourceStateType::kRtvPrevResultReused));
-    CHECK(resource_id_list.at(2).at(ResourceStateType::kRtvPrevResultReused).size() == 3);
-    CHECK(resource_id_list.at(2).at(ResourceStateType::kRtvPrevResultReused)[0] == 0);
-    CHECK(resource_id_list.at(2).at(ResourceStateType::kRtvPrevResultReused)[1] == 1);
-    CHECK(resource_id_list.at(2).at(ResourceStateType::kRtvPrevResultReused)[2] == 2);
-    CHECK(resource_id_list.at(3).size() == 2);
-    CHECK(resource_id_list.at(3).contains(ResourceStateType::kUavNewBuffer));
-    CHECK(resource_id_list.at(3).at(ResourceStateType::kUavNewBuffer).size() == 2);
-    CHECK(resource_id_list.at(3).at(ResourceStateType::kUavNewBuffer)[0] == 3);
-    CHECK(resource_id_list.at(3).at(ResourceStateType::kUavNewBuffer)[1] == 4);
-    CHECK(resource_id_list.at(3).contains(ResourceStateType::kRtvNewBuffer));
-    CHECK(resource_id_list.at(3).at(ResourceStateType::kRtvNewBuffer).size() == 2);
-    CHECK(resource_id_list.at(3).at(ResourceStateType::kRtvNewBuffer)[0] == 5);
-    CHECK(resource_id_list.at(3).at(ResourceStateType::kRtvNewBuffer)[1] == 6);
+    CHECK(resource_id_list.at(2).contains(ResourceStateType::kUavReadWrite));
+    CHECK(resource_id_list.at(2).at(ResourceStateType::kUavReadWrite).size() == 1);
+    CHECK(resource_id_list.at(2).at(ResourceStateType::kUavReadWrite)[0] == 0);
+    CHECK(resource_id_list.at(3).size() == 1);
+    CHECK(resource_id_list.at(3).contains(ResourceStateType::kRtvPrevResultReused));
+    CHECK(resource_id_list.at(3).at(ResourceStateType::kRtvPrevResultReused).size() == 1);
+    CHECK(resource_id_list.at(3).at(ResourceStateType::kRtvPrevResultReused)[0] == 0);
     CHECK(resource_id_list.at(4).size() == 1);
     CHECK(resource_id_list.at(4).contains(ResourceStateType::kUavReadWrite));
-    CHECK(resource_id_list.at(4).at(ResourceStateType::kUavReadWrite).size() == 2);
-    CHECK(resource_id_list.at(4).at(ResourceStateType::kUavReadWrite)[0] == 1);
-    CHECK(resource_id_list.at(4).at(ResourceStateType::kUavReadWrite)[1] == 3);
+    CHECK(resource_id_list.at(4).at(ResourceStateType::kUavReadWrite).size() == 1);
+    CHECK(resource_id_list.at(4).at(ResourceStateType::kUavReadWrite)[0] == 0);
   }
 }
 TEST_CASE("execute command list") {
@@ -1678,3 +1923,6 @@ TEST_CASE("execute command list") {
   device.Term();
   dxgi_core.Term();
 }
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
