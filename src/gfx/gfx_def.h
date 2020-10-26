@@ -1,7 +1,9 @@
 #ifndef ILLUMINATE_GFX_DEF_H
 #define ILLUMINATE_GFX_DEF_H
+#include <array>
 #include <cstdint>
 #include <unordered_set>
+#include <variant>
 namespace illuminate::gfx {
 enum class BufferFormat : uint8_t {
   kR8G8B8A8_Unorm,
@@ -27,13 +29,8 @@ template <typename T>
 struct Size2d {
   T x, y;
 };
-struct ClearValue {
-  struct DepthStencil { float depth; uint8_t stencil; };
-  union {
-    float color[4];
-    DepthStencil depth_stencil;
-  };
-};
+struct ClearValueDepthStencil { float depth; uint8_t stencil; uint8_t _dmy[3]; };
+using ClearValue = std::variant<std::array<float, 4>, ClearValueDepthStencil>;
 struct BufferDesc {
   BufferFormat format;
   BufferSizeType size_type;
@@ -49,11 +46,11 @@ constexpr Size2dUint GetPhysicalSize(const BufferDesc& desc, const Size2dUint& s
 }
 enum class CommandQueueType : uint8_t { kGraphics, kCompute, kTransfer, };
 static const CommandQueueType kCommandQueueTypeSet[]{CommandQueueType::kGraphics, CommandQueueType::kCompute, CommandQueueType::kTransfer};
-constexpr ClearValue GetClearValueDefaultRtv() {
-  return { .color = {0.0f, 0.0f, 0.0f, 1.0f} };
+constexpr auto GetClearValueDefaultRtv() {
+  return ClearValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f});
 }
-constexpr ClearValue GetClearValueDefaultDsv() {
-  return { .depth_stencil = {1.0f, 0} };
+constexpr auto GetClearValueDefaultDsv() {
+  return ClearValue(ClearValueDepthStencil{1.0f, 0, {}});
 }
 }
 #endif

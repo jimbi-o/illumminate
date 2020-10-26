@@ -44,7 +44,6 @@ if ("${CMAKE_VS_PLATFORM_TOOLSET}" STREQUAL "ClangCL")
 endif()
 if (BUILD_WITH_TEST)
   target_compile_definitions(illuminategfx PRIVATE BUILD_WITH_TEST)
-  target_link_libraries(illuminategfx PRIVATE doctest::doctest)
 else()
   target_compile_definitions(illuminategfx PRIVATE DOCTEST_CONFIG_DISABLE)
 endif()
@@ -59,8 +58,10 @@ target_include_directories(illuminategfx
   "../"
   "../../include/illuminate"
   "../../include/illuminate/gfx"
+  "${doctest_SOURCE_DIR}"
+  "${spdlog_SOURCE_DIR}/include"
 )
 
 target_sources(illuminategfx PRIVATE
-  "renderer.cpp"
+#  "renderer.cpp" # TODO remove file
 )

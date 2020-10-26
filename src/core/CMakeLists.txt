@@ -35,25 +35,24 @@ endif()
 
 target_compile_features(illuminatecore PUBLIC cxx_std_20)
 if (NOT MSVC)
-  target_compile_options(illuminatecore PRIVATE -msse4.2)
+  target_compile_options(illuminatecore PRIVATE "-msse4.2")
 endif()
 if (BUILD_WITH_TEST)
   target_compile_definitions(illuminatecore PRIVATE BUILD_WITH_TEST)
-  target_link_libraries(illuminatecore PRIVATE doctest::doctest)
 else()
   target_compile_definitions(illuminatecore PRIVATE DOCTEST_CONFIG_DISABLE)
 endif()
 
-target_link_libraries(illuminatecore PRIVATE spdlog)
-
 target_include_directories(illuminatecore
   PUBLIC
-  "../../../include"
+  "../../include"
   PRIVATE
   "."
   "../"
   "../../include/illuminate"
   "../../include/illuminate/core"
+  "${doctest_SOURCE_DIR}"
+  "${spdlog_SOURCE_DIR}/include"
 )
 
 target_sources(illuminatecore PRIVATE

@@ -25,11 +25,11 @@ TEST_CASE("strid") {
   std::unordered_map<StrId, uint32_t> map;
   map[StrId("c")] = 255;
   CHECK(map[StrId("c")] == 255);
-  CHECK(!IsContaining(map, StrId("d")));
+  CHECK(!map.contains(StrId("d")));
   std::unordered_set<StrId> set;
   set.insert(StrId("d"));
-  CHECK(IsContaining(set, StrId("d")));
-  CHECK(!IsContaining(set, StrId("d ")));
+  CHECK(set.contains(StrId("d")));
+  CHECK(!set.contains(StrId("d ")));
   auto sid_auto = StrId("b");
   CHECK(sid_auto);
 }

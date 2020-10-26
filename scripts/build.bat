@@ -1,0 +1,1 @@
+"C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvarsall.bat" x64 & "c:\program files (x86)\microsoft visual studio\2019\community\common7\ide\commonextensions\microsoft\cmake\CMake\bin\cmake.exe" --build %1

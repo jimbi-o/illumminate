@@ -2,6 +2,7 @@
 #define ILLUMINATE_CORE_STRID_H
 #include <cstdint>
 #include <functional>
+#include <string>
 #define STRID_DEBUG_STR_ENABLED
 using size_t = std::size_t;
 namespace illuminate::core {
@@ -30,6 +31,7 @@ class StrId final {
  private:
   StrHash hash_;
 #ifdef STRID_DEBUG_STR_ENABLED
+  [[maybe_unused]] uint32_t _dmy = 0;
   std::string str_;
 #endif
 };
