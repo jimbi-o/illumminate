@@ -6,11 +6,10 @@
 #include <variant>
 namespace illuminate::gfx {
 enum class BufferFormat : uint8_t {
-  kR8G8B8A8_Unorm,
+  kUnknown = 0,
+  kR8G8B8A8Unorm,
   kD24S8,
-  kRgbLinearSdrDefault = kR8G8B8A8_Unorm,
-  kDepthBufferDefault = kD24S8,
-  kUseSwapchainFormat,
+  kD32Float,
 };
 enum class BufferSizeType : uint8_t {
   kSwapchainRelative,
@@ -46,11 +45,17 @@ constexpr Size2dUint GetPhysicalSize(const BufferDesc& desc, const Size2dUint& s
 }
 enum class CommandQueueType : uint8_t { kGraphics, kCompute, kTransfer, };
 static const CommandQueueType kCommandQueueTypeSet[]{CommandQueueType::kGraphics, CommandQueueType::kCompute, CommandQueueType::kTransfer};
-constexpr auto GetClearValueDefaultRtv() {
+constexpr auto GetClearValueDefaultColorBuffer() {
   return ClearValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f});
 }
-constexpr auto GetClearValueDefaultDsv() {
+constexpr auto GetClearValueDefaultDepthBuffer() {
   return ClearValue(ClearValueDepthStencil{1.0f, 0, {}});
+}
+constexpr auto GetClearValueColorBuffer(const ClearValue& clear_value) {
+  return std::get<0>(clear_value);
+}
+constexpr auto GetClearValueDepthBuffer(const ClearValue& clear_value) {
+  return std::get<1>(clear_value);
 }
 }
 #endif

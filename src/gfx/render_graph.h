@@ -2,150 +2,64 @@
 #define ILLUMINATE_RENDER_GRAPH_H
 #include <cstdint>
 #include <optional>
+#include <memory_resource>
 #include <unordered_set>
 #include <unordered_map>
 #include <vector>
 #include "gfx_def.h"
 #include "core/strid.h"
 namespace illuminate::gfx {
-enum AllowDisallow : uint8_t { kAllowed = 0, kDisallowed = 1, };
-enum class ResourceStateType : uint8_t {
-  kSrv = 0,
-  kRtvNewBuffer,
-  kRtvPrevResultReused,
-  kDsvNewBuffer,
-  kDsvReadWrite,
-  kDsvReadOnly,
-  kUavNewBuffer,
-  kUavReadWrite,
-  kUavReadOnly,
-  kCopySrc,
-  kCopyDst,
-  // kUavToClear, // implement if needed
-};
-constexpr bool IsResourceReadable(const ResourceStateType type) {
-  switch (type) {
-    case ResourceStateType::kSrv:
-    case ResourceStateType::kRtvPrevResultReused:
-    case ResourceStateType::kDsvReadWrite:
-    case ResourceStateType::kDsvReadOnly:
-    case ResourceStateType::kUavReadWrite:
-    case ResourceStateType::kUavReadOnly:
-    case ResourceStateType::kCopySrc:
-      return true;
-    case ResourceStateType::kRtvNewBuffer:
-    case ResourceStateType::kDsvNewBuffer:
-    case ResourceStateType::kUavNewBuffer:
-    case ResourceStateType::kCopyDst:
-      return false;
-  }
-}
-constexpr bool IsResourceWritable(const ResourceStateType type) {
-  switch (type) {
-    case ResourceStateType::kRtvNewBuffer:
-    case ResourceStateType::kRtvPrevResultReused:
-    case ResourceStateType::kDsvNewBuffer:
-    case ResourceStateType::kDsvReadWrite:
-    case ResourceStateType::kUavNewBuffer:
-    case ResourceStateType::kUavReadWrite:
-    case ResourceStateType::kCopyDst:
-      return true;
-    case ResourceStateType::kSrv:
-    case ResourceStateType::kDsvReadOnly:
-    case ResourceStateType::kUavReadOnly:
-    case ResourceStateType::kCopySrc:
-      return false;
-  }
-}
-using AsyncComputeAllowed = AllowDisallow;
-template <typename RenderFunction>
-struct RenderGraphPass {
-  std::unordered_map<ResourceStateType, std::vector<StrId>> resources;
-  RenderFunction render_function;
-  CommandQueueType command_queue_type;
-  AsyncComputeAllowed async_compute_allowed;
-  [[maybe_unused]] uint8_t _dmy[2];
+enum BufferStateType : uint8_t { kCbv = 0, kSrv, kUav, kRtv, kDsv, kCopySrc, kCopyDst, };
+enum BufferLoadOpType : uint8_t { kDontCare = 0, kClear, kLoadWrite, kLoadReadOnly, };
+enum BufferDimensionType : uint8_t { kBuffer = 0, k1d, k1dArray, k2d, k2dArray, k3d, k3dArray, kCube, kCubeArray, };
+class BufferConfig {
+ public:
+  BufferConfig(StrId&& buffer_name, const BufferStateType state)
+      : name(std::move(buffer_name)), // TODO make constexpr
+        state_type(state),
+        load_op_type((state_type == BufferStateType::kSrv || state_type == BufferStateType::kCbv || state_type == BufferStateType::kCopySrc) ? BufferLoadOpType::kLoadReadOnly : (state_type == BufferStateType::kDsv ? BufferLoadOpType::kClear : BufferLoadOpType::kDontCare)),
+        format(state_type == BufferStateType::kDsv ? BufferFormat::kD32Float : (state_type == BufferStateType::kCbv ? BufferFormat::kUnknown : BufferFormat::kR8G8B8A8Unorm)),
+        size_type(BufferSizeType::kMainbufferRelative), width(1.0f), height(1.0f),
+        clear_value(state_type == BufferStateType::kDsv ? GetClearValueDefaultDepthBuffer() : GetClearValueDefaultColorBuffer()),
+        dimension_type(state_type == BufferStateType::kCbv ? BufferDimensionType::kBuffer : BufferDimensionType::k2d),
+        size_type_depth(BufferSizeType::kAbsolute),
+        index_to_render(0),
+        buffer_num_to_render(1),
+        depth(1.0f)
+  {}
+  constexpr BufferConfig& LoadOpType(const BufferLoadOpType op) { load_op_type = op; return *this; }
+  constexpr BufferConfig& Format(const BufferFormat f) { format = f; return *this; }
+  constexpr BufferConfig& Size(const BufferSizeType type, const float w, const float h) { size_type = type; width = w; height = h; return *this; }
+  constexpr BufferConfig& ClearValue(ClearValue&& c) { clear_value = std::move(c); return *this; }
+  constexpr BufferConfig& SizeDepth(const BufferSizeType type, const float d) { size_type_depth = type; depth = d; return *this; }
+  constexpr BufferConfig& Dimension(const BufferDimensionType type) { dimension_type = type; return *this; }
+  constexpr BufferConfig& RenderTargetIndex(const uint8_t index, const uint8_t num = 1) { index_to_render = index; buffer_num_to_render = num; return *this; }
+  StrId name;
+  BufferStateType  state_type;
+  BufferLoadOpType load_op_type;
+  BufferFormat     format;
+  BufferSizeType   size_type;
+  float            width;
+  float            height;
+  illuminate::gfx::ClearValue clear_value;
+  BufferDimensionType dimension_type;
+  BufferSizeType   size_type_depth;
+  uint8_t          index_to_render;
+  uint8_t          buffer_num_to_render;
+  float            depth;
 };
 template <typename RenderFunction>
-struct RenderGraphBatch {
-  std::vector<RenderGraphPass<RenderFunction>> pass;
+struct RenderPass {
+  StrId name;
+  std::pmr::vector<BufferConfig> buffer_list;
 };
 template <typename RenderFunction>
-struct RenderGraphConfig {
-  std::vector<RenderGraphBatch<RenderFunction>> batch;
-};
-struct BarrierInfo {
-};
-using PassId = uint32_t;
-using BatchId = uint32_t;
-using ResourceId = uint32_t;
+using RenderPassList = std::pmr::vector<RenderPass<RenderFunction>>;
+using BufferNameAliasList = std::unordered_map<StrId, StrId>;
+using BufferIdList = std::pmr::unordered_map<uint8_t, uint8_t>; // TODO
 template <typename RenderFunction>
-struct ParsedRenderGraph {
-  std::vector<BatchId> batch_order;
-  std::unordered_map<BatchId, std::vector<std::tuple<CommandQueueType, uint32_t>>> batch_command_list_num;
-  std::unordered_map<BatchId/*producer*/, std::unordered_set<CommandQueueType/*producer*/>> need_signal_queue_batch;
-  std::unordered_map<BatchId/*consumer*/, std::vector<std::tuple<CommandQueueType/*producer*/, BatchId/*producer*/, CommandQueueType/*consumer*/>>> batch_wait_queue_info;
-  std::unordered_map<BatchId, std::vector<PassId>> batched_pass_order;
-  std::unordered_map<PassId, CommandQueueType> pass_command_queue_type;
-  std::unordered_map<PassId, std::vector<BarrierInfo>> pre_pass_barriers;
-  std::unordered_map<PassId, uint32_t> pass_command_list_index;
-  std::unordered_map<PassId, RenderFunction> pass_render_function;
-  std::unordered_map<BatchId, std::unordered_map<CommandQueueType, std::vector<BarrierInfo>>> post_batch_barriers;
-  std::unordered_map<BatchId, std::unordered_map<CommandQueueType, uint32_t>> post_batch_barriers_command_list_index;
-  CommandQueueType frame_end_signal_queue;
-};
-template <typename RenderFunction>
-auto ConfigureBatchedPassList(RenderGraphConfig<RenderFunction>&& config) {
-  std::vector<BatchId> batch_order;
-  batch_order.reserve(batch_order.size());
-  std::unordered_map<BatchId, std::vector<PassId>> batched_pass_order;
-  batched_pass_order.reserve(batch_order.size());
-  std::unordered_map<PassId, RenderGraphPass<RenderFunction>> pass_list;
-  uint32_t pass_id = 0;
-  for (uint32_t batch_id = 0; auto&& batch : config.batch) {
-    batch_order.push_back(batch_id);
-    batched_pass_order[batch_id] = {};
-    for (auto&& pass : batch.pass) {
-      batched_pass_order.at(batch_id).push_back(pass_id);
-      pass_list[pass_id] = std::move(pass);
-      pass_id++;
-    }
-    batch_id++;
-  }
-  return std::make_tuple(batch_order, batched_pass_order, pass_list);
-}
-template <typename RenderFunction>
-auto IdentifyPassResources(const std::vector<BatchId>& batch_order, const std::unordered_map<BatchId, std::vector<PassId>>& batched_pass_order, const std::unordered_map<PassId, RenderGraphPass<RenderFunction>>& pass_list) {
-  std::unordered_map<PassId, std::unordered_map<ResourceStateType, std::vector<ResourceId>>> pass_binded_resource_id_list;
-  ResourceId next_id = 0;
-  std::unordered_map<StrId, ResourceId> touched_resources;
-  for (auto& batch_id : batch_order) {
-    auto& pass_id_list = batched_pass_order.at(batch_id);
-    for (auto& pass_id : pass_id_list) {
-      auto& pass = pass_list.at(pass_id);
-      pass_binded_resource_id_list[pass_id].reserve(pass.resources.size());
-      for (auto& [resource_type, resources] : pass.resources) {
-        pass_binded_resource_id_list.at(pass_id)[resource_type].reserve(resources.size());
-        auto write_only = !IsResourceReadable(resource_type) && IsResourceWritable(resource_type);
-        for (auto& resource_name : resources) {
-          auto need_new_id = write_only || !touched_resources.contains(resource_name);
-          if (need_new_id) {
-            touched_resources[resource_name] = next_id;
-            next_id++;
-          }
-          pass_binded_resource_id_list.at(pass_id).at(resource_type).push_back(touched_resources.at(resource_name));
-        }
-      }
-    }
-  }
-  return pass_binded_resource_id_list;
-}
-template <typename RenderFunction>
-auto ParseRenderGraph(RenderGraphConfig<RenderFunction>&& render_graph_config) {
-  (void) render_graph_config;
-  ParsedRenderGraph<RenderFunction> parsed_graph;
-  // TODO
-  return parsed_graph;
+auto CreateBufferIdList(const RenderPassList<RenderFunction>& render_pass_list, const BufferNameAliasList& alias, std::pmr::memory_resource* memory_resource) {
+  return BufferIdList{memory_resource};
 }
 }
 #endif
