@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <functional>
 #include <string>
-#define STRID_DEBUG_STR_ENABLED
 using size_t = std::size_t;
 namespace illuminate::core {
 using StrHash = uint32_t;
@@ -16,24 +15,14 @@ constexpr inline StrHash HornerHash(const StrHash prime, const char (&str)[N], c
 class StrId final {
  public:
   static const StrHash kHashPrime = 31;
-#ifndef STRID_DEBUG_STR_ENABLED
   template <size_t N>
   constexpr explicit StrId(const char (&str)[N]) : hash_(HornerHash(kHashPrime, str)) {}
   constexpr StrId() : hash_(0) {}
-#else
-  template <size_t N>
-  constexpr explicit StrId(const char (&str)[N]) : hash_(HornerHash(kHashPrime, str)), str_(str) {}
-  StrId() : hash_(0), str_() {}
-#endif
   constexpr operator uint32_t() const { return hash_; }
   constexpr bool operator==(const StrId& id) const { return hash_ == id.hash_; } // for unordered_map
   constexpr StrHash GetHash() const { return hash_; }
  private:
   StrHash hash_;
-#ifdef STRID_DEBUG_STR_ENABLED
-  [[maybe_unused]] uint32_t _dmy = 0;
-  std::string str_;
-#endif
 };
 }
 // for unordered_map

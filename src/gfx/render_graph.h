@@ -14,7 +14,7 @@ enum BufferLoadOpType : uint8_t { kDontCare = 0, kClear, kLoadWrite, kLoadReadOn
 enum BufferDimensionType : uint8_t { kBuffer = 0, k1d, k1dArray, k2d, k2dArray, k3d, k3dArray, kCube, kCubeArray, };
 class BufferConfig {
  public:
-  BufferConfig() // TODO make constexpr
+  constexpr BufferConfig()
       : state_type(BufferStateType::kCbv),
         load_op_type(BufferLoadOpType::kLoadReadOnly),
         format(BufferFormat::kUnknown),
@@ -26,8 +26,8 @@ class BufferConfig {
         buffer_num_to_render(1),
         depth(1.0f)
   {}
-  BufferConfig(StrId&& buffer_name, const BufferStateType state) // TODO make constexpr
-      : name(std::move(buffer_name)), // TODO make constexpr
+  constexpr BufferConfig(StrId&& buffer_name, const BufferStateType state)
+      : name(std::move(buffer_name)),
         state_type(state),
         load_op_type((state_type == BufferStateType::kSrv || state_type == BufferStateType::kCbv || state_type == BufferStateType::kCopySrc) ? BufferLoadOpType::kLoadReadOnly : (state_type == BufferStateType::kDsv ? BufferLoadOpType::kClear : BufferLoadOpType::kDontCare)),
         format(state_type == BufferStateType::kDsv ? BufferFormat::kD32Float : (state_type == BufferStateType::kCbv ? BufferFormat::kUnknown : BufferFormat::kR8G8B8A8Unorm)),
@@ -63,10 +63,10 @@ class BufferConfig {
 using BufferConfigList = std::pmr::vector<BufferConfig>;
 class RenderPass {
  public:
-  RenderPass() // TODO make constexpr
+  RenderPass()
       : mandatory_pass(false)
   {}
-  RenderPass(StrId&& buffer_name, BufferConfigList&& buffer_config_list) // TODO make constexpr
+  RenderPass(StrId&& buffer_name, BufferConfigList&& buffer_config_list)
       : name(std::move(buffer_name)),
         buffer_list(std::move(buffer_config_list)),
         mandatory_pass(false)
