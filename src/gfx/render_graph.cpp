@@ -1,4 +1,55 @@
 #include "render_graph.h"
+namespace illuminate::gfx {
+std::tuple<RenderPassIdMap, RenderPassOrder> FormatRenderPassList(RenderPassList&& render_pass_list, std::pmr::memory_resource* memory_resource) {
+  RenderPassIdMap render_pass_id_map{memory_resource};
+  render_pass_id_map.reserve(render_pass_list.size());
+  RenderPassOrder render_pass_order{memory_resource};
+  render_pass_order.reserve(render_pass_list.size());
+  for (auto&& pass : render_pass_list) {
+    render_pass_order.push_back(pass.name);
+    render_pass_id_map.insert({render_pass_order.back(), std::move(pass)});
+  }
+  return {render_pass_id_map, render_pass_order};
+}
+BufferIdList CreateBufferIdMap(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, std::pmr::memory_resource* memory_resource) {
+  BufferIdList buffer_id_list{memory_resource};
+  buffer_id_list.reserve(render_pass_order.size());
+  uint32_t new_id = 0;
+  std::pmr::unordered_map<StrId, uint32_t> known_buffer{memory_resource};
+  for (auto& pass_name : render_pass_order) {
+    auto& pass_buffer_ids = buffer_id_list.insert({pass_name, {}}).first->second;
+    auto& pass = render_pass_id_map.at(pass_name);
+    pass_buffer_ids.reserve(pass.buffer_list.size());
+    for (auto& buffer : pass.buffer_list) {
+      if (buffer.load_op_type == BufferLoadOpType::kDontCare || buffer.load_op_type == BufferLoadOpType::kClear || !known_buffer.contains(buffer.name)) {
+        pass_buffer_ids.push_back(new_id);
+        known_buffer.insert({buffer.name, new_id});
+        new_id++;
+      } else {
+        pass_buffer_ids.push_back(known_buffer.at(buffer.name));
+      }
+    }
+  }
+  return buffer_id_list;
+}
+BufferIdList ApplyBufferNameAlias(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, BufferIdList&& buffer_id_list, const BufferNameAliasList& alias_list, std::pmr::memory_resource* memory_resource) {
+  std::pmr::unordered_map<StrId, uint32_t> buffer_name_to_id(memory_resource);
+  for (auto& pass_name : render_pass_order) {
+    auto& pass = render_pass_id_map.at(pass_name);
+    for (uint32_t buffer_index = 0; auto& buffer : pass.buffer_list) {
+      for (auto& [buffer_name, alias_name] : alias_list) {
+        if (buffer_name == buffer.name) {
+          buffer_name_to_id[alias_name] = buffer_id_list.at(pass.name)[buffer_index];
+        } else if (alias_name == buffer.name) {
+          buffer_id_list.at(pass.name)[buffer_index] = buffer_name_to_id.at(alias_name);
+        }
+        buffer_index++;
+      }
+    }
+  }
+  return std::move(buffer_id_list);
+}
+}
 #include "minimal_for_cpp.h"
 namespace {
 using namespace illuminate;

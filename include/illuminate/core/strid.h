@@ -27,7 +27,7 @@ class StrId final {
   constexpr StrHash GetHash() const { return hash_; }
  private:
   template <size_t N>
-  constexpr static const char* RegisterHash(const StrHash hash, const char (&str)[N]) {
+  constexpr static const char* RegisterHash([[maybe_unused]] const StrHash hash, const char (&str)[N]) {
 #ifdef ENABLE_STRID_DEBUG_STR
     // TODO hash collision check
     if (debug_buffer_index + N + 1 >= 1024) debug_buffer_index = 0;
