@@ -37,7 +37,7 @@ inline auto CreateRenderPassLighting(std::pmr::memory_resource* memory_resource)
         BufferConfig(StrId("gbuffer0"), BufferStateType::kSrv),
         BufferConfig(StrId("gbuffer1"), BufferStateType::kSrv),
         BufferConfig(StrId("gbuffer2"), BufferStateType::kSrv),
-        BufferConfig(StrId("shadow-tex"), BufferStateType::kSrv),
+        BufferConfig(StrId("shadowtex"), BufferStateType::kSrv),
         BufferConfig(StrId("mainbuffer"), BufferStateType::kUav),
       },
       memory_resource
@@ -73,7 +73,7 @@ inline auto CreateRenderPassDeferredShadowHard(std::pmr::memory_resource* memory
     {
       {
         BufferConfig(StrId("shadowmap"), BufferStateType::kSrv),
-        BufferConfig(StrId("shadow-tex-hard"), BufferStateType::kRtv),
+        BufferConfig(StrId("shadowtex-hard"), BufferStateType::kRtv),
       },
       memory_resource
     }
@@ -85,7 +85,7 @@ inline auto CreateRenderPassDeferredShadowPcss(std::pmr::memory_resource* memory
     {
       {
         BufferConfig(StrId("shadowmap"), BufferStateType::kSrv),
-        BufferConfig(StrId("shadow-tex-pcss"), BufferStateType::kRtv),
+        BufferConfig(StrId("shadowtex-pcss"), BufferStateType::kRtv),
       },
       memory_resource
     }
@@ -395,7 +395,7 @@ TEST_CASE("BufferConfig") {
   CHECK(func_check.buffer_num_to_render == 34);
   CHECK(func_check.depth == 0.123f);
 }
-TEST_CASE("CreateBufferIdList") {
+TEST_CASE("CreateRenderPassListSimple") {
   using namespace illuminate;
   using namespace illuminate::gfx;
   std::pmr::monotonic_buffer_resource memory_resource{1024}; // TODO implement original allocator.
@@ -409,7 +409,7 @@ TEST_CASE("CreateBufferIdList") {
   CHECK(render_pass_order[0] == StrId("gbuffer"));
   CHECK(render_pass_order[1] == StrId("lighting"));
   CHECK(render_pass_order[2] == StrId("postprocess"));
-  auto buffer_id_map = CreateBufferIdList(render_pass_id_map, render_pass_order, &memory_resource);
+  auto buffer_id_map = CreateBufferIdMap(render_pass_id_map, render_pass_order, &memory_resource);
   CHECK(buffer_id_map.size() == 3);
   CHECK(buffer_id_map[StrId("gbuffer")].size() == 4);
   CHECK(buffer_id_map[StrId("gbuffer")][0] == 0);
@@ -426,6 +426,101 @@ TEST_CASE("CreateBufferIdList") {
   CHECK(buffer_id_map[StrId("postprocess")].size() == 2);
   CHECK(buffer_id_map[StrId("postprocess")][0] == 5);
   CHECK(buffer_id_map[StrId("postprocess")][1] == 6);
+}
+TEST_CASE("CreateRenderPassListShadow") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  std::pmr::monotonic_buffer_resource memory_resource{1024}; // TODO implement original allocator.
+  auto render_pass_list = CreateRenderPassListShadow(&memory_resource);
+  auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), &memory_resource);
+  auto buffer_id_map = CreateBufferIdMap(render_pass_id_map, render_pass_order, &memory_resource);
+  CHECK(buffer_id_map.size() == 7);
+  CHECK(buffer_id_map[StrId("prez")].size() == 1);
+  CHECK(buffer_id_map[StrId("prez")][0] == 0);
+  CHECK(buffer_id_map[StrId("shadowmap")].size() == 1);
+  CHECK(buffer_id_map[StrId("shadowmap")][0] == 1);
+  CHECK(buffer_id_map[StrId("gbuffer")].size() == 4);
+  CHECK(buffer_id_map[StrId("gbuffer")][0] == 0);
+  CHECK(buffer_id_map[StrId("gbuffer")][1] == 2);
+  CHECK(buffer_id_map[StrId("gbuffer")][2] == 3);
+  CHECK(buffer_id_map[StrId("gbuffer")][3] == 4);
+  CHECK(buffer_id_map[StrId("deferredshadow-hard")].size() == 2);
+  CHECK(buffer_id_map[StrId("deferredshadow-hard")][0] == 1);
+  CHECK(buffer_id_map[StrId("deferredshadow-hard")][1] == 5);
+  CHECK(buffer_id_map[StrId("deferredshadow-pcss")].size() == 2);
+  CHECK(buffer_id_map[StrId("deferredshadow-pcss")][0] == 1);
+  CHECK(buffer_id_map[StrId("deferredshadow-pcss")][1] == 6);
+  CHECK(buffer_id_map[StrId("lighting")].size() == 6);
+  CHECK(buffer_id_map[StrId("lighting")][0] == 0);
+  CHECK(buffer_id_map[StrId("lighting")][1] == 2);
+  CHECK(buffer_id_map[StrId("lighting")][2] == 3);
+  CHECK(buffer_id_map[StrId("lighting")][3] == 4);
+  CHECK(buffer_id_map[StrId("lighting")][4] == 7);
+  CHECK(buffer_id_map[StrId("lighting")][5] == 8);
+  CHECK(buffer_id_map[StrId("postprocess")].size() == 2);
+  CHECK(buffer_id_map[StrId("postprocess")][0] == 8);
+  CHECK(buffer_id_map[StrId("postprocess")][1] == 9);
+  BufferNameAliasList buffer_name_alias_list{&memory_resource};
+  SUBCASE("shadow-hard") {
+    buffer_name_alias_list.insert({StrId("shadowtex-hard"), StrId("shadowtex")});
+    auto buffer_id_map_alias_applied = ApplyBufferNameAlias(render_pass_id_map, render_pass_order, std::move(buffer_id_map), buffer_name_alias_list, &memory_resource);
+    CHECK(buffer_id_map_alias_applied.size() == 7);
+    CHECK(buffer_id_map_alias_applied[StrId("prez")].size() == 1);
+    CHECK(buffer_id_map_alias_applied[StrId("prez")][0] == 0);
+    CHECK(buffer_id_map_alias_applied[StrId("shadowmap")].size() == 1);
+    CHECK(buffer_id_map_alias_applied[StrId("shadowmap")][0] == 1);
+    CHECK(buffer_id_map_alias_applied[StrId("gbuffer")].size() == 4);
+    CHECK(buffer_id_map_alias_applied[StrId("gbuffer")][0] == 0);
+    CHECK(buffer_id_map_alias_applied[StrId("gbuffer")][1] == 2);
+    CHECK(buffer_id_map_alias_applied[StrId("gbuffer")][2] == 3);
+    CHECK(buffer_id_map_alias_applied[StrId("gbuffer")][3] == 4);
+    CHECK(buffer_id_map_alias_applied[StrId("deferredshadow-hard")].size() == 2);
+    CHECK(buffer_id_map_alias_applied[StrId("deferredshadow-hard")][0] == 1);
+    CHECK(buffer_id_map_alias_applied[StrId("deferredshadow-hard")][1] == 5);
+    CHECK(buffer_id_map_alias_applied[StrId("deferredshadow-pcss")].size() == 2);
+    CHECK(buffer_id_map_alias_applied[StrId("deferredshadow-pcss")][0] == 1);
+    CHECK(buffer_id_map_alias_applied[StrId("deferredshadow-pcss")][1] == 6);
+    CHECK(buffer_id_map_alias_applied[StrId("lighting")].size() == 6);
+    CHECK(buffer_id_map_alias_applied[StrId("lighting")][0] == 0);
+    CHECK(buffer_id_map_alias_applied[StrId("lighting")][1] == 2);
+    CHECK(buffer_id_map_alias_applied[StrId("lighting")][2] == 3);
+    CHECK(buffer_id_map_alias_applied[StrId("lighting")][3] == 4);
+    CHECK(buffer_id_map_alias_applied[StrId("lighting")][4] == 5);
+    CHECK(buffer_id_map_alias_applied[StrId("lighting")][5] == 8);
+    CHECK(buffer_id_map_alias_applied[StrId("postprocess")].size() == 2);
+    CHECK(buffer_id_map_alias_applied[StrId("postprocess")][0] == 8);
+    CHECK(buffer_id_map_alias_applied[StrId("postprocess")][1] == 9);
+  }
+  SUBCASE("shadow-pcss") {
+    buffer_name_alias_list.insert({StrId("shadowtex-pcss"), StrId("shadowtex")});
+    auto buffer_id_map_alias_applied = ApplyBufferNameAlias(render_pass_id_map, render_pass_order, std::move(buffer_id_map), buffer_name_alias_list, &memory_resource);
+    CHECK(buffer_id_map_alias_applied.size() == 7);
+    CHECK(buffer_id_map_alias_applied[StrId("prez")].size() == 1);
+    CHECK(buffer_id_map_alias_applied[StrId("prez")][0] == 0);
+    CHECK(buffer_id_map_alias_applied[StrId("shadowmap")].size() == 1);
+    CHECK(buffer_id_map_alias_applied[StrId("shadowmap")][0] == 1);
+    CHECK(buffer_id_map_alias_applied[StrId("gbuffer")].size() == 4);
+    CHECK(buffer_id_map_alias_applied[StrId("gbuffer")][0] == 0);
+    CHECK(buffer_id_map_alias_applied[StrId("gbuffer")][1] == 2);
+    CHECK(buffer_id_map_alias_applied[StrId("gbuffer")][2] == 3);
+    CHECK(buffer_id_map_alias_applied[StrId("gbuffer")][3] == 4);
+    CHECK(buffer_id_map_alias_applied[StrId("deferredshadow-hard")].size() == 2);
+    CHECK(buffer_id_map_alias_applied[StrId("deferredshadow-hard")][0] == 1);
+    CHECK(buffer_id_map_alias_applied[StrId("deferredshadow-hard")][1] == 5);
+    CHECK(buffer_id_map_alias_applied[StrId("deferredshadow-pcss")].size() == 2);
+    CHECK(buffer_id_map_alias_applied[StrId("deferredshadow-pcss")][0] == 1);
+    CHECK(buffer_id_map_alias_applied[StrId("deferredshadow-pcss")][1] == 6);
+    CHECK(buffer_id_map_alias_applied[StrId("lighting")].size() == 6);
+    CHECK(buffer_id_map_alias_applied[StrId("lighting")][0] == 0);
+    CHECK(buffer_id_map_alias_applied[StrId("lighting")][1] == 2);
+    CHECK(buffer_id_map_alias_applied[StrId("lighting")][2] == 3);
+    CHECK(buffer_id_map_alias_applied[StrId("lighting")][3] == 4);
+    CHECK(buffer_id_map_alias_applied[StrId("lighting")][4] == 6);
+    CHECK(buffer_id_map_alias_applied[StrId("lighting")][5] == 8);
+    CHECK(buffer_id_map_alias_applied[StrId("postprocess")].size() == 2);
+    CHECK(buffer_id_map_alias_applied[StrId("postprocess")][0] == 8);
+    CHECK(buffer_id_map_alias_applied[StrId("postprocess")][1] == 9);
+  }
 }
 // TODO check pass name dup.
 #ifdef __clang__
