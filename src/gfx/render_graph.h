@@ -11,6 +11,28 @@
 namespace illuminate::gfx {
 enum BufferStateType : uint8_t { kCbv = 0, kSrv, kUav, kRtv, kDsv, kCopySrc, kCopyDst, };
 enum BufferLoadOpType : uint8_t { kDontCare = 0, kClear, kLoadWrite, kLoadReadOnly, };
+constexpr bool IsOutputBuffer(const BufferStateType state_type, const BufferLoadOpType load_op_type) {
+  switch (state_type) {
+    case kCbv: return false;
+    case kSrv: return false;
+    case kUav: return (load_op_type == kLoadReadOnly) ? false : true;
+    case kRtv: return true;
+    case kDsv: return (load_op_type == kLoadReadOnly) ? false : true;
+    case kCopySrc: return false;
+    case kCopyDst: return true;
+  }
+}
+constexpr bool IsInitialValueUsed(const BufferStateType state_type, const BufferLoadOpType load_op_type) {
+  switch (state_type) {
+    case kCbv: return true;
+    case kSrv: return true;
+    case kUav: return (load_op_type == kDontCare || load_op_type == kClear) ? false : true;
+    case kRtv: return (load_op_type == kDontCare || load_op_type == kClear) ? false : true;
+    case kDsv: return (load_op_type == kDontCare || load_op_type == kClear) ? false : true;
+    case kCopySrc: return true;
+    case kCopyDst: return false;
+  }
+}
 enum BufferDimensionType : uint8_t { kBuffer = 0, k1d, k1dArray, k2d, k2dArray, k3d, k3dArray, kCube, kCubeArray, };
 class BufferConfig {
  public:
@@ -81,8 +103,9 @@ using RenderPassList = std::pmr::vector<RenderPass>;
 using RenderPassIdMap = std::pmr::unordered_map<StrId, RenderPass>;
 using RenderPassOrder = std::pmr::vector<StrId>;
 std::tuple<RenderPassIdMap, RenderPassOrder> FormatRenderPassList(RenderPassList&& render_pass_list, std::pmr::memory_resource* memory_resource);
-using BufferIdList = std::pmr::unordered_map<StrId, std::pmr::vector<uint32_t>>;
-BufferIdList CreateBufferIdMap(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, std::pmr::memory_resource* memory_resource);
+using BufferId = uint32_t;
+using BufferIdList = std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>;
+BufferIdList CreateBufferIdList(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, std::pmr::memory_resource* memory_resource);
 using BufferNameAliasList = std::pmr::unordered_map<StrId, StrId>;
 BufferIdList ApplyBufferNameAlias(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, BufferIdList&& buffer_id_list, const BufferNameAliasList& alias_list, std::pmr::memory_resource* memory_resource);
 }
