@@ -124,6 +124,10 @@ auto GetUsedRenderPassList(const RenderPassAdjacencyGraph& adjacency_graph, Mand
   }
   return used_pass;
 }
+auto CullUnusedRenderPass(RenderPassOrder&& render_pass_order, std::pmr::unordered_set<StrId>&& used_render_pass_list) {
+  std::erase_if(render_pass_order, [&used_render_pass_list](const StrId& pass_name) { return !used_render_pass_list.contains(pass_name); });
+  return std::move(render_pass_order);
+}
 }
 #include "minimal_for_cpp.h"
 namespace {
@@ -573,6 +577,10 @@ TEST_CASE("CreateRenderPassListSimple") {
   CHECK(used_render_pass_list.contains(StrId("gbuffer")));
   CHECK(used_render_pass_list.contains(StrId("lighting")));
   CHECK(used_render_pass_list.contains(StrId("postprocess")));
+  auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), std::move(used_render_pass_list));
+  CHECK(culled_render_pass_order[0] == StrId("gbuffer"));
+  CHECK(culled_render_pass_order[1] == StrId("lighting"));
+  CHECK(culled_render_pass_order[2] == StrId("postprocess"));
 }
 TEST_CASE("CreateRenderPassListShadow") {
   using namespace illuminate;
