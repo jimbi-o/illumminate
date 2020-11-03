@@ -898,4 +898,3 @@ TEST_CASE("CreateRenderPassListCombined") {
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
-// TODO all combined
