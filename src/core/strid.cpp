@@ -1,4 +1,4 @@
-#include "strid.h"
+#include "illuminate.h"
 #ifdef ENABLE_STRID_DEBUG_STR
 namespace illuminate::core {
 char StrId::debug_buffer[1024]{};
