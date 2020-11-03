@@ -121,6 +121,14 @@ RenderPassOrder CullUnusedRenderPass(RenderPassOrder&& render_pass_order, const 
   std::erase_if(render_pass_order, [&used_render_pass_list, &render_pass_id_map](const StrId& pass_name) { return !render_pass_id_map.at(pass_name).mandatory_pass && !used_render_pass_list.contains(pass_name); });
   return std::move(render_pass_order);
 }
+bool IsDuplicateRenderPassNameExists(const RenderPassList& list, std::pmr::memory_resource* memory_resource) {
+  std::pmr::unordered_set<StrId> names(memory_resource);
+  for (auto& pass : list) {
+    if (names.contains(pass.name)) return true;
+    names.insert(pass.name);
+  }
+  return false;
+}
 }
 #ifdef BUILD_WITH_TEST
 #include "minimal_for_cpp.h"
@@ -897,7 +905,15 @@ TEST_CASE("CreateRenderPassListCombined") {
     CHECK(culled_render_pass_order[7] == StrId("postprocess"));
   }
 }
-// TODO check pass name dup.
+TEST_CASE("RenderPassNameDupCheck") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, size_in_byte);
+  auto render_pass_list = CreateRenderPassListSimple(memory_resource.get());
+  CHECK(!IsDuplicateRenderPassNameExists(render_pass_list, memory_resource.get()));
+  render_pass_list.push_back(render_pass_list[0]);
+  CHECK(IsDuplicateRenderPassNameExists(render_pass_list, memory_resource.get()));
+}
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
