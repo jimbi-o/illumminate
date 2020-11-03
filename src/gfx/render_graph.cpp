@@ -122,8 +122,11 @@ RenderPassOrder CullUnusedRenderPass(RenderPassOrder&& render_pass_order, const 
   return std::move(render_pass_order);
 }
 }
+#ifdef BUILD_WITH_TEST
 #include "minimal_for_cpp.h"
 namespace {
+const uint32_t size_in_byte = 32 * 1024;
+std::byte buffer[size_in_byte]{};
 using namespace illuminate;
 using namespace illuminate::gfx;
 inline auto CreateRenderPassPrez(std::pmr::memory_resource* memory_resource) {
@@ -544,9 +547,9 @@ TEST_CASE("BufferConfig") {
 TEST_CASE("CreateRenderPassListSimple") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  std::pmr::monotonic_buffer_resource memory_resource{1024}; // TODO implement original allocator.
-  auto render_pass_list = CreateRenderPassListSimple(&memory_resource);
-  auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), &memory_resource);
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, size_in_byte);
+  auto render_pass_list = CreateRenderPassListSimple(memory_resource.get());
+  auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
   CHECK(render_pass_id_map.size() == 3);
   CHECK(render_pass_id_map[StrId("gbuffer")].name == StrId("gbuffer"));
   CHECK(render_pass_id_map[StrId("lighting")].name == StrId("lighting"));
@@ -555,7 +558,7 @@ TEST_CASE("CreateRenderPassListSimple") {
   CHECK(render_pass_order[0] == StrId("gbuffer"));
   CHECK(render_pass_order[1] == StrId("lighting"));
   CHECK(render_pass_order[2] == StrId("postprocess"));
-  auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, &memory_resource);
+  auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
   CHECK(buffer_id_list.size() == 3);
   CHECK(buffer_id_list[StrId("gbuffer")].size() == 4);
   CHECK(buffer_id_list[StrId("gbuffer")][0] == 0);
@@ -572,7 +575,7 @@ TEST_CASE("CreateRenderPassListSimple") {
   CHECK(buffer_id_list[StrId("postprocess")].size() == 2);
   CHECK(buffer_id_list[StrId("postprocess")][0] == 5);
   CHECK(buffer_id_list[StrId("postprocess")][1] == 6);
-  auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, &memory_resource);
+  auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, memory_resource.get());
   CHECK(render_pass_adjacency_graph.output_buffer_producer_pass[0][0] == StrId("gbuffer"));
   CHECK(render_pass_adjacency_graph.output_buffer_producer_pass[1][0] == StrId("gbuffer"));
   CHECK(render_pass_adjacency_graph.output_buffer_producer_pass[2][0] == StrId("gbuffer"));
@@ -585,10 +588,10 @@ TEST_CASE("CreateRenderPassListSimple") {
   CHECK(render_pass_adjacency_graph.consumer_pass_input_buffer[StrId("lighting")][3] == 3);
   CHECK(render_pass_adjacency_graph.consumer_pass_input_buffer[StrId("lighting")][4] == 4);
   CHECK(render_pass_adjacency_graph.consumer_pass_input_buffer[StrId("postprocess")][0] == 5);
-  auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("mainbuffer")}, &memory_resource);
+  auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("mainbuffer")}, memory_resource.get());
   CHECK(mandatory_buffer_id_list.size() == 1);
   CHECK(mandatory_buffer_id_list.contains(6));
-  auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), &memory_resource);
+  auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
   CHECK(used_render_pass_list.size() == 3);
   CHECK(used_render_pass_list.contains(StrId("gbuffer")));
   CHECK(used_render_pass_list.contains(StrId("lighting")));
@@ -602,10 +605,10 @@ TEST_CASE("CreateRenderPassListSimple") {
 TEST_CASE("CreateRenderPassListShadow") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  std::pmr::monotonic_buffer_resource memory_resource{1024}; // TODO implement original allocator.
-  auto render_pass_list = CreateRenderPassListShadow(&memory_resource);
-  auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), &memory_resource);
-  auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, &memory_resource);
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, size_in_byte);
+  auto render_pass_list = CreateRenderPassListShadow(memory_resource.get());
+  auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
+  auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
   CHECK(buffer_id_list.size() == 7);
   CHECK(buffer_id_list[StrId("prez")].size() == 1);
   CHECK(buffer_id_list[StrId("prez")][0] == 0);
@@ -632,10 +635,10 @@ TEST_CASE("CreateRenderPassListShadow") {
   CHECK(buffer_id_list[StrId("postprocess")].size() == 2);
   CHECK(buffer_id_list[StrId("postprocess")][0] == 8);
   CHECK(buffer_id_list[StrId("postprocess")][1] == 9);
-  BufferNameAliasList buffer_name_alias_list{&memory_resource};
+  BufferNameAliasList buffer_name_alias_list{memory_resource.get()};
   SUBCASE("shadow-hard") {
     buffer_name_alias_list.insert({StrId("shadowtex-hard"), StrId("shadowtex")});
-    auto buffer_id_list_alias_applied = ApplyBufferNameAlias(render_pass_id_map, render_pass_order, std::move(buffer_id_list), buffer_name_alias_list, &memory_resource);
+    auto buffer_id_list_alias_applied = ApplyBufferNameAlias(render_pass_id_map, render_pass_order, std::move(buffer_id_list), buffer_name_alias_list, memory_resource.get());
     CHECK(buffer_id_list_alias_applied.size() == 7);
     CHECK(buffer_id_list_alias_applied[StrId("prez")].size() == 1);
     CHECK(buffer_id_list_alias_applied[StrId("prez")][0] == 0);
@@ -662,9 +665,9 @@ TEST_CASE("CreateRenderPassListShadow") {
     CHECK(buffer_id_list_alias_applied[StrId("postprocess")].size() == 2);
     CHECK(buffer_id_list_alias_applied[StrId("postprocess")][0] == 8);
     CHECK(buffer_id_list_alias_applied[StrId("postprocess")][1] == 9);
-    auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, &memory_resource);
-    auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, {StrId("mainbuffer")}, &memory_resource);
-    auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), &memory_resource);
+    auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, memory_resource.get());
+    auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, {StrId("mainbuffer")}, memory_resource.get());
+    auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
     CHECK(used_render_pass_list.size() == 6);
     CHECK(used_render_pass_list.contains(StrId("prez")));
     CHECK(used_render_pass_list.contains(StrId("shadowmap")));
@@ -683,7 +686,7 @@ TEST_CASE("CreateRenderPassListShadow") {
   }
   SUBCASE("shadow-pcss") {
     buffer_name_alias_list.insert({StrId("shadowtex-pcss"), StrId("shadowtex")});
-    auto buffer_id_list_alias_applied = ApplyBufferNameAlias(render_pass_id_map, render_pass_order, std::move(buffer_id_list), buffer_name_alias_list, &memory_resource);
+    auto buffer_id_list_alias_applied = ApplyBufferNameAlias(render_pass_id_map, render_pass_order, std::move(buffer_id_list), buffer_name_alias_list, memory_resource.get());
     CHECK(buffer_id_list_alias_applied.size() == 7);
     CHECK(buffer_id_list_alias_applied[StrId("prez")].size() == 1);
     CHECK(buffer_id_list_alias_applied[StrId("prez")][0] == 0);
@@ -710,9 +713,9 @@ TEST_CASE("CreateRenderPassListShadow") {
     CHECK(buffer_id_list_alias_applied[StrId("postprocess")].size() == 2);
     CHECK(buffer_id_list_alias_applied[StrId("postprocess")][0] == 8);
     CHECK(buffer_id_list_alias_applied[StrId("postprocess")][1] == 9);
-    auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, &memory_resource);
-    auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, {StrId("mainbuffer")}, &memory_resource);
-    auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), &memory_resource);
+    auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, memory_resource.get());
+    auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, {StrId("mainbuffer")}, memory_resource.get());
+    auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
     CHECK(used_render_pass_list.size() == 6);
     CHECK(used_render_pass_list.contains(StrId("prez")));
     CHECK(used_render_pass_list.contains(StrId("shadowmap")));
@@ -733,13 +736,13 @@ TEST_CASE("CreateRenderPassListShadow") {
 TEST_CASE("CreateRenderPassListDebug") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  std::pmr::monotonic_buffer_resource memory_resource{1024}; // TODO implement original allocator.
-  auto render_pass_list = CreateRenderPassListDebug(&memory_resource);
-  auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), &memory_resource);
-  auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, &memory_resource);
-  auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, &memory_resource);
-  auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("mainbuffer")}, &memory_resource);
-  auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), &memory_resource);
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, size_in_byte);
+  auto render_pass_list = CreateRenderPassListDebug(memory_resource.get());
+  auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
+  auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
+  auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, memory_resource.get());
+  auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("mainbuffer")}, memory_resource.get());
+  auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
   CHECK(used_render_pass_list.size() == 3);
   CHECK(used_render_pass_list.contains(StrId("prez")));
   CHECK(used_render_pass_list.contains(StrId("gbuffer")));
@@ -753,13 +756,13 @@ TEST_CASE("CreateRenderPassListDebug") {
 TEST_CASE("CreateRenderPassListWithSkyboxCreation") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  std::pmr::monotonic_buffer_resource memory_resource{1024}; // TODO implement original allocator.
-  auto render_pass_list = CreateRenderPassListWithSkyboxCreation(&memory_resource);
-  auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), &memory_resource);
-  auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, &memory_resource);
-  auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, &memory_resource);
-  auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("mainbuffer"), StrId("skybox")}, &memory_resource);
-  auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), &memory_resource);
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, size_in_byte);
+  auto render_pass_list = CreateRenderPassListWithSkyboxCreation(memory_resource.get());
+  auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
+  auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
+  auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, memory_resource.get());
+  auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("mainbuffer"), StrId("skybox")}, memory_resource.get());
+  auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
   CHECK(used_render_pass_list.size() == 5);
   CHECK(used_render_pass_list.contains(StrId("gbuffer")));
   CHECK(used_render_pass_list.contains(StrId("lighting")));
@@ -777,13 +780,13 @@ TEST_CASE("CreateRenderPassListWithSkyboxCreation") {
 TEST_CASE("CreateRenderPassListTransferTexture") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  std::pmr::monotonic_buffer_resource memory_resource{1024}; // TODO implement original allocator.
-  auto render_pass_list = CreateRenderPassListTransferTexture(&memory_resource);
-  auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), &memory_resource);
-  auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, &memory_resource);
-  auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, &memory_resource);
-  auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("mainbuffer"), StrId("skybox")}, &memory_resource);
-  auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), &memory_resource);
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, size_in_byte);
+  auto render_pass_list = CreateRenderPassListTransferTexture(memory_resource.get());
+  auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
+  auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
+  auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, memory_resource.get());
+  auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("mainbuffer"), StrId("skybox")}, memory_resource.get());
+  auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
   auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
   CHECK(culled_render_pass_order.size() == 4);
   CHECK(culled_render_pass_order[0] == StrId("transfer"));
@@ -794,15 +797,15 @@ TEST_CASE("CreateRenderPassListTransferTexture") {
 TEST_CASE("CreateRenderPassListTransparent") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  std::pmr::monotonic_buffer_resource memory_resource{1024}; // TODO implement original allocator.
-  auto render_pass_list = CreateRenderPassListTransparent(&memory_resource);
-  auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), &memory_resource);
-  auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, &memory_resource);
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, size_in_byte);
+  auto render_pass_list = CreateRenderPassListTransparent(memory_resource.get());
+  auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
+  auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
   CHECK(buffer_id_list[StrId("transparent")].size() == 1);
   CHECK(buffer_id_list[StrId("transparent")][0] == buffer_id_list[StrId("lighting")][5]);
-  auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, &memory_resource);
-  auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("mainbuffer")}, &memory_resource);
-  auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), &memory_resource);
+  auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, memory_resource.get());
+  auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("mainbuffer")}, memory_resource.get());
+  auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
   auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
   CHECK(culled_render_pass_order.size() == 4);
   CHECK(culled_render_pass_order[0] == StrId("gbuffer"));
@@ -813,9 +816,9 @@ TEST_CASE("CreateRenderPassListTransparent") {
 TEST_CASE("CreateRenderPassListCombined") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  std::pmr::monotonic_buffer_resource memory_resource{1024}; // TODO implement original allocator.
-  auto render_pass_list = CreateRenderPassListCombined(&memory_resource);
-  auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), &memory_resource);
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, size_in_byte);
+  auto render_pass_list = CreateRenderPassListCombined(memory_resource.get());
+  auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
   CHECK(render_pass_order.size() == 11);
   CHECK(render_pass_order[0] == StrId("transfer"));
   CHECK(render_pass_order[1] == StrId("prez"));
@@ -828,17 +831,17 @@ TEST_CASE("CreateRenderPassListCombined") {
   CHECK(render_pass_order[8] == StrId("postprocess"));
   CHECK(render_pass_order[9] == StrId("skybox-a"));
   CHECK(render_pass_order[10] == StrId("skybox-b"));
-  auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, &memory_resource);
+  auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
   CHECK(buffer_id_list[StrId("transparent")].size() == 1);
   CHECK(buffer_id_list[StrId("transparent")][0] == buffer_id_list[StrId("lighting")][5]);
-  BufferNameAliasList buffer_name_alias_list{&memory_resource};
+  BufferNameAliasList buffer_name_alias_list{memory_resource.get()};
   SUBCASE("shadow-hard") {
     buffer_name_alias_list.insert({StrId("shadowtex-hard"), StrId("shadowtex")});
-    auto buffer_id_list_alias_applied = ApplyBufferNameAlias(render_pass_id_map, render_pass_order, std::move(buffer_id_list), buffer_name_alias_list, &memory_resource);
+    auto buffer_id_list_alias_applied = ApplyBufferNameAlias(render_pass_id_map, render_pass_order, std::move(buffer_id_list), buffer_name_alias_list, memory_resource.get());
     CHECK(buffer_id_list_alias_applied[StrId("deferredshadow-hard")][1] == buffer_id_list_alias_applied[StrId("lighting")][4]);
-    auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, &memory_resource);
-    auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, {StrId("mainbuffer"), StrId("skybox")}, &memory_resource);
-    auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), &memory_resource);
+    auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, memory_resource.get());
+    auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, {StrId("mainbuffer"), StrId("skybox")}, memory_resource.get());
+    auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
     CHECK(!used_render_pass_list.contains(StrId("deferredshadow-pcss")));
     auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
     CHECK(culled_render_pass_order.size() == 10);
@@ -855,11 +858,11 @@ TEST_CASE("CreateRenderPassListCombined") {
   }
   SUBCASE("shadow-pcss") {
     buffer_name_alias_list.insert({StrId("shadowtex-pcss"), StrId("shadowtex")});
-    auto buffer_id_list_alias_applied = ApplyBufferNameAlias(render_pass_id_map, render_pass_order, std::move(buffer_id_list), buffer_name_alias_list, &memory_resource);
+    auto buffer_id_list_alias_applied = ApplyBufferNameAlias(render_pass_id_map, render_pass_order, std::move(buffer_id_list), buffer_name_alias_list, memory_resource.get());
     CHECK(buffer_id_list_alias_applied[StrId("deferredshadow-pcss")][1] == buffer_id_list_alias_applied[StrId("lighting")][4]);
-    auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, &memory_resource);
-    auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, {StrId("mainbuffer"), StrId("skybox")}, &memory_resource);
-    auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), &memory_resource);
+    auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, memory_resource.get());
+    auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, {StrId("mainbuffer"), StrId("skybox")}, memory_resource.get());
+    auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
     CHECK(!used_render_pass_list.contains(StrId("deferredshadow-hard")));
     auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
     CHECK(culled_render_pass_order.size() == 10);
@@ -876,11 +879,11 @@ TEST_CASE("CreateRenderPassListCombined") {
   }
   SUBCASE("no skybox") {
     buffer_name_alias_list.insert({StrId("shadowtex-hard"), StrId("shadowtex")});
-    auto buffer_id_list_alias_applied = ApplyBufferNameAlias(render_pass_id_map, render_pass_order, std::move(buffer_id_list), buffer_name_alias_list, &memory_resource);
+    auto buffer_id_list_alias_applied = ApplyBufferNameAlias(render_pass_id_map, render_pass_order, std::move(buffer_id_list), buffer_name_alias_list, memory_resource.get());
     CHECK(buffer_id_list_alias_applied[StrId("deferredshadow-hard")][1] == buffer_id_list_alias_applied[StrId("lighting")][4]);
-    auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, &memory_resource);
-    auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, {StrId("mainbuffer")}, &memory_resource);
-    auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), &memory_resource);
+    auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, memory_resource.get());
+    auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, {StrId("mainbuffer")}, memory_resource.get());
+    auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
     CHECK(!used_render_pass_list.contains(StrId("deferredshadow-pcss")));
     auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
     CHECK(culled_render_pass_order.size() == 8);
@@ -897,4 +900,5 @@ TEST_CASE("CreateRenderPassListCombined") {
 // TODO check pass name dup.
 #ifdef __clang__
 #pragma clang diagnostic pop
+#endif
 #endif

@@ -2,7 +2,7 @@
 //#define SHIP_BUILD
 #include "illuminate_logger.h"
 #include "illuminate_assert.h"
-#include "core/strid.h"
+#include "illuminate.h"
 namespace illuminate {
 template <typename T, typename U>
 constexpr bool IsContaining(const std::vector<T>& vec, const U& val) {

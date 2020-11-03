@@ -44,6 +44,6 @@ class PmrAllocator : public std::pmr::memory_resource {
   constexpr bool do_is_equal(const memory_resource& other) const noexcept override { return this == &other; }
   Allocator allocator_;
 };
-using PmrLinearAllocator = PmrAllocator<LinearAllocator>;
 }
+using PmrLinearAllocator = illuminate::core::PmrAllocator<illuminate::core::LinearAllocator>;
 #endif
