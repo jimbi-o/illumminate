@@ -9,31 +9,6 @@
 #include "gfx_def.h"
 #include "core/strid.h"
 namespace illuminate::gfx {
-enum BufferStateType : uint8_t { kCbv = 0, kSrv, kUav, kRtv, kDsv, kCopySrc, kCopyDst, };
-enum BufferLoadOpType : uint8_t { kDontCare = 0, kClear, kLoadWrite, kLoadReadOnly, };
-constexpr bool IsOutputBuffer(const BufferStateType state_type, const BufferLoadOpType load_op_type) {
-  switch (state_type) {
-    case kCbv: return false;
-    case kSrv: return false;
-    case kUav: return (load_op_type == kLoadReadOnly) ? false : true;
-    case kRtv: return true;
-    case kDsv: return (load_op_type == kLoadReadOnly) ? false : true;
-    case kCopySrc: return false;
-    case kCopyDst: return true;
-  }
-}
-constexpr bool IsInitialValueUsed(const BufferStateType state_type, const BufferLoadOpType load_op_type) {
-  switch (state_type) {
-    case kCbv: return true;
-    case kSrv: return true;
-    case kUav: return (load_op_type == kDontCare || load_op_type == kClear) ? false : true;
-    case kRtv: return (load_op_type == kDontCare || load_op_type == kClear) ? false : true;
-    case kDsv: return (load_op_type == kDontCare || load_op_type == kClear) ? false : true;
-    case kCopySrc: return true;
-    case kCopyDst: return false;
-  }
-}
-enum BufferDimensionType : uint8_t { kBuffer = 0, k1d, k1dArray, k2d, k2dArray, k3d, k3dArray, kCube, kCubeArray, };
 class BufferConfig {
  public:
   constexpr BufferConfig()
@@ -120,5 +95,27 @@ using MandatoryOutputBufferIdList = std::pmr::unordered_set<BufferId>;
 MandatoryOutputBufferIdList IdentifyMandatoryOutputBufferId(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, const MandatoryOutputBufferNameList& mandatory_buffer_name_list, std::pmr::memory_resource* memory_resource);
 std::pmr::unordered_set<StrId> GetUsedRenderPassList(const RenderPassAdjacencyGraph& adjacency_graph, MandatoryOutputBufferIdList&& mandatory_buffer_id_list, std::pmr::memory_resource* memory_resource);
 RenderPassOrder CullUnusedRenderPass(RenderPassOrder&& render_pass_order, const std::pmr::unordered_set<StrId>& used_render_pass_list, const RenderPassIdMap& render_pass_id_map);
+constexpr bool IsOutputBuffer(const BufferStateType state_type, const BufferLoadOpType load_op_type) {
+  switch (state_type) {
+    case kCbv: return false;
+    case kSrv: return false;
+    case kUav: return (load_op_type == kLoadReadOnly) ? false : true;
+    case kRtv: return true;
+    case kDsv: return (load_op_type == kLoadReadOnly) ? false : true;
+    case kCopySrc: return false;
+    case kCopyDst: return true;
+  }
+}
+constexpr bool IsInitialValueUsed(const BufferStateType state_type, const BufferLoadOpType load_op_type) {
+  switch (state_type) {
+    case kCbv: return true;
+    case kSrv: return true;
+    case kUav: return (load_op_type == kDontCare || load_op_type == kClear) ? false : true;
+    case kRtv: return (load_op_type == kDontCare || load_op_type == kClear) ? false : true;
+    case kDsv: return (load_op_type == kDontCare || load_op_type == kClear) ? false : true;
+    case kCopySrc: return true;
+    case kCopyDst: return false;
+  }
+}
 }
 #endif
