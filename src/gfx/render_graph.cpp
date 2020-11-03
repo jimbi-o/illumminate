@@ -703,6 +703,24 @@ TEST_CASE("CreateRenderPassListShadow") {
     CHECK(culled_render_pass_order[5] == StrId("postprocess"));
   }
 }
+TEST_CASE("CreateRenderPassListDebug") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  std::pmr::monotonic_buffer_resource memory_resource{1024}; // TODO implement original allocator.
+  auto render_pass_list = CreateRenderPassListDebug(&memory_resource);
+  auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), &memory_resource);
+  auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, &memory_resource);
+  auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, &memory_resource);
+  auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("mainbuffer")}, &memory_resource);
+  auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), &memory_resource);
+  CHECK(used_render_pass_list.contains(StrId("prez")));
+  CHECK(used_render_pass_list.contains(StrId("gbuffer")));
+  CHECK(used_render_pass_list.contains(StrId("debug")));
+  auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list);
+  CHECK(culled_render_pass_order[0] == StrId("prez"));
+  CHECK(culled_render_pass_order[1] == StrId("gbuffer"));
+  CHECK(culled_render_pass_order[2] == StrId("debug"));
+}
 // TODO check pass name dup.
 #ifdef __clang__
 #pragma clang diagnostic pop
