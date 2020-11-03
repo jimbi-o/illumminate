@@ -229,6 +229,17 @@ inline auto CreateRenderPassDebug(std::pmr::memory_resource* memory_resource) {
 inline auto CreateRenderPassTransferTexture(std::pmr::memory_resource* memory_resource) {
   return RenderPass(StrId("transfer"), BufferConfigList(memory_resource)).Mandatory(true);
 }
+auto CreateRenderPassTransparent(std::pmr::memory_resource* memory_resource) {
+  return RenderPass(
+    StrId("transparent"),
+    {
+      {
+        BufferConfig(StrId("mainbuffer"), BufferStateType::kRtv).LoadOpType(BufferLoadOpType::kLoadWrite),
+      },
+      memory_resource
+    }
+  );
+}
 auto CreateRenderPassListSimple(std::pmr::memory_resource* memory_resource) {
   RenderPassList render_pass_list{memory_resource};
   render_pass_list.push_back({CreateRenderPassGBuffer(memory_resource, false)});
@@ -277,12 +288,14 @@ auto CreateRenderPassListSkyboxCreation(std::pmr::memory_resource* memory_resour
   render_pass_list.push_back(std::move(render_pass_b));
   return render_pass_list;
 }
-auto CreateRenderPassListWithSkyboxCreation(std::pmr::memory_resource* memory_resource) {
-  auto render_pass_list = CreateRenderPassListSimple(memory_resource);
+auto InsertRenderPassListSkyboxCreation(RenderPassList&& render_pass_list, std::pmr::memory_resource* memory_resource) {
   auto render_pass_list_skybox = CreateRenderPassListSkyboxCreation(memory_resource);
   render_pass_list.reserve(render_pass_list.size() + render_pass_list_skybox.size());
   std::move(std::begin(render_pass_list_skybox), std::end(render_pass_list_skybox), std::back_inserter(render_pass_list));
-  return render_pass_list;
+  return std::move(render_pass_list);
+}
+auto CreateRenderPassListWithSkyboxCreation(std::pmr::memory_resource* memory_resource) {
+  return InsertRenderPassListSkyboxCreation(CreateRenderPassListSimple(memory_resource), memory_resource);
 }
 auto CreateRenderPassListTransferTexture(std::pmr::memory_resource* memory_resource) {
   RenderPassList render_pass_list_transfer{memory_resource};
@@ -294,18 +307,15 @@ auto CreateRenderPassListTransferTexture(std::pmr::memory_resource* memory_resou
 }
 auto CreateRenderPassListTransparent(std::pmr::memory_resource* memory_resource) {
   auto render_pass_list = CreateRenderPassListSimple(memory_resource);
-  RenderPass transparent(
-    StrId("transparent"),
-    {
-      {
-        BufferConfig(StrId("mainbuffer"), BufferStateType::kRtv).LoadOpType(BufferLoadOpType::kLoadWrite),
-      },
-      memory_resource
-    }
-  );
   auto it = std::find_if(render_pass_list.begin(), render_pass_list.end(), [](const RenderPass& pass) { return pass.name == StrId("postprocess"); });
-  render_pass_list.insert(it, std::move(transparent));
+  render_pass_list.insert(it, CreateRenderPassTransparent(memory_resource));
   return render_pass_list;
+}
+auto CreateRenderPassListCombined(std::pmr::memory_resource* memory_resource) {
+  auto render_pass_list = CreateRenderPassListShadow(memory_resource);
+  render_pass_list.insert(render_pass_list.begin(), CreateRenderPassTransferTexture(memory_resource));
+  render_pass_list.insert(std::find_if(render_pass_list.begin(), render_pass_list.end(), [](const RenderPass& pass) { return pass.name == StrId("postprocess"); }), CreateRenderPassTransparent(memory_resource));
+  return InsertRenderPassListSkyboxCreation(std::move(render_pass_list), memory_resource);
 }
 }
 #ifdef __clang__
@@ -791,7 +801,7 @@ TEST_CASE("CreateRenderPassListTransparent") {
   CHECK(buffer_id_list[StrId("transparent")].size() == 1);
   CHECK(buffer_id_list[StrId("transparent")][0] == buffer_id_list[StrId("lighting")][5]);
   auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, &memory_resource);
-  auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("mainbuffer"), StrId("skybox")}, &memory_resource);
+  auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("mainbuffer")}, &memory_resource);
   auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), &memory_resource);
   auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
   CHECK(culled_render_pass_order.size() == 4);
@@ -799,6 +809,90 @@ TEST_CASE("CreateRenderPassListTransparent") {
   CHECK(culled_render_pass_order[1] == StrId("lighting"));
   CHECK(culled_render_pass_order[2] == StrId("transparent"));
   CHECK(culled_render_pass_order[3] == StrId("postprocess"));
+}
+TEST_CASE("CreateRenderPassListCombined") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  std::pmr::monotonic_buffer_resource memory_resource{1024}; // TODO implement original allocator.
+  auto render_pass_list = CreateRenderPassListCombined(&memory_resource);
+  auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), &memory_resource);
+  CHECK(render_pass_order.size() == 11);
+  CHECK(render_pass_order[0] == StrId("transfer"));
+  CHECK(render_pass_order[1] == StrId("prez"));
+  CHECK(render_pass_order[2] == StrId("shadowmap"));
+  CHECK(render_pass_order[3] == StrId("gbuffer"));
+  CHECK(render_pass_order[4] == StrId("deferredshadow-hard"));
+  CHECK(render_pass_order[5] == StrId("deferredshadow-pcss"));
+  CHECK(render_pass_order[6] == StrId("lighting"));
+  CHECK(render_pass_order[7] == StrId("transparent"));
+  CHECK(render_pass_order[8] == StrId("postprocess"));
+  CHECK(render_pass_order[9] == StrId("skybox-a"));
+  CHECK(render_pass_order[10] == StrId("skybox-b"));
+  auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, &memory_resource);
+  CHECK(buffer_id_list[StrId("transparent")].size() == 1);
+  CHECK(buffer_id_list[StrId("transparent")][0] == buffer_id_list[StrId("lighting")][5]);
+  BufferNameAliasList buffer_name_alias_list{&memory_resource};
+  SUBCASE("shadow-hard") {
+    buffer_name_alias_list.insert({StrId("shadowtex-hard"), StrId("shadowtex")});
+    auto buffer_id_list_alias_applied = ApplyBufferNameAlias(render_pass_id_map, render_pass_order, std::move(buffer_id_list), buffer_name_alias_list, &memory_resource);
+    CHECK(buffer_id_list_alias_applied[StrId("deferredshadow-hard")][1] == buffer_id_list_alias_applied[StrId("lighting")][4]);
+    auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, &memory_resource);
+    auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, {StrId("mainbuffer"), StrId("skybox")}, &memory_resource);
+    auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), &memory_resource);
+    CHECK(!used_render_pass_list.contains(StrId("deferredshadow-pcss")));
+    auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
+    CHECK(culled_render_pass_order.size() == 10);
+    CHECK(culled_render_pass_order[0] == StrId("transfer"));
+    CHECK(culled_render_pass_order[1] == StrId("prez"));
+    CHECK(culled_render_pass_order[2] == StrId("shadowmap"));
+    CHECK(culled_render_pass_order[3] == StrId("gbuffer"));
+    CHECK(culled_render_pass_order[4] == StrId("deferredshadow-hard"));
+    CHECK(culled_render_pass_order[5] == StrId("lighting"));
+    CHECK(culled_render_pass_order[6] == StrId("transparent"));
+    CHECK(culled_render_pass_order[7] == StrId("postprocess"));
+    CHECK(culled_render_pass_order[8] == StrId("skybox-a"));
+    CHECK(culled_render_pass_order[9] == StrId("skybox-b"));
+  }
+  SUBCASE("shadow-pcss") {
+    buffer_name_alias_list.insert({StrId("shadowtex-pcss"), StrId("shadowtex")});
+    auto buffer_id_list_alias_applied = ApplyBufferNameAlias(render_pass_id_map, render_pass_order, std::move(buffer_id_list), buffer_name_alias_list, &memory_resource);
+    CHECK(buffer_id_list_alias_applied[StrId("deferredshadow-pcss")][1] == buffer_id_list_alias_applied[StrId("lighting")][4]);
+    auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, &memory_resource);
+    auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, {StrId("mainbuffer"), StrId("skybox")}, &memory_resource);
+    auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), &memory_resource);
+    CHECK(!used_render_pass_list.contains(StrId("deferredshadow-hard")));
+    auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
+    CHECK(culled_render_pass_order.size() == 10);
+    CHECK(culled_render_pass_order[0] == StrId("transfer"));
+    CHECK(culled_render_pass_order[1] == StrId("prez"));
+    CHECK(culled_render_pass_order[2] == StrId("shadowmap"));
+    CHECK(culled_render_pass_order[3] == StrId("gbuffer"));
+    CHECK(culled_render_pass_order[4] == StrId("deferredshadow-pcss"));
+    CHECK(culled_render_pass_order[5] == StrId("lighting"));
+    CHECK(culled_render_pass_order[6] == StrId("transparent"));
+    CHECK(culled_render_pass_order[7] == StrId("postprocess"));
+    CHECK(culled_render_pass_order[8] == StrId("skybox-a"));
+    CHECK(culled_render_pass_order[9] == StrId("skybox-b"));
+  }
+  SUBCASE("no skybox") {
+    buffer_name_alias_list.insert({StrId("shadowtex-hard"), StrId("shadowtex")});
+    auto buffer_id_list_alias_applied = ApplyBufferNameAlias(render_pass_id_map, render_pass_order, std::move(buffer_id_list), buffer_name_alias_list, &memory_resource);
+    CHECK(buffer_id_list_alias_applied[StrId("deferredshadow-hard")][1] == buffer_id_list_alias_applied[StrId("lighting")][4]);
+    auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, &memory_resource);
+    auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, {StrId("mainbuffer")}, &memory_resource);
+    auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), &memory_resource);
+    CHECK(!used_render_pass_list.contains(StrId("deferredshadow-pcss")));
+    auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
+    CHECK(culled_render_pass_order.size() == 8);
+    CHECK(culled_render_pass_order[0] == StrId("transfer"));
+    CHECK(culled_render_pass_order[1] == StrId("prez"));
+    CHECK(culled_render_pass_order[2] == StrId("shadowmap"));
+    CHECK(culled_render_pass_order[3] == StrId("gbuffer"));
+    CHECK(culled_render_pass_order[4] == StrId("deferredshadow-hard"));
+    CHECK(culled_render_pass_order[5] == StrId("lighting"));
+    CHECK(culled_render_pass_order[6] == StrId("transparent"));
+    CHECK(culled_render_pass_order[7] == StrId("postprocess"));
+  }
 }
 // TODO check pass name dup.
 #ifdef __clang__
