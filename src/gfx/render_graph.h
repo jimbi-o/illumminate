@@ -119,6 +119,6 @@ using MandatoryOutputBufferNameList = std::pmr::vector<StrId>;
 using MandatoryOutputBufferIdList = std::pmr::unordered_set<BufferId>;
 MandatoryOutputBufferIdList IdentifyMandatoryOutputBufferId(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, const MandatoryOutputBufferNameList& mandatory_buffer_name_list, std::pmr::memory_resource* memory_resource);
 std::pmr::unordered_set<StrId> GetUsedRenderPassList(const RenderPassAdjacencyGraph& adjacency_graph, MandatoryOutputBufferIdList&& mandatory_buffer_id_list, std::pmr::memory_resource* memory_resource);
-RenderPassOrder CullUnusedRenderPass(RenderPassOrder&& render_pass_order, const std::pmr::unordered_set<StrId>& used_render_pass_list);
+RenderPassOrder CullUnusedRenderPass(RenderPassOrder&& render_pass_order, const std::pmr::unordered_set<StrId>& used_render_pass_list, const RenderPassIdMap& render_pass_id_map);
 }
 #endif

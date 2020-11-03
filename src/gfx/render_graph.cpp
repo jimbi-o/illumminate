@@ -117,8 +117,8 @@ std::pmr::unordered_set<StrId> GetUsedRenderPassList(const RenderPassAdjacencyGr
   }
   return used_pass;
 }
-RenderPassOrder CullUnusedRenderPass(RenderPassOrder&& render_pass_order, const std::pmr::unordered_set<StrId>& used_render_pass_list) {
-  std::erase_if(render_pass_order, [&used_render_pass_list](const StrId& pass_name) { return !used_render_pass_list.contains(pass_name); });
+RenderPassOrder CullUnusedRenderPass(RenderPassOrder&& render_pass_order, const std::pmr::unordered_set<StrId>& used_render_pass_list, const RenderPassIdMap& render_pass_id_map) {
+  std::erase_if(render_pass_order, [&used_render_pass_list, &render_pass_id_map](const StrId& pass_name) { return !render_pass_id_map.at(pass_name).mandatory_pass && !used_render_pass_list.contains(pass_name); });
   return std::move(render_pass_order);
 }
 }
@@ -287,7 +287,7 @@ auto CreateRenderPassListWithSkyboxCreation(std::pmr::memory_resource* memory_re
 auto CreateRenderPassListTransferTexture(std::pmr::memory_resource* memory_resource) {
   RenderPassList render_pass_list_transfer{memory_resource};
   render_pass_list_transfer.push_back(CreateRenderPassTransferTexture(memory_resource));
-  auto render_pass_list = CreateRenderPassListShadow(memory_resource);
+  auto render_pass_list = CreateRenderPassListSimple(memory_resource);
   render_pass_list_transfer.reserve(render_pass_list_transfer.size() + render_pass_list.size());
   std::move(std::begin(render_pass_list), std::end(render_pass_list), std::back_inserter(render_pass_list_transfer));
   return render_pass_list_transfer;
@@ -569,7 +569,7 @@ TEST_CASE("CreateRenderPassListSimple") {
   CHECK(used_render_pass_list.contains(StrId("gbuffer")));
   CHECK(used_render_pass_list.contains(StrId("lighting")));
   CHECK(used_render_pass_list.contains(StrId("postprocess")));
-  auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list);
+  auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
   CHECK(culled_render_pass_order.size() == 3);
   CHECK(culled_render_pass_order[0] == StrId("gbuffer"));
   CHECK(culled_render_pass_order[1] == StrId("lighting"));
@@ -648,7 +648,7 @@ TEST_CASE("CreateRenderPassListShadow") {
     CHECK(used_render_pass_list.contains(StrId("deferredshadow-hard")));
     CHECK(used_render_pass_list.contains(StrId("lighting")));
     CHECK(used_render_pass_list.contains(StrId("postprocess")));
-    auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list);
+    auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
     CHECK(culled_render_pass_order.size() == 6);
     CHECK(culled_render_pass_order[0] == StrId("prez"));
     CHECK(culled_render_pass_order[1] == StrId("shadowmap"));
@@ -696,7 +696,7 @@ TEST_CASE("CreateRenderPassListShadow") {
     CHECK(used_render_pass_list.contains(StrId("deferredshadow-pcss")));
     CHECK(used_render_pass_list.contains(StrId("lighting")));
     CHECK(used_render_pass_list.contains(StrId("postprocess")));
-    auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list);
+    auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
     CHECK(culled_render_pass_order.size() == 6);
     CHECK(culled_render_pass_order[0] == StrId("prez"));
     CHECK(culled_render_pass_order[1] == StrId("shadowmap"));
@@ -720,7 +720,7 @@ TEST_CASE("CreateRenderPassListDebug") {
   CHECK(used_render_pass_list.contains(StrId("prez")));
   CHECK(used_render_pass_list.contains(StrId("gbuffer")));
   CHECK(used_render_pass_list.contains(StrId("debug")));
-  auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list);
+  auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
   CHECK(culled_render_pass_order.size() == 3);
   CHECK(culled_render_pass_order[0] == StrId("prez"));
   CHECK(culled_render_pass_order[1] == StrId("gbuffer"));
@@ -742,13 +742,30 @@ TEST_CASE("CreateRenderPassListWithSkyboxCreation") {
   CHECK(used_render_pass_list.contains(StrId("postprocess")));
   CHECK(used_render_pass_list.contains(StrId("skybox-a")));
   CHECK(used_render_pass_list.contains(StrId("skybox-b")));
-  auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list);
+  auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
   CHECK(culled_render_pass_order.size() == 5);
   CHECK(culled_render_pass_order[0] == StrId("gbuffer"));
   CHECK(culled_render_pass_order[1] == StrId("lighting"));
   CHECK(culled_render_pass_order[2] == StrId("postprocess"));
   CHECK(culled_render_pass_order[3] == StrId("skybox-a"));
   CHECK(culled_render_pass_order[4] == StrId("skybox-b"));
+}
+TEST_CASE("CreateRenderPassListTransferTexture") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  std::pmr::monotonic_buffer_resource memory_resource{1024}; // TODO implement original allocator.
+  auto render_pass_list = CreateRenderPassListTransferTexture(&memory_resource);
+  auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), &memory_resource);
+  auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, &memory_resource);
+  auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, &memory_resource);
+  auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("mainbuffer"), StrId("skybox")}, &memory_resource);
+  auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), &memory_resource);
+  auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
+  CHECK(culled_render_pass_order.size() == 4);
+  CHECK(culled_render_pass_order[0] == StrId("transfer"));
+  CHECK(culled_render_pass_order[1] == StrId("gbuffer"));
+  CHECK(culled_render_pass_order[2] == StrId("lighting"));
+  CHECK(culled_render_pass_order[3] == StrId("postprocess"));
 }
 // TODO check pass name dup.
 #ifdef __clang__
