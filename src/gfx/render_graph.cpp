@@ -49,13 +49,7 @@ BufferIdList ApplyBufferNameAlias(const RenderPassIdMap& render_pass_id_map, con
   }
   return std::move(buffer_id_list);
 }
-class RenderPassAdjacencyGraph {
- public:
-  RenderPassAdjacencyGraph(std::pmr::memory_resource* memory_resource) : output_buffer_producer_pass(memory_resource), consumer_pass_input_buffer(memory_resource) {}
-  std::pmr::unordered_map<BufferId, std::pmr::vector<StrId>> output_buffer_producer_pass;
-  std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>> consumer_pass_input_buffer;
-};
-auto CreateRenderPassAdjacencyGraph(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, std::pmr::memory_resource* memory_resource) {
+RenderPassAdjacencyGraph CreateRenderPassAdjacencyGraph(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, std::pmr::memory_resource* memory_resource) {
   RenderPassAdjacencyGraph adjacency_graph(memory_resource);
   for (auto& pass_name : render_pass_order) {
     auto& pass = render_pass_id_map.at(pass_name);
@@ -78,9 +72,7 @@ auto CreateRenderPassAdjacencyGraph(const RenderPassIdMap& render_pass_id_map, c
   }
   return adjacency_graph;
 }
-using MandatoryOutputBufferNameList = std::pmr::vector<StrId>;
-using MandatoryOutputBufferIdList = std::pmr::unordered_set<BufferId>;
-auto IdentifyMandatoryOutputBufferId(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, const MandatoryOutputBufferNameList& mandatory_buffer_name_list, std::pmr::memory_resource* memory_resource) {
+MandatoryOutputBufferIdList IdentifyMandatoryOutputBufferId(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, const MandatoryOutputBufferNameList& mandatory_buffer_name_list, std::pmr::memory_resource* memory_resource) {
   MandatoryOutputBufferIdList mandatory_buffer_id_list(memory_resource);
   mandatory_buffer_id_list.reserve(mandatory_buffer_name_list.size());
   for (auto& buffer_name : mandatory_buffer_name_list) {
@@ -101,9 +93,10 @@ auto IdentifyMandatoryOutputBufferId(const RenderPassIdMap& render_pass_id_map, 
   }
   return mandatory_buffer_id_list;
 }
-auto GetUsedRenderPassList(const RenderPassAdjacencyGraph& adjacency_graph, MandatoryOutputBufferIdList&& mandatory_buffer_id_list, std::pmr::memory_resource* memory_resource) {
+std::pmr::unordered_set<StrId> GetUsedRenderPassList(const RenderPassAdjacencyGraph& adjacency_graph, MandatoryOutputBufferIdList&& mandatory_buffer_id_list, std::pmr::memory_resource* memory_resource) {
   std::pmr::unordered_set<StrId> used_pass(memory_resource);
   std::pmr::unordered_set<BufferId> used_buffers(memory_resource);
+  used_buffers.reserve(mandatory_buffer_id_list.size());
   used_buffers.insert(mandatory_buffer_id_list.begin(), mandatory_buffer_id_list.end());
   while (!mandatory_buffer_id_list.empty()) {
     auto buffer_id = *mandatory_buffer_id_list.begin();
@@ -124,7 +117,7 @@ auto GetUsedRenderPassList(const RenderPassAdjacencyGraph& adjacency_graph, Mand
   }
   return used_pass;
 }
-auto CullUnusedRenderPass(RenderPassOrder&& render_pass_order, std::pmr::unordered_set<StrId>&& used_render_pass_list) {
+RenderPassOrder CullUnusedRenderPass(RenderPassOrder&& render_pass_order, const std::pmr::unordered_set<StrId>& used_render_pass_list) {
   std::erase_if(render_pass_order, [&used_render_pass_list](const StrId& pass_name) { return !used_render_pass_list.contains(pass_name); });
   return std::move(render_pass_order);
 }
