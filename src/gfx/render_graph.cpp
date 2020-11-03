@@ -278,7 +278,7 @@ auto CreateRenderPassListSkyboxCreation(std::pmr::memory_resource* memory_resour
   return render_pass_list;
 }
 auto CreateRenderPassListWithSkyboxCreation(std::pmr::memory_resource* memory_resource) {
-  auto render_pass_list = CreateRenderPassListShadow(memory_resource);
+  auto render_pass_list = CreateRenderPassListSimple(memory_resource);
   auto render_pass_list_skybox = CreateRenderPassListSkyboxCreation(memory_resource);
   render_pass_list.reserve(render_pass_list.size() + render_pass_list_skybox.size());
   std::move(std::begin(render_pass_list_skybox), std::end(render_pass_list_skybox), std::back_inserter(render_pass_list));
@@ -720,6 +720,28 @@ TEST_CASE("CreateRenderPassListDebug") {
   CHECK(culled_render_pass_order[0] == StrId("prez"));
   CHECK(culled_render_pass_order[1] == StrId("gbuffer"));
   CHECK(culled_render_pass_order[2] == StrId("debug"));
+}
+TEST_CASE("CreateRenderPassListWithSkyboxCreation") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  std::pmr::monotonic_buffer_resource memory_resource{1024}; // TODO implement original allocator.
+  auto render_pass_list = CreateRenderPassListWithSkyboxCreation(&memory_resource);
+  auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), &memory_resource);
+  auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, &memory_resource);
+  auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, &memory_resource);
+  auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("mainbuffer"), StrId("skybox")}, &memory_resource);
+  auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), &memory_resource);
+  CHECK(used_render_pass_list.contains(StrId("gbuffer")));
+  CHECK(used_render_pass_list.contains(StrId("lighting")));
+  CHECK(used_render_pass_list.contains(StrId("postprocess")));
+  CHECK(used_render_pass_list.contains(StrId("skybox-a")));
+  CHECK(used_render_pass_list.contains(StrId("skybox-b")));
+  auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list);
+  CHECK(culled_render_pass_order[0] == StrId("gbuffer"));
+  CHECK(culled_render_pass_order[1] == StrId("lighting"));
+  CHECK(culled_render_pass_order[2] == StrId("postprocess"));
+  CHECK(culled_render_pass_order[3] == StrId("skybox-a"));
+  CHECK(culled_render_pass_order[4] == StrId("skybox-b"));
 }
 // TODO check pass name dup.
 #ifdef __clang__
