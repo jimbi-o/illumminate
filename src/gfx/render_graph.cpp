@@ -292,7 +292,21 @@ auto CreateRenderPassListTransferTexture(std::pmr::memory_resource* memory_resou
   std::move(std::begin(render_pass_list), std::end(render_pass_list), std::back_inserter(render_pass_list_transfer));
   return render_pass_list_transfer;
 }
-// TODO output to swapchain
+auto CreateRenderPassListTransparent(std::pmr::memory_resource* memory_resource) {
+  auto render_pass_list = CreateRenderPassListSimple(memory_resource);
+  RenderPass transparent(
+    StrId("transparent"),
+    {
+      {
+        BufferConfig(StrId("mainbuffer"), BufferStateType::kRtv).LoadOpType(BufferLoadOpType::kLoadWrite),
+      },
+      memory_resource
+    }
+  );
+  auto it = std::find_if(render_pass_list.begin(), render_pass_list.end(), [](const RenderPass& pass) { return pass.name == StrId("postprocess"); });
+  render_pass_list.insert(it, std::move(transparent));
+  return render_pass_list;
+}
 }
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -767,7 +781,27 @@ TEST_CASE("CreateRenderPassListTransferTexture") {
   CHECK(culled_render_pass_order[2] == StrId("lighting"));
   CHECK(culled_render_pass_order[3] == StrId("postprocess"));
 }
+TEST_CASE("CreateRenderPassListTransparent") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  std::pmr::monotonic_buffer_resource memory_resource{1024}; // TODO implement original allocator.
+  auto render_pass_list = CreateRenderPassListTransparent(&memory_resource);
+  auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), &memory_resource);
+  auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, &memory_resource);
+  CHECK(buffer_id_list[StrId("transparent")].size() == 1);
+  CHECK(buffer_id_list[StrId("transparent")][0] == buffer_id_list[StrId("lighting")][5]);
+  auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, &memory_resource);
+  auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("mainbuffer"), StrId("skybox")}, &memory_resource);
+  auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), &memory_resource);
+  auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
+  CHECK(culled_render_pass_order.size() == 4);
+  CHECK(culled_render_pass_order[0] == StrId("gbuffer"));
+  CHECK(culled_render_pass_order[1] == StrId("lighting"));
+  CHECK(culled_render_pass_order[2] == StrId("transparent"));
+  CHECK(culled_render_pass_order[3] == StrId("postprocess"));
+}
 // TODO check pass name dup.
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
+// TODO all combined
