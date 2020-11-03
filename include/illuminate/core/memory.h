@@ -13,7 +13,6 @@ class LinearAllocator {
   ~LinearAllocator() {}
   LinearAllocator(const LinearAllocator&) = delete;
   LinearAllocator& operator=(const LinearAllocator&) = delete;
-  constexpr void Reset() { offset_in_byte_ = 0; }
   inline void* Allocate(std::size_t bytes, std::size_t alignment_in_bytes) {
     auto addr_aligned = AlignAddress(head_ + offset_in_byte_, alignment_in_bytes);
     offset_in_byte_ = addr_aligned - head_ + bytes;
@@ -21,26 +20,30 @@ class LinearAllocator {
     return reinterpret_cast<void*>(addr_aligned);
   }
   constexpr auto GetOffset() const { return offset_in_byte_; }
+  constexpr void Reset() { offset_in_byte_ = 0; }
  private:
   const std::uintptr_t head_;
   const size_t size_in_byte_;
   size_t offset_in_byte_;
 };
-class PmrLinearAllocator : public std::pmr::memory_resource {
+template<class Allocator>
+class PmrAllocator : public std::pmr::memory_resource {
  public:
-  explicit PmrLinearAllocator(const std::byte* buffer, const uint32_t size_in_byte) : allocator_(buffer, size_in_byte) {}
-  PmrLinearAllocator() {}
-  ~PmrLinearAllocator() override {}
-  PmrLinearAllocator(const PmrLinearAllocator&) = delete;
-  PmrLinearAllocator& operator=(const PmrLinearAllocator&) = delete;
+  explicit PmrAllocator(const std::byte* buffer, const uint32_t size_in_byte) : allocator_(buffer, size_in_byte) {}
+  PmrAllocator() {}
+  ~PmrAllocator() override {}
+  PmrAllocator(const PmrAllocator&) = delete;
+  PmrAllocator& operator=(const PmrAllocator&) = delete;
   constexpr void Reset() { allocator_.Reset(); }
+  constexpr auto GetOffset() const { return allocator_.GetOffset(); }
  private:
   inline void* do_allocate(std::size_t bytes, std::size_t alignment_in_bytes) override {
     return allocator_.Allocate(bytes, alignment_in_bytes);
   }
   constexpr inline void do_deallocate([[maybe_unused]] void* p, [[maybe_unused]] std::size_t bytes, [[maybe_unused]] std::size_t alignment) override {}
-  bool do_is_equal(const memory_resource& other) const noexcept override;
-  LinearAllocator allocator_;
+  constexpr bool do_is_equal(const memory_resource& other) const noexcept override { return this == &other; }
+  Allocator allocator_;
 };
+using PmrLinearAllocator = PmrAllocator<LinearAllocator>;
 }
 #endif
