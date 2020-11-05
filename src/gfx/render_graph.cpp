@@ -129,8 +129,13 @@ bool IsDuplicateRenderPassNameExists(const RenderPassList& list, std::pmr::memor
   }
   return false;
 }
-auto GetUsedBufferList(const RenderPassOrder& render_pass_order, const RenderPassIdMap& render_pass_id_map, const BufferIdList& buffer_id_list, std::pmr::memory_resource* memory_resource) {
-  return std::pmr::unordered_set<BufferId>{memory_resource};
+auto GetUsedBufferList(const std::pmr::unordered_set<StrId>& used_render_pass_list, const BufferIdList& buffer_id_list, std::pmr::memory_resource* memory_resource) {
+  std::pmr::unordered_set<BufferId> used_buffers{memory_resource};
+  for (auto& pass : used_render_pass_list) {
+    auto& pass_buffers = buffer_id_list.at(pass);
+    used_buffers.insert(pass_buffers.begin(), pass_buffers.end());
+  }
+  return used_buffers;
 }
 enum BufferStateFlags : uint32_t {
   kBufferStateFlagCbv = 0x0001,
@@ -388,7 +393,7 @@ TEST_CASE("BufferConfig") {
   CHECK(BufferConfig(StrId("rtv"), BufferStateType::kRtv).dimension_type == BufferDimensionType::k2d);
   CHECK(BufferConfig(StrId("rtv"), BufferStateType::kRtv).index_to_render == 0);
   CHECK(BufferConfig(StrId("rtv"), BufferStateType::kRtv).buffer_num_to_render == 1);
-  CHECK(BufferConfig(StrId("rtv"), BufferStateType::kRtv).depth == 1.0f);
+  CHECK(BufferConfig(StrId("rtv"), BufferStateType::kRtv).depth == 1);
   CHECK(BufferConfig(StrId("srv"), BufferStateType::kSrv).name == StrId("srv"));
   CHECK(BufferConfig(StrId("srv"), BufferStateType::kSrv).state_type == BufferStateType::kSrv);
   CHECK(BufferConfig(StrId("srv"), BufferStateType::kSrv).load_op_type == BufferLoadOpType::kLoadReadOnly);
@@ -400,7 +405,7 @@ TEST_CASE("BufferConfig") {
   CHECK(BufferConfig(StrId("srv"), BufferStateType::kSrv).dimension_type == BufferDimensionType::k2d);
   CHECK(BufferConfig(StrId("srv"), BufferStateType::kSrv).index_to_render == 0);
   CHECK(BufferConfig(StrId("srv"), BufferStateType::kSrv).buffer_num_to_render == 1);
-  CHECK(BufferConfig(StrId("srv"), BufferStateType::kSrv).depth == 1.0f);
+  CHECK(BufferConfig(StrId("srv"), BufferStateType::kSrv).depth == 1);
   CHECK(BufferConfig(StrId("cbv"), BufferStateType::kCbv).name == StrId("cbv"));
   CHECK(BufferConfig(StrId("cbv"), BufferStateType::kCbv).state_type == BufferStateType::kCbv);
   CHECK(BufferConfig(StrId("cbv"), BufferStateType::kCbv).load_op_type == BufferLoadOpType::kLoadReadOnly);
@@ -412,7 +417,7 @@ TEST_CASE("BufferConfig") {
   CHECK(BufferConfig(StrId("cbv"), BufferStateType::kCbv).dimension_type == BufferDimensionType::kBuffer);
   CHECK(BufferConfig(StrId("cbv"), BufferStateType::kCbv).index_to_render == 0);
   CHECK(BufferConfig(StrId("cbv"), BufferStateType::kCbv).buffer_num_to_render == 1);
-  CHECK(BufferConfig(StrId("cbv"), BufferStateType::kCbv).depth == 1.0f);
+  CHECK(BufferConfig(StrId("cbv"), BufferStateType::kCbv).depth == 1);
   CHECK(BufferConfig(StrId("uav"), BufferStateType::kUav).name == StrId("uav"));
   CHECK(BufferConfig(StrId("uav"), BufferStateType::kUav).state_type == BufferStateType::kUav);
   CHECK(BufferConfig(StrId("uav"), BufferStateType::kUav).load_op_type == BufferLoadOpType::kDontCare);
@@ -424,7 +429,7 @@ TEST_CASE("BufferConfig") {
   CHECK(BufferConfig(StrId("uav"), BufferStateType::kUav).dimension_type == BufferDimensionType::k2d);
   CHECK(BufferConfig(StrId("uav"), BufferStateType::kUav).index_to_render == 0);
   CHECK(BufferConfig(StrId("uav"), BufferStateType::kUav).buffer_num_to_render == 1);
-  CHECK(BufferConfig(StrId("uav"), BufferStateType::kUav).depth == 1.0f);
+  CHECK(BufferConfig(StrId("uav"), BufferStateType::kUav).depth == 1);
   CHECK(BufferConfig(StrId("dsv"), BufferStateType::kDsv).name == StrId("dsv"));
   CHECK(BufferConfig(StrId("dsv"), BufferStateType::kDsv).state_type == BufferStateType::kDsv);
   CHECK(BufferConfig(StrId("dsv"), BufferStateType::kDsv).load_op_type == BufferLoadOpType::kClear);
@@ -437,7 +442,7 @@ TEST_CASE("BufferConfig") {
   CHECK(BufferConfig(StrId("dsv"), BufferStateType::kDsv).dimension_type == BufferDimensionType::k2d);
   CHECK(BufferConfig(StrId("dsv"), BufferStateType::kDsv).index_to_render == 0);
   CHECK(BufferConfig(StrId("dsv"), BufferStateType::kDsv).buffer_num_to_render == 1);
-  CHECK(BufferConfig(StrId("dsv"), BufferStateType::kDsv).depth == 1.0f);
+  CHECK(BufferConfig(StrId("dsv"), BufferStateType::kDsv).depth == 1);
   CHECK(BufferConfig(StrId("copysrc"), BufferStateType::kCopySrc).name == StrId("copysrc"));
   CHECK(BufferConfig(StrId("copysrc"), BufferStateType::kCopySrc).state_type == BufferStateType::kCopySrc);
   CHECK(BufferConfig(StrId("copysrc"), BufferStateType::kCopySrc).load_op_type == BufferLoadOpType::kLoadReadOnly);
@@ -449,7 +454,7 @@ TEST_CASE("BufferConfig") {
   CHECK(BufferConfig(StrId("copysrc"), BufferStateType::kCopySrc).dimension_type == BufferDimensionType::k2d);
   CHECK(BufferConfig(StrId("copysrc"), BufferStateType::kCopySrc).index_to_render == 0);
   CHECK(BufferConfig(StrId("copysrc"), BufferStateType::kCopySrc).buffer_num_to_render == 1);
-  CHECK(BufferConfig(StrId("copysrc"), BufferStateType::kCopySrc).depth == 1.0f);
+  CHECK(BufferConfig(StrId("copysrc"), BufferStateType::kCopySrc).depth == 1);
   CHECK(BufferConfig(StrId("copydst"), BufferStateType::kCopyDst).name == StrId("copydst"));
   CHECK(BufferConfig(StrId("copydst"), BufferStateType::kCopyDst).state_type == BufferStateType::kCopyDst);
   CHECK(BufferConfig(StrId("copydst"), BufferStateType::kCopyDst).load_op_type == BufferLoadOpType::kDontCare);
@@ -461,7 +466,7 @@ TEST_CASE("BufferConfig") {
   CHECK(BufferConfig(StrId("copydst"), BufferStateType::kCopyDst).dimension_type == BufferDimensionType::k2d);
   CHECK(BufferConfig(StrId("copydst"), BufferStateType::kCopyDst).index_to_render == 0);
   CHECK(BufferConfig(StrId("copydst"), BufferStateType::kCopyDst).buffer_num_to_render == 1);
-  CHECK(BufferConfig(StrId("copysrc"), BufferStateType::kCopySrc).depth == 1.0f);
+  CHECK(BufferConfig(StrId("copysrc"), BufferStateType::kCopySrc).depth == 1);
   BufferConfig func_check(StrId("func-check"), BufferStateType::kRtv);
   CHECK(func_check.name == StrId("func-check"));
   CHECK(func_check.state_type == BufferStateType::kRtv);
@@ -474,7 +479,7 @@ TEST_CASE("BufferConfig") {
   CHECK(func_check.dimension_type == BufferDimensionType::k2d);
   CHECK(func_check.index_to_render == 0);
   CHECK(func_check.buffer_num_to_render == 1);
-  CHECK(func_check.depth == 1.0f);
+  CHECK(func_check.depth == 1);
   CHECK(func_check.LoadOpType(BufferLoadOpType::kLoadWrite).load_op_type == BufferLoadOpType::kLoadWrite);
   CHECK(func_check.name == StrId("func-check"));
   CHECK(func_check.state_type == BufferStateType::kRtv);
@@ -487,7 +492,7 @@ TEST_CASE("BufferConfig") {
   CHECK(func_check.dimension_type == BufferDimensionType::k2d);
   CHECK(func_check.index_to_render == 0);
   CHECK(func_check.buffer_num_to_render == 1);
-  CHECK(func_check.depth == 1.0f);
+  CHECK(func_check.depth == 1);
   CHECK(func_check.Format(BufferFormat::kD32Float).format == BufferFormat::kD32Float);
   CHECK(func_check.name == StrId("func-check"));
   CHECK(func_check.state_type == BufferStateType::kRtv);
@@ -500,7 +505,7 @@ TEST_CASE("BufferConfig") {
   CHECK(func_check.dimension_type == BufferDimensionType::k2d);
   CHECK(func_check.index_to_render == 0);
   CHECK(func_check.buffer_num_to_render == 1);
-  CHECK(func_check.depth == 1.0f);
+  CHECK(func_check.depth == 1);
   CHECK(func_check.Size(BufferSizeType::kAbsolute, 123, 456).size_type == BufferSizeType::kAbsolute);
   CHECK(func_check.name == StrId("func-check"));
   CHECK(func_check.state_type == BufferStateType::kRtv);
@@ -513,7 +518,7 @@ TEST_CASE("BufferConfig") {
   CHECK(func_check.dimension_type == BufferDimensionType::k2d);
   CHECK(func_check.index_to_render == 0);
   CHECK(func_check.buffer_num_to_render == 1);
-  CHECK(func_check.depth == 1.0f);
+  CHECK(func_check.depth == 1);
   CHECK(GetClearValueColorBuffer(func_check.ClearValue(ClearValue(std::array<float, 4>{123.0f, 456.0f, 789.0f, 100.0f})).clear_value)[0] == 123.0f);
   CHECK(func_check.name == StrId("func-check"));
   CHECK(func_check.state_type == BufferStateType::kRtv);
@@ -529,8 +534,9 @@ TEST_CASE("BufferConfig") {
   CHECK(func_check.dimension_type == BufferDimensionType::k2d);
   CHECK(func_check.index_to_render == 0);
   CHECK(func_check.buffer_num_to_render == 1);
-  CHECK(func_check.depth == 1.0f);
+  CHECK(func_check.depth == 1);
   CHECK(func_check.name == StrId("func-check"));
+  CHECK(func_check.Depth(123).depth == 123);
   CHECK(func_check.state_type == BufferStateType::kRtv);
   CHECK(func_check.load_op_type == BufferLoadOpType::kLoadWrite);
   CHECK(func_check.format == BufferFormat::kD32Float);
@@ -544,7 +550,7 @@ TEST_CASE("BufferConfig") {
   CHECK(func_check.dimension_type == BufferDimensionType::k2d);
   CHECK(func_check.index_to_render == 0);
   CHECK(func_check.buffer_num_to_render == 1);
-  CHECK(func_check.depth == 0.123f);
+  CHECK(func_check.depth == 123);
   CHECK(func_check.Dimension(BufferDimensionType::k3d).dimension_type == BufferDimensionType::k3d);
   CHECK(func_check.name == StrId("func-check"));
   CHECK(func_check.state_type == BufferStateType::kRtv);
@@ -560,7 +566,7 @@ TEST_CASE("BufferConfig") {
   CHECK(func_check.dimension_type == BufferDimensionType::k3d);
   CHECK(func_check.index_to_render == 0);
   CHECK(func_check.buffer_num_to_render == 1);
-  CHECK(func_check.depth == 0.123f);
+  CHECK(func_check.depth == 123);
   CHECK(func_check.RenderTargetIndex(12, 34).index_to_render == 12);
   CHECK(func_check.name == StrId("func-check"));
   CHECK(func_check.state_type == BufferStateType::kRtv);
@@ -576,7 +582,7 @@ TEST_CASE("BufferConfig") {
   CHECK(func_check.dimension_type == BufferDimensionType::k3d);
   CHECK(func_check.index_to_render == 12);
   CHECK(func_check.buffer_num_to_render == 34);
-  CHECK(func_check.depth == 0.123f);
+  CHECK(func_check.depth == 123);
 }
 TEST_CASE("CreateRenderPassListSimple") {
   using namespace illuminate;
@@ -952,7 +958,7 @@ TEST_CASE("buffer creation desc and allocation") {
           BufferConfig(StrId("1"), BufferStateType::kRtv),
           BufferConfig(StrId("2"), BufferStateType::kUav).Size(BufferSizeType::kAbsolute, 5, 7),
           BufferConfig(StrId("3"), BufferStateType::kDsv),
-          BufferConfig(StrId("5"), BufferStateType::kRtv).Dimension(BufferDimensionType::k3d).SizeDepth(8),
+          BufferConfig(StrId("5"), BufferStateType::kRtv).Dimension(BufferDimensionType::k3d).Depth(8),
         },
         memory_resource.get()
       }
@@ -983,7 +989,7 @@ TEST_CASE("buffer creation desc and allocation") {
   auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("4")}, memory_resource.get());
   auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
   auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
-  auto used_buffer_list = GetUsedBufferList(culled_render_pass_order, render_pass_id_map, buffer_id_list, memory_resource.get());
+  auto used_buffer_list = GetUsedBufferList(used_render_pass_list, buffer_id_list, memory_resource.get());
   CHECK(used_buffer_list.size() == 5);
   CHECK(used_buffer_list.contains(0));
   CHECK(used_buffer_list.contains(1));

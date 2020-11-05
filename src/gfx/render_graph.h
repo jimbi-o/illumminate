@@ -42,7 +42,7 @@ class BufferConfig {
         dimension_type(BufferDimensionType::kBuffer),
         index_to_render(0),
         buffer_num_to_render(1),
-        depth(1.0f)
+        depth(1)
   {}
   constexpr BufferConfig(StrId&& buffer_name, const BufferStateType state)
       : name(std::move(buffer_name)),
@@ -54,13 +54,13 @@ class BufferConfig {
         dimension_type(state_type == BufferStateType::kCbv ? BufferDimensionType::kBuffer : BufferDimensionType::k2d),
         index_to_render(0),
         buffer_num_to_render(1),
-        depth(1.0f)
+        depth(1)
   {}
   constexpr BufferConfig& LoadOpType(const BufferLoadOpType op) { load_op_type = op; return *this; }
   constexpr BufferConfig& Format(const BufferFormat f) { format = f; return *this; }
   constexpr BufferConfig& Size(const BufferSizeType type, const float w, const float h) { size_type = type; width = w; height = h; return *this; }
   constexpr BufferConfig& ClearValue(ClearValue&& c) { clear_value = std::move(c); return *this; }
-  constexpr BufferConfig& SizeDepth(const float d) { depth = d; return *this; }
+  constexpr BufferConfig& Depth(const uint32_t d) { depth = d; return *this; }
   constexpr BufferConfig& Dimension(const BufferDimensionType type) { dimension_type = type; return *this; }
   constexpr BufferConfig& RenderTargetIndex(const uint8_t index, const uint8_t num = 1) { index_to_render = index; buffer_num_to_render = num; return *this; }
   StrId name;
@@ -75,7 +75,7 @@ class BufferConfig {
   uint8_t          index_to_render;
   uint8_t          buffer_num_to_render;
   std::byte        _pad;
-  float            depth;
+  uint32_t         depth;
 };
 using BufferConfigList = std::pmr::vector<BufferConfig>;
 class RenderPass {
