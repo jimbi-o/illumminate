@@ -129,6 +129,48 @@ bool IsDuplicateRenderPassNameExists(const RenderPassList& list, std::pmr::memor
   }
   return false;
 }
+auto GetUsedBufferList(const RenderPassOrder& render_pass_order, const RenderPassIdMap& render_pass_id_map, const BufferIdList& buffer_id_list, std::pmr::memory_resource* memory_resource) {
+  return std::pmr::unordered_set<BufferId>{memory_resource};
+}
+enum BufferStateFlags : uint32_t {
+  kBufferStateFlagCbv = 0x0001,
+  kBufferStateFlagSrv = 0x0002,
+  kBufferStateFlagUav = 0x0004,
+  kBufferStateFlagRtv = 0x0008,
+  kBufferStateFlagDsv = 0x0010,
+  kBufferStateFlagCopySrc = 0x0020,
+  kBufferStateFlagCopyDst = 0x0040,
+};
+struct BufferCreationDesc {
+  BufferFormat format;
+  BufferDimensionType dimension_type;
+  BufferStateType initial_state;
+  BufferStateFlags state_flags;
+  uint32_t width, height, depth;
+  ClearValue clear_value;
+};
+struct BufferSize2d { uint32_t width, height; };
+using BufferCreationDescList = std::pmr::unordered_map<BufferId, BufferCreationDesc>;
+auto ConfigureBufferCreationDescs(const RenderPassOrder& render_pass_order, const RenderPassIdMap& render_pass_id_map, const BufferIdList& buffer_id_list, const std::pmr::unordered_set<BufferId>& used_buffer_list, const BufferSize2d& mainbuffer_size, const BufferSize2d& swapchain_size, std::pmr::memory_resource* memory_resource) {
+  return BufferCreationDescList{memory_resource};
+}
+auto GetPhysicalBufferSizeInByte(const BufferCreationDescList& buffer_creation_descs, std::function<std::tuple<size_t, uint32_t>(const BufferCreationDesc&)>&& buffer_creation_func, std::pmr::memory_resource* memory_resource) {
+  return std::make_tuple(std::pmr::unordered_map<BufferId, size_t>{memory_resource}, std::pmr::unordered_map<BufferId, uint32_t>(memory_resource));
+}
+auto CalculatePhysicalBufferLiftime(const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, std::pmr::memory_resource* memory_resource) {
+  return std::make_tuple(std::pmr::unordered_map<BufferId, StrId>{}, std::pmr::unordered_map<BufferId, StrId>());
+}
+auto GetPhysicalBufferAddressOffset(const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, const std::pmr::unordered_map<BufferId, StrId>& physical_buffer_lifetime_begin, const std::pmr::unordered_map<BufferId, StrId>& physical_buffer_lifetime_end, const std::pmr::unordered_map<BufferId, size_t>& physical_buffer_size_in_byte, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, std::pmr::memory_resource* memory_resource) {
+  return std::pmr::unordered_map<BufferId, uint32_t>{memory_resource};
+}
+template <typename T>
+using PhysicalBuffers = std::pmr::unordered_map<BufferId, T>;
+template <typename T>
+using PhysicalBufferAllocationFunc = std::function<T(const BufferCreationDesc&, const uint64_t, const uint32_t, const uint32_t)>;
+template <typename T>
+auto AllocatePhysicalBuffers(const BufferCreationDescList& buffer_creation_descs, const std::pmr::unordered_map<BufferId, size_t>& physical_buffer_size_in_byte, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_address_offset, std::function<T(const BufferCreationDesc&, const uint64_t, const uint32_t, const uint32_t)>&& alloc_func, std::pmr::memory_resource* memory_resource) {
+  return PhysicalBuffers<T>{memory_resource};
+}
 }
 #ifdef BUILD_WITH_TEST
 #include "minimal_for_cpp.h"
@@ -344,7 +386,6 @@ TEST_CASE("BufferConfig") {
   CHECK(BufferConfig(StrId("rtv"), BufferStateType::kRtv).height == 1.0f);
   CHECK(GetClearValueColorBuffer(BufferConfig(StrId("rtv"), BufferStateType::kRtv).clear_value) == GetClearValueColorBuffer(GetClearValueDefaultColorBuffer()));
   CHECK(BufferConfig(StrId("rtv"), BufferStateType::kRtv).dimension_type == BufferDimensionType::k2d);
-  CHECK(BufferConfig(StrId("rtv"), BufferStateType::kRtv).size_type_depth == BufferSizeType::kAbsolute);
   CHECK(BufferConfig(StrId("rtv"), BufferStateType::kRtv).index_to_render == 0);
   CHECK(BufferConfig(StrId("rtv"), BufferStateType::kRtv).buffer_num_to_render == 1);
   CHECK(BufferConfig(StrId("rtv"), BufferStateType::kRtv).depth == 1.0f);
@@ -357,7 +398,6 @@ TEST_CASE("BufferConfig") {
   CHECK(BufferConfig(StrId("srv"), BufferStateType::kSrv).height == 1.0f);
   CHECK(GetClearValueColorBuffer(BufferConfig(StrId("srv"), BufferStateType::kSrv).clear_value) == GetClearValueColorBuffer(GetClearValueDefaultColorBuffer()));
   CHECK(BufferConfig(StrId("srv"), BufferStateType::kSrv).dimension_type == BufferDimensionType::k2d);
-  CHECK(BufferConfig(StrId("srv"), BufferStateType::kSrv).size_type_depth == BufferSizeType::kAbsolute);
   CHECK(BufferConfig(StrId("srv"), BufferStateType::kSrv).index_to_render == 0);
   CHECK(BufferConfig(StrId("srv"), BufferStateType::kSrv).buffer_num_to_render == 1);
   CHECK(BufferConfig(StrId("srv"), BufferStateType::kSrv).depth == 1.0f);
@@ -370,7 +410,6 @@ TEST_CASE("BufferConfig") {
   CHECK(BufferConfig(StrId("cbv"), BufferStateType::kCbv).height == 1.0f);
   CHECK(GetClearValueColorBuffer(BufferConfig(StrId("cbv"), BufferStateType::kCbv).clear_value) == GetClearValueColorBuffer(GetClearValueDefaultColorBuffer()));
   CHECK(BufferConfig(StrId("cbv"), BufferStateType::kCbv).dimension_type == BufferDimensionType::kBuffer);
-  CHECK(BufferConfig(StrId("cbv"), BufferStateType::kCbv).size_type_depth == BufferSizeType::kAbsolute);
   CHECK(BufferConfig(StrId("cbv"), BufferStateType::kCbv).index_to_render == 0);
   CHECK(BufferConfig(StrId("cbv"), BufferStateType::kCbv).buffer_num_to_render == 1);
   CHECK(BufferConfig(StrId("cbv"), BufferStateType::kCbv).depth == 1.0f);
@@ -383,7 +422,6 @@ TEST_CASE("BufferConfig") {
   CHECK(BufferConfig(StrId("uav"), BufferStateType::kUav).height == 1.0f);
   CHECK(GetClearValueColorBuffer(BufferConfig(StrId("uav"), BufferStateType::kUav).clear_value) == GetClearValueColorBuffer(GetClearValueDefaultColorBuffer()));
   CHECK(BufferConfig(StrId("uav"), BufferStateType::kUav).dimension_type == BufferDimensionType::k2d);
-  CHECK(BufferConfig(StrId("uav"), BufferStateType::kUav).size_type_depth == BufferSizeType::kAbsolute);
   CHECK(BufferConfig(StrId("uav"), BufferStateType::kUav).index_to_render == 0);
   CHECK(BufferConfig(StrId("uav"), BufferStateType::kUav).buffer_num_to_render == 1);
   CHECK(BufferConfig(StrId("uav"), BufferStateType::kUav).depth == 1.0f);
@@ -397,7 +435,6 @@ TEST_CASE("BufferConfig") {
   CHECK(GetClearValueDepthBuffer(BufferConfig(StrId("dsv"), BufferStateType::kDsv).clear_value).depth == GetClearValueDepthBuffer(GetClearValueDefaultDepthBuffer()).depth);
   CHECK(GetClearValueDepthBuffer(BufferConfig(StrId("dsv"), BufferStateType::kDsv).clear_value).stencil == GetClearValueDepthBuffer(GetClearValueDefaultDepthBuffer()).stencil);
   CHECK(BufferConfig(StrId("dsv"), BufferStateType::kDsv).dimension_type == BufferDimensionType::k2d);
-  CHECK(BufferConfig(StrId("dsv"), BufferStateType::kDsv).size_type_depth == BufferSizeType::kAbsolute);
   CHECK(BufferConfig(StrId("dsv"), BufferStateType::kDsv).index_to_render == 0);
   CHECK(BufferConfig(StrId("dsv"), BufferStateType::kDsv).buffer_num_to_render == 1);
   CHECK(BufferConfig(StrId("dsv"), BufferStateType::kDsv).depth == 1.0f);
@@ -410,7 +447,6 @@ TEST_CASE("BufferConfig") {
   CHECK(BufferConfig(StrId("copysrc"), BufferStateType::kCopySrc).height == 1.0f);
   CHECK(GetClearValueColorBuffer(BufferConfig(StrId("copysrc"), BufferStateType::kCopySrc).clear_value) == GetClearValueColorBuffer(GetClearValueDefaultColorBuffer()));
   CHECK(BufferConfig(StrId("copysrc"), BufferStateType::kCopySrc).dimension_type == BufferDimensionType::k2d);
-  CHECK(BufferConfig(StrId("copysrc"), BufferStateType::kCopySrc).size_type_depth == BufferSizeType::kAbsolute);
   CHECK(BufferConfig(StrId("copysrc"), BufferStateType::kCopySrc).index_to_render == 0);
   CHECK(BufferConfig(StrId("copysrc"), BufferStateType::kCopySrc).buffer_num_to_render == 1);
   CHECK(BufferConfig(StrId("copysrc"), BufferStateType::kCopySrc).depth == 1.0f);
@@ -423,7 +459,6 @@ TEST_CASE("BufferConfig") {
   CHECK(BufferConfig(StrId("copydst"), BufferStateType::kCopyDst).height == 1.0f);
   CHECK(GetClearValueColorBuffer(BufferConfig(StrId("copydst"), BufferStateType::kCopyDst).clear_value) == GetClearValueColorBuffer(GetClearValueDefaultColorBuffer()));
   CHECK(BufferConfig(StrId("copydst"), BufferStateType::kCopyDst).dimension_type == BufferDimensionType::k2d);
-  CHECK(BufferConfig(StrId("copydst"), BufferStateType::kCopyDst).size_type_depth == BufferSizeType::kAbsolute);
   CHECK(BufferConfig(StrId("copydst"), BufferStateType::kCopyDst).index_to_render == 0);
   CHECK(BufferConfig(StrId("copydst"), BufferStateType::kCopyDst).buffer_num_to_render == 1);
   CHECK(BufferConfig(StrId("copysrc"), BufferStateType::kCopySrc).depth == 1.0f);
@@ -437,7 +472,6 @@ TEST_CASE("BufferConfig") {
   CHECK(func_check.height == 1.0f);
   CHECK(GetClearValueColorBuffer(func_check.clear_value) == GetClearValueColorBuffer(GetClearValueDefaultColorBuffer()));
   CHECK(func_check.dimension_type == BufferDimensionType::k2d);
-  CHECK(func_check.size_type_depth == BufferSizeType::kAbsolute);
   CHECK(func_check.index_to_render == 0);
   CHECK(func_check.buffer_num_to_render == 1);
   CHECK(func_check.depth == 1.0f);
@@ -451,7 +485,6 @@ TEST_CASE("BufferConfig") {
   CHECK(func_check.height == 1.0f);
   CHECK(GetClearValueColorBuffer(func_check.clear_value) == GetClearValueColorBuffer(GetClearValueDefaultColorBuffer()));
   CHECK(func_check.dimension_type == BufferDimensionType::k2d);
-  CHECK(func_check.size_type_depth == BufferSizeType::kAbsolute);
   CHECK(func_check.index_to_render == 0);
   CHECK(func_check.buffer_num_to_render == 1);
   CHECK(func_check.depth == 1.0f);
@@ -465,7 +498,6 @@ TEST_CASE("BufferConfig") {
   CHECK(func_check.height == 1.0f);
   CHECK(GetClearValueColorBuffer(func_check.clear_value) == GetClearValueColorBuffer(GetClearValueDefaultColorBuffer()));
   CHECK(func_check.dimension_type == BufferDimensionType::k2d);
-  CHECK(func_check.size_type_depth == BufferSizeType::kAbsolute);
   CHECK(func_check.index_to_render == 0);
   CHECK(func_check.buffer_num_to_render == 1);
   CHECK(func_check.depth == 1.0f);
@@ -479,7 +511,6 @@ TEST_CASE("BufferConfig") {
   CHECK(func_check.height == 456.0f);
   CHECK(GetClearValueColorBuffer(func_check.clear_value) == GetClearValueColorBuffer(GetClearValueDefaultColorBuffer()));
   CHECK(func_check.dimension_type == BufferDimensionType::k2d);
-  CHECK(func_check.size_type_depth == BufferSizeType::kAbsolute);
   CHECK(func_check.index_to_render == 0);
   CHECK(func_check.buffer_num_to_render == 1);
   CHECK(func_check.depth == 1.0f);
@@ -496,11 +527,9 @@ TEST_CASE("BufferConfig") {
   CHECK(GetClearValueColorBuffer(func_check.clear_value)[2] == 789.0f);
   CHECK(GetClearValueColorBuffer(func_check.clear_value)[3] == 100.0f);
   CHECK(func_check.dimension_type == BufferDimensionType::k2d);
-  CHECK(func_check.size_type_depth == BufferSizeType::kAbsolute);
   CHECK(func_check.index_to_render == 0);
   CHECK(func_check.buffer_num_to_render == 1);
   CHECK(func_check.depth == 1.0f);
-  CHECK(func_check.SizeDepth(BufferSizeType::kMainbufferRelative, 0.123f).size_type_depth == BufferSizeType::kMainbufferRelative);
   CHECK(func_check.name == StrId("func-check"));
   CHECK(func_check.state_type == BufferStateType::kRtv);
   CHECK(func_check.load_op_type == BufferLoadOpType::kLoadWrite);
@@ -513,7 +542,6 @@ TEST_CASE("BufferConfig") {
   CHECK(GetClearValueColorBuffer(func_check.clear_value)[2] == 789.0f);
   CHECK(GetClearValueColorBuffer(func_check.clear_value)[3] == 100.0f);
   CHECK(func_check.dimension_type == BufferDimensionType::k2d);
-  CHECK(func_check.size_type_depth == BufferSizeType::kMainbufferRelative);
   CHECK(func_check.index_to_render == 0);
   CHECK(func_check.buffer_num_to_render == 1);
   CHECK(func_check.depth == 0.123f);
@@ -530,7 +558,6 @@ TEST_CASE("BufferConfig") {
   CHECK(GetClearValueColorBuffer(func_check.clear_value)[2] == 789.0f);
   CHECK(GetClearValueColorBuffer(func_check.clear_value)[3] == 100.0f);
   CHECK(func_check.dimension_type == BufferDimensionType::k3d);
-  CHECK(func_check.size_type_depth == BufferSizeType::kMainbufferRelative);
   CHECK(func_check.index_to_render == 0);
   CHECK(func_check.buffer_num_to_render == 1);
   CHECK(func_check.depth == 0.123f);
@@ -547,7 +574,6 @@ TEST_CASE("BufferConfig") {
   CHECK(GetClearValueColorBuffer(func_check.clear_value)[2] == 789.0f);
   CHECK(GetClearValueColorBuffer(func_check.clear_value)[3] == 100.0f);
   CHECK(func_check.dimension_type == BufferDimensionType::k3d);
-  CHECK(func_check.size_type_depth == BufferSizeType::kMainbufferRelative);
   CHECK(func_check.index_to_render == 12);
   CHECK(func_check.buffer_num_to_render == 34);
   CHECK(func_check.depth == 0.123f);
@@ -913,6 +939,162 @@ TEST_CASE("RenderPassNameDupCheck") {
   CHECK(!IsDuplicateRenderPassNameExists(render_pass_list, memory_resource.get()));
   render_pass_list.push_back(render_pass_list[0]);
   CHECK(IsDuplicateRenderPassNameExists(render_pass_list, memory_resource.get()));
+}
+TEST_CASE("buffer creation desc and allocation") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, size_in_byte);
+  RenderPassList render_pass_list(memory_resource.get());
+  render_pass_list.push_back(RenderPass(
+      StrId("1"),
+      {
+        {
+          BufferConfig(StrId("1"), BufferStateType::kRtv),
+          BufferConfig(StrId("2"), BufferStateType::kUav).Size(BufferSizeType::kAbsolute, 5, 7),
+          BufferConfig(StrId("3"), BufferStateType::kDsv),
+          BufferConfig(StrId("5"), BufferStateType::kRtv).Dimension(BufferDimensionType::k3d).SizeDepth(8),
+        },
+        memory_resource.get()
+      }
+  ));
+  render_pass_list.push_back(RenderPass(
+      StrId("2"),
+      {
+        {
+          BufferConfig(StrId("1"), BufferStateType::kRtv).LoadOpType(BufferLoadOpType::kLoadWrite),
+          BufferConfig(StrId("2"), BufferStateType::kSrv),
+          BufferConfig(StrId("4"), BufferStateType::kRtv).Size(BufferSizeType::kSwapchainRelative, 2, 4),
+        },
+        memory_resource.get()
+      }
+  ));
+  render_pass_list.push_back(RenderPass(
+      StrId("3"),
+      {
+        {
+          BufferConfig(StrId("6"), BufferStateType::kRtv).LoadOpType(BufferLoadOpType::kLoadWrite),
+        },
+        memory_resource.get()
+      }
+  ));
+  auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
+  auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
+  auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, memory_resource.get());
+  auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("4")}, memory_resource.get());
+  auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
+  auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
+  auto used_buffer_list = GetUsedBufferList(culled_render_pass_order, render_pass_id_map, buffer_id_list, memory_resource.get());
+  CHECK(used_buffer_list.size() == 5);
+  CHECK(used_buffer_list.contains(0));
+  CHECK(used_buffer_list.contains(1));
+  CHECK(used_buffer_list.contains(2));
+  CHECK(used_buffer_list.contains(3));
+  CHECK(used_buffer_list.contains(4));
+  auto buffer_creation_descs = ConfigureBufferCreationDescs(culled_render_pass_order, render_pass_id_map, buffer_id_list, used_buffer_list, {12, 34}, {56, 78}, memory_resource.get());
+  CHECK(buffer_creation_descs.size() == 4);
+  CHECK(buffer_creation_descs[0].initial_state == BufferStateType::kRtv);
+  CHECK(buffer_creation_descs[0].state_flags == kBufferStateFlagRtv);
+  CHECK(buffer_creation_descs[0].format == BufferFormat::kR8G8B8A8Unorm);
+  CHECK(buffer_creation_descs[0].width == 12);
+  CHECK(buffer_creation_descs[0].height == 34);
+  CHECK(GetClearValueColorBuffer(buffer_creation_descs[0].clear_value) == GetClearValueColorBuffer(GetClearValueDefaultColorBuffer()));
+  CHECK(buffer_creation_descs[0].dimension_type == BufferDimensionType::k2d);
+  CHECK(buffer_creation_descs[0].depth == 1);
+  CHECK(buffer_creation_descs[1].initial_state == BufferStateType::kUav);
+  CHECK(buffer_creation_descs[1].state_flags == (kBufferStateFlagUav | kBufferStateFlagSrv));
+  CHECK(buffer_creation_descs[1].format == BufferFormat::kR8G8B8A8Unorm);
+  CHECK(buffer_creation_descs[1].width == 5);
+  CHECK(buffer_creation_descs[1].height == 7);
+  CHECK(GetClearValueColorBuffer(buffer_creation_descs[1].clear_value) == GetClearValueColorBuffer(GetClearValueDefaultColorBuffer()));
+  CHECK(buffer_creation_descs[1].dimension_type == BufferDimensionType::k2d);
+  CHECK(buffer_creation_descs[1].depth == 1);
+  CHECK(buffer_creation_descs[2].initial_state == BufferStateType::kDsv);
+  CHECK(buffer_creation_descs[2].state_flags == kBufferStateFlagDsv);
+  CHECK(buffer_creation_descs[2].format == BufferFormat::kD32Float);
+  CHECK(buffer_creation_descs[2].width == 12);
+  CHECK(buffer_creation_descs[2].height == 34);
+  CHECK(GetClearValueColorBuffer(buffer_creation_descs[2].clear_value) == GetClearValueColorBuffer(GetClearValueDefaultDepthBuffer()));
+  CHECK(buffer_creation_descs[2].dimension_type == BufferDimensionType::k2d);
+  CHECK(buffer_creation_descs[2].depth == 1);
+  CHECK(buffer_creation_descs[3].initial_state == BufferStateType::kRtv);
+  CHECK(buffer_creation_descs[3].state_flags == kBufferStateFlagRtv);
+  CHECK(buffer_creation_descs[3].format == BufferFormat::kR8G8B8A8Unorm);
+  CHECK(buffer_creation_descs[3].width == 12);
+  CHECK(buffer_creation_descs[3].height == 34);
+  CHECK(GetClearValueColorBuffer(buffer_creation_descs[3].clear_value) == GetClearValueColorBuffer(GetClearValueDefaultColorBuffer()));
+  CHECK(buffer_creation_descs[3].dimension_type == BufferDimensionType::k3d);
+  CHECK(buffer_creation_descs[3].depth == 8);
+  CHECK(buffer_creation_descs[4].initial_state == BufferStateType::kRtv);
+  CHECK(buffer_creation_descs[4].state_flags == kBufferStateFlagRtv);
+  CHECK(buffer_creation_descs[4].format == BufferFormat::kR8G8B8A8Unorm);
+  CHECK(buffer_creation_descs[4].width == 56 * 2);
+  CHECK(buffer_creation_descs[4].height == 78 * 4);
+  CHECK(GetClearValueColorBuffer(buffer_creation_descs[4].clear_value) == GetClearValueColorBuffer(GetClearValueDefaultColorBuffer()));
+  CHECK(buffer_creation_descs[4].dimension_type == BufferDimensionType::k2d);
+  CHECK(buffer_creation_descs[4].depth == 1);
+  auto [physical_buffer_size_in_byte, physical_buffer_alignment] = GetPhysicalBufferSizeInByte(buffer_creation_descs, []([[maybe_unused]] const BufferCreationDesc& desc) { return std::make_tuple<size_t, uint32_t>(sizeof(uint32_t), 4); }, memory_resource.get());
+  CHECK(physical_buffer_size_in_byte.size() == 5);
+  CHECK(physical_buffer_size_in_byte[0] == 4);
+  CHECK(physical_buffer_size_in_byte[1] == 4);
+  CHECK(physical_buffer_size_in_byte[2] == 4);
+  CHECK(physical_buffer_size_in_byte[3] == 4);
+  CHECK(physical_buffer_size_in_byte[4] == 4);
+  CHECK(physical_buffer_alignment.size() == 5);
+  CHECK(physical_buffer_alignment[0] == 4);
+  CHECK(physical_buffer_alignment[1] == 4);
+  CHECK(physical_buffer_alignment[2] == 4);
+  CHECK(physical_buffer_alignment[3] == 4);
+  CHECK(physical_buffer_alignment[4] == 4);
+  auto [physical_buffer_lifetime_begin, physical_buffer_lifetime_end] = CalculatePhysicalBufferLiftime(culled_render_pass_order, buffer_id_list, memory_resource.get());
+  CHECK(physical_buffer_lifetime_begin[0] == StrId("1"));
+  CHECK(physical_buffer_lifetime_end[0]   == StrId("2"));
+  CHECK(physical_buffer_lifetime_begin[1] == StrId("1"));
+  CHECK(physical_buffer_lifetime_end[1]   == StrId("2"));
+  CHECK(physical_buffer_lifetime_begin[2] == StrId("1"));
+  CHECK(physical_buffer_lifetime_end[2]   == StrId("1"));
+  CHECK(physical_buffer_lifetime_begin[3] == StrId("1"));
+  CHECK(physical_buffer_lifetime_end[3]   == StrId("1"));
+  CHECK(physical_buffer_lifetime_begin[4] == StrId("2"));
+  CHECK(physical_buffer_lifetime_end[4]   == StrId("2"));
+  auto physical_buffer_address_offset = GetPhysicalBufferAddressOffset(culled_render_pass_order, buffer_id_list, physical_buffer_lifetime_begin, physical_buffer_lifetime_end, physical_buffer_size_in_byte, physical_buffer_alignment, memory_resource.get());
+  CHECK(physical_buffer_address_offset[0] == 0);
+  CHECK(physical_buffer_address_offset[1] == 4);
+  CHECK(physical_buffer_address_offset[2] == 8);
+  CHECK(physical_buffer_address_offset[3] == 12);
+  CHECK(physical_buffer_address_offset[4] == 8);
+  using PhysicalBufferType = uint32_t*;
+  auto physical_buffers = AllocatePhysicalBuffers(buffer_creation_descs, physical_buffer_size_in_byte, physical_buffer_alignment, physical_buffer_address_offset, PhysicalBufferAllocationFunc<PhysicalBufferType>{[](const BufferCreationDesc& desc, const uint64_t size_in_byte, const uint32_t alignment, const uint32_t offset_in_byte) { return static_cast<uint32_t*>(static_cast<void*>(&buffer[offset_in_byte])); }}, memory_resource.get());
+  CHECK(reinterpret_cast<std::uintptr_t>(physical_buffers[0]) == reinterpret_cast<std::uintptr_t>(buffer));
+  CHECK(reinterpret_cast<std::uintptr_t>(physical_buffers[1]) == reinterpret_cast<std::uintptr_t>(physical_buffers[0]) + 4);
+  CHECK(reinterpret_cast<std::uintptr_t>(physical_buffers[2]) == reinterpret_cast<std::uintptr_t>(physical_buffers[1]) + 4);
+  CHECK(reinterpret_cast<std::uintptr_t>(physical_buffers[3]) == reinterpret_cast<std::uintptr_t>(physical_buffers[2]) + 4);
+  CHECK(physical_buffers[4] == physical_buffers[2]);
+  std::pmr::unordered_map<StrId, std::function<void(const PassBufferIdList&, const PhysicalBuffers<PhysicalBufferType>&)>> pass_functions{
+    {
+      StrId("1"),
+      [](const PassBufferIdList& buffer_ids, const PhysicalBuffers<PhysicalBufferType>& physical_buffers) {
+        *physical_buffers.at(buffer_ids[0]) = 255;
+        *physical_buffers.at(buffer_ids[1]) = 512;
+        *physical_buffers.at(buffer_ids[2]) = 1001;
+        *physical_buffers.at(buffer_ids[3]) = 1010;
+      }
+    },
+    {
+      StrId("2"),
+      [](const PassBufferIdList& buffer_ids, const PhysicalBuffers<PhysicalBufferType>& physical_buffers) {
+        *physical_buffers.at(buffer_ids[0]) = *physical_buffers.at(buffer_ids[0]) + 1;
+        *physical_buffers.at(buffer_ids[2]) = *physical_buffers.at(buffer_ids[1]) + 1024;
+      }
+    },
+  };
+  for (auto& pass_id : culled_render_pass_order) {
+    pass_functions.at(pass_id)(buffer_id_list.at(pass_id), physical_buffers);
+  }
+  CHECK(*physical_buffers.at(0) == 256);
+  CHECK(*physical_buffers.at(1) == 512);
+  CHECK(*physical_buffers.at(2) == *physical_buffers.at(4));
+  CHECK(*physical_buffers.at(3) == 1010);
+  CHECK(*physical_buffers.at(4) == 512 + 1024);
 }
 #ifdef __clang__
 #pragma clang diagnostic pop

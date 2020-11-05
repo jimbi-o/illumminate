@@ -40,7 +40,6 @@ class BufferConfig {
         size_type(BufferSizeType::kMainbufferRelative), width(1.0f), height(1.0f),
         clear_value(GetClearValueDefaultColorBuffer()),
         dimension_type(BufferDimensionType::kBuffer),
-        size_type_depth(BufferSizeType::kAbsolute),
         index_to_render(0),
         buffer_num_to_render(1),
         depth(1.0f)
@@ -53,7 +52,6 @@ class BufferConfig {
         size_type(BufferSizeType::kMainbufferRelative), width(1.0f), height(1.0f),
         clear_value(state_type == BufferStateType::kDsv ? GetClearValueDefaultDepthBuffer() : GetClearValueDefaultColorBuffer()),
         dimension_type(state_type == BufferStateType::kCbv ? BufferDimensionType::kBuffer : BufferDimensionType::k2d),
-        size_type_depth(BufferSizeType::kAbsolute),
         index_to_render(0),
         buffer_num_to_render(1),
         depth(1.0f)
@@ -62,7 +60,7 @@ class BufferConfig {
   constexpr BufferConfig& Format(const BufferFormat f) { format = f; return *this; }
   constexpr BufferConfig& Size(const BufferSizeType type, const float w, const float h) { size_type = type; width = w; height = h; return *this; }
   constexpr BufferConfig& ClearValue(ClearValue&& c) { clear_value = std::move(c); return *this; }
-  constexpr BufferConfig& SizeDepth(const BufferSizeType type, const float d) { size_type_depth = type; depth = d; return *this; }
+  constexpr BufferConfig& SizeDepth(const float d) { depth = d; return *this; }
   constexpr BufferConfig& Dimension(const BufferDimensionType type) { dimension_type = type; return *this; }
   constexpr BufferConfig& RenderTargetIndex(const uint8_t index, const uint8_t num = 1) { index_to_render = index; buffer_num_to_render = num; return *this; }
   StrId name;
@@ -74,9 +72,9 @@ class BufferConfig {
   float            height;
   illuminate::gfx::ClearValue clear_value;
   BufferDimensionType dimension_type;
-  BufferSizeType   size_type_depth;
   uint8_t          index_to_render;
   uint8_t          buffer_num_to_render;
+  std::byte        _pad;
   float            depth;
 };
 using BufferConfigList = std::pmr::vector<BufferConfig>;
@@ -101,7 +99,8 @@ using RenderPassIdMap = std::pmr::unordered_map<StrId, RenderPass>;
 using RenderPassOrder = std::pmr::vector<StrId>;
 std::tuple<RenderPassIdMap, RenderPassOrder> FormatRenderPassList(RenderPassList&& render_pass_list, std::pmr::memory_resource* memory_resource);
 using BufferId = uint32_t;
-using BufferIdList = std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>;
+using PassBufferIdList = std::pmr::vector<BufferId>;
+using BufferIdList = std::pmr::unordered_map<StrId, PassBufferIdList>;
 BufferIdList CreateBufferIdList(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, std::pmr::memory_resource* memory_resource);
 using BufferNameAliasList = std::pmr::unordered_map<StrId, StrId>;
 BufferIdList ApplyBufferNameAlias(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, BufferIdList&& buffer_id_list, const BufferNameAliasList& alias_list, std::pmr::memory_resource* memory_resource);
