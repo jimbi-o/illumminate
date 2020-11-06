@@ -205,7 +205,12 @@ auto ConfigureBufferCreationDescs(const RenderPassOrder& render_pass_order, cons
   return buffer_creation_descs;
 }
 auto GetPhysicalBufferSizeInByte(const BufferCreationDescList& buffer_creation_descs, std::function<std::tuple<size_t, uint32_t>(const BufferCreationDesc&)>&& buffer_creation_func, std::pmr::memory_resource* memory_resource) {
-  return std::make_tuple(std::pmr::unordered_map<BufferId, size_t>{memory_resource}, std::pmr::unordered_map<BufferId, uint32_t>(memory_resource));
+  std::pmr::unordered_map<BufferId, size_t> physical_buffer_size_in_byte{memory_resource};
+  std::pmr::unordered_map<BufferId, uint32_t> physical_buffer_alignment{memory_resource};
+  for (auto& [id, desc] : buffer_creation_descs) {
+    std::tie(physical_buffer_size_in_byte[id], physical_buffer_alignment[id]) = buffer_creation_func(desc);
+  }
+  return std::make_tuple(physical_buffer_size_in_byte, physical_buffer_alignment);
 }
 auto CalculatePhysicalBufferLiftime(const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, std::pmr::memory_resource* memory_resource) {
   return std::make_tuple(std::pmr::unordered_map<BufferId, StrId>{}, std::pmr::unordered_map<BufferId, StrId>());
