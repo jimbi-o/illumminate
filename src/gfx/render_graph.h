@@ -77,6 +77,13 @@ class BufferConfig {
   std::byte        _pad;
   uint32_t         depth;
 };
+struct BufferSize2d { uint32_t width, height; };
+constexpr uint32_t GetPhsicalBufferWidth(const BufferConfig& config, const BufferSize2d& mainbuffer, const BufferSize2d& swapchain) {
+  return GetPhsicalBufferSize(config.size_type, config.width, mainbuffer.width, swapchain.width);
+}
+constexpr uint32_t GetPhsicalBufferHeight(const BufferConfig& config, const BufferSize2d& mainbuffer, const BufferSize2d& swapchain) {
+  return GetPhsicalBufferSize(config.size_type, config.height, mainbuffer.height, swapchain.height);
+}
 using BufferConfigList = std::pmr::vector<BufferConfig>;
 class RenderPass {
  public:

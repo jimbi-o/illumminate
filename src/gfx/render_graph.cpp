@@ -138,6 +138,7 @@ auto GetUsedBufferList(const std::pmr::unordered_set<StrId>& used_render_pass_li
   return used_buffers;
 }
 enum BufferStateFlags : uint32_t {
+  kBufferStateFlagNone = 0x0000,
   kBufferStateFlagCbv = 0x0001,
   kBufferStateFlagSrv = 0x0002,
   kBufferStateFlagUav = 0x0004,
@@ -146,7 +147,39 @@ enum BufferStateFlags : uint32_t {
   kBufferStateFlagCopySrc = 0x0020,
   kBufferStateFlagCopyDst = 0x0040,
 };
-struct BufferCreationDesc {
+constexpr BufferStateFlags GetBufferStateFlag(const BufferStateType type) {
+  switch (type) {
+    case kCbv: return kBufferStateFlagCbv;
+    case kSrv: return kBufferStateFlagSrv;
+    case kUav: return kBufferStateFlagUav;
+    case kRtv: return kBufferStateFlagRtv;
+    case kDsv: return kBufferStateFlagDsv;
+    case kCopySrc: return kBufferStateFlagCopySrc;
+    case kCopyDst: return kBufferStateFlagCopyDst;
+  }
+}
+class BufferCreationDesc {
+ public:
+  BufferCreationDesc()
+      : format(BufferFormat::kUnknown),
+        dimension_type(BufferDimensionType::k2d),
+        initial_state(BufferStateType::kCbv),
+        state_flags(kBufferStateFlagNone),
+        width(0),
+        height(0),
+        depth(1),
+        clear_value({})
+  {}
+  BufferCreationDesc(const BufferConfig& config, const BufferSize2d& mainbuffer, const BufferSize2d& swapchain)
+      : format(config.format),
+        dimension_type(config.dimension_type),
+        initial_state(config.state_type),
+        state_flags(GetBufferStateFlag(config.state_type)),
+        width(GetPhsicalBufferWidth(config, mainbuffer, swapchain)),
+        height(GetPhsicalBufferHeight(config, mainbuffer, swapchain)),
+        depth(config.depth),
+        clear_value(config.clear_value) // TODO consider using move.
+  {}
   BufferFormat format;
   BufferDimensionType dimension_type;
   BufferStateType initial_state;
@@ -154,10 +187,22 @@ struct BufferCreationDesc {
   uint32_t width, height, depth;
   ClearValue clear_value;
 };
-struct BufferSize2d { uint32_t width, height; };
 using BufferCreationDescList = std::pmr::unordered_map<BufferId, BufferCreationDesc>;
 auto ConfigureBufferCreationDescs(const RenderPassOrder& render_pass_order, const RenderPassIdMap& render_pass_id_map, const BufferIdList& buffer_id_list, const std::pmr::unordered_set<BufferId>& used_buffer_list, const BufferSize2d& mainbuffer_size, const BufferSize2d& swapchain_size, std::pmr::memory_resource* memory_resource) {
-  return BufferCreationDescList{memory_resource};
+  BufferCreationDescList buffer_creation_descs{memory_resource};
+  for (auto& pass_name : render_pass_order) {
+    auto& pass = render_pass_id_map.at(pass_name);
+    auto& pass_buffer_ids = buffer_id_list.at(pass_name);
+    for (uint32_t buffer_index = 0; auto& buffer : pass.buffer_list) {
+      auto buffer_id = pass_buffer_ids[buffer_index];
+      if (!buffer_creation_descs.contains(buffer_id)) {
+        buffer_creation_descs.insert({buffer_id, BufferCreationDesc(buffer, mainbuffer_size, swapchain_size)});
+      }
+      buffer_creation_descs.at(buffer_id).state_flags = static_cast<BufferStateFlags>(buffer_creation_descs.at(buffer_id).state_flags | GetBufferStateFlag(buffer.state_type));
+      buffer_index++;
+    }
+  }
+  return buffer_creation_descs;
 }
 auto GetPhysicalBufferSizeInByte(const BufferCreationDescList& buffer_creation_descs, std::function<std::tuple<size_t, uint32_t>(const BufferCreationDesc&)>&& buffer_creation_func, std::pmr::memory_resource* memory_resource) {
   return std::make_tuple(std::pmr::unordered_map<BufferId, size_t>{memory_resource}, std::pmr::unordered_map<BufferId, uint32_t>(memory_resource));
@@ -997,7 +1042,7 @@ TEST_CASE("buffer creation desc and allocation") {
   CHECK(used_buffer_list.contains(3));
   CHECK(used_buffer_list.contains(4));
   auto buffer_creation_descs = ConfigureBufferCreationDescs(culled_render_pass_order, render_pass_id_map, buffer_id_list, used_buffer_list, {12, 34}, {56, 78}, memory_resource.get());
-  CHECK(buffer_creation_descs.size() == 4);
+  CHECK(buffer_creation_descs.size() == 5);
   CHECK(buffer_creation_descs[0].initial_state == BufferStateType::kRtv);
   CHECK(buffer_creation_descs[0].state_flags == kBufferStateFlagRtv);
   CHECK(buffer_creation_descs[0].format == BufferFormat::kR8G8B8A8Unorm);
@@ -1019,7 +1064,8 @@ TEST_CASE("buffer creation desc and allocation") {
   CHECK(buffer_creation_descs[2].format == BufferFormat::kD32Float);
   CHECK(buffer_creation_descs[2].width == 12);
   CHECK(buffer_creation_descs[2].height == 34);
-  CHECK(GetClearValueColorBuffer(buffer_creation_descs[2].clear_value) == GetClearValueColorBuffer(GetClearValueDefaultDepthBuffer()));
+  CHECK(GetClearValueDepthBuffer(buffer_creation_descs[2].clear_value).depth == GetClearValueDepthBuffer(GetClearValueDefaultDepthBuffer()).depth);
+  CHECK(GetClearValueDepthBuffer(buffer_creation_descs[2].clear_value).stencil == GetClearValueDepthBuffer(GetClearValueDefaultDepthBuffer()).stencil);
   CHECK(buffer_creation_descs[2].dimension_type == BufferDimensionType::k2d);
   CHECK(buffer_creation_descs[2].depth == 1);
   CHECK(buffer_creation_descs[3].initial_state == BufferStateType::kRtv);
@@ -1106,3 +1152,4 @@ TEST_CASE("buffer creation desc and allocation") {
 #pragma clang diagnostic pop
 #endif
 #endif
+// TODO ConfigureBufferCreationDescs for ping-pong buffers

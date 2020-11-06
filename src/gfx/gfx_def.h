@@ -12,22 +12,17 @@ enum class BufferFormat : uint8_t {
   kD32Float,
 };
 enum class BufferSizeType : uint8_t {
-  kSwapchainRelative,
   kMainbufferRelative,
+  kSwapchainRelative,
   kAbsolute,
 };
-constexpr uint32_t GetPhysicalSize(const BufferSizeType type, const float size, const uint32_t swapchain_size, const uint32_t mainbuffer_size) {
-  switch (type) {
-    case BufferSizeType::kSwapchainRelative:  return static_cast<uint32_t>(static_cast<float>(swapchain_size)  * size);
-    case BufferSizeType::kMainbufferRelative: return static_cast<uint32_t>(static_cast<float>(mainbuffer_size) * size);
-    case BufferSizeType::kAbsolute:           return static_cast<uint32_t>(size);
+constexpr uint32_t GetPhsicalBufferSize(const BufferSizeType size_type, const float val, const uint32_t mainbuffer, const uint32_t swapchain) {
+  switch (size_type) {
+    case BufferSizeType::kSwapchainRelative:  return static_cast<uint32_t>(val * static_cast<float>(swapchain));
+    case BufferSizeType::kMainbufferRelative: return static_cast<uint32_t>(val * static_cast<float>(mainbuffer));
+    case BufferSizeType::kAbsolute: return static_cast<uint32_t>(val);
   }
-  return static_cast<uint32_t>(size);
 }
-template <typename T>
-struct Size2d {
-  T x, y;
-};
 struct ClearValueDepthStencil { float depth; uint8_t stencil; uint8_t _dmy[3]; };
 using ClearValue = std::variant<std::array<float, 4>, ClearValueDepthStencil>;
 struct BufferDesc {
@@ -36,13 +31,6 @@ struct BufferDesc {
   float x, y, z;
   ClearValue clear_value;
 };
-using Size2dUint = Size2d<uint32_t>;
-constexpr Size2dUint GetPhysicalSize(const BufferDesc& desc, const Size2dUint& swapchain_size, const Size2dUint& mainbuffer_size) {
-  return {
-    GetPhysicalSize(desc.size_type, desc.x, swapchain_size.x, mainbuffer_size.x),
-    GetPhysicalSize(desc.size_type, desc.y, swapchain_size.y, mainbuffer_size.y),
-  };
-}
 enum class CommandQueueType : uint8_t { kGraphics, kCompute, kTransfer, };
 static const CommandQueueType kCommandQueueTypeSet[]{CommandQueueType::kGraphics, CommandQueueType::kCompute, CommandQueueType::kTransfer};
 constexpr auto GetClearValueDefaultColorBuffer() {
