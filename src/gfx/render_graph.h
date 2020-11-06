@@ -7,7 +7,7 @@
 #include <unordered_map>
 #include <vector>
 #include "gfx_def.h"
-#include "core/strid.h"
+#include "illuminate.h"
 namespace illuminate::gfx {
 constexpr bool IsOutputBuffer(const BufferStateType state_type, const BufferLoadOpType load_op_type) {
   switch (state_type) {

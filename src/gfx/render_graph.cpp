@@ -240,9 +240,58 @@ auto CalculatePhysicalBufferLiftime(const RenderPassOrder& render_pass_order, co
   }
   return std::make_tuple(physical_buffer_lifetime_begin_pass, physical_buffer_lifetime_end_pass);
 }
-auto GetPhysicalBufferAddressOffset(const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<BufferId>>& physical_buffer_lifetime_begin_pass, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<BufferId>>& physical_buffer_lifetime_end_pass, const std::pmr::unordered_map<BufferId, size_t>& physical_buffer_size_in_byte, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, std::pmr::memory_resource* memory_resource) {
+namespace {
+struct Address { uint32_t head_address, size_in_bytes; };
+void MergeToFreeMemory(const uint32_t addr, const uint32_t& size_in_bytes, std::pmr::vector<Address> * const free_memory) {
+  for (auto it = free_memory->begin(); it != free_memory->end(); it++) {
+    if (it->head_address + it->size_in_bytes == addr) {
+      auto head_address = it->head_address;
+      auto new_size = it->size_in_bytes + size_in_bytes;
+      free_memory->erase(it);
+      MergeToFreeMemory(head_address, new_size, free_memory);
+      return;
+    }
+    if (addr + size_in_bytes == it->head_address) {
+      auto head_address = addr;
+      auto new_size = size_in_bytes + it->size_in_bytes;
+      free_memory->erase(it);
+      MergeToFreeMemory(head_address, new_size, free_memory);
+      return;
+    }
+  }
+  free_memory->push_back({addr, size_in_bytes});
+}
+}
+auto GetPhysicalBufferAddressOffset(const RenderPassOrder& render_pass_order, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<BufferId>>& physical_buffer_lifetime_begin_pass, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<BufferId>>& physical_buffer_lifetime_end_pass, const std::pmr::unordered_map<BufferId, size_t>& physical_buffer_size_in_byte, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, std::pmr::memory_resource* memory_resource) {
+  // TODO buggy
   std::pmr::unordered_map<BufferId, uint32_t> physical_buffer_address_offset{memory_resource};
-  // TODO
+  std::pmr::vector<Address> free_memory{{{0, std::numeric_limits<uint32_t>::max()}}, memory_resource};
+  for (auto& pass_name : render_pass_order) {
+    for (auto& buffer_id : physical_buffer_lifetime_begin_pass.at(pass_name)) {
+      if (physical_buffer_address_offset.contains(buffer_id)) continue;
+      for (auto free_entity_it = free_memory.begin(); free_entity_it != free_memory.end(); free_entity_it++) {
+        auto free_entity = *free_entity_it;
+        auto required_size_in_bytes = physical_buffer_size_in_byte.at(buffer_id);
+        if (free_entity.size_in_bytes < required_size_in_bytes) continue;
+        auto addr = illuminate::core::AlignAddress(free_entity.head_address, physical_buffer_alignment.at(buffer_id));
+        uint32_t address_offset = addr - free_entity.head_address;
+        if (free_entity.size_in_bytes - address_offset < required_size_in_bytes) continue;
+        physical_buffer_address_offset.insert({buffer_id, addr});
+        free_memory.erase(free_entity_it);
+        if (address_offset > 0) {
+          free_memory.push_back({free_entity.head_address, address_offset});
+        }
+        uint32_t free_head = addr + physical_buffer_size_in_byte.at(buffer_id);
+        if (free_head < free_entity.head_address + free_entity.size_in_bytes) {
+          free_memory.push_back({free_head, free_entity.head_address + free_entity.size_in_bytes - free_head});
+        }
+        break;
+      }
+    }
+    for (auto& buffer_id : physical_buffer_lifetime_end_pass.at(pass_name)) {
+      MergeToFreeMemory(physical_buffer_address_offset.at(buffer_id), physical_buffer_size_in_byte.at(buffer_id), &free_memory);
+    }
+  }
   return physical_buffer_address_offset;
 }
 template <typename T>
@@ -1023,6 +1072,62 @@ TEST_CASE("RenderPassNameDupCheck") {
   render_pass_list.push_back(render_pass_list[0]);
   CHECK(IsDuplicateRenderPassNameExists(render_pass_list, memory_resource.get()));
 }
+TEST_CASE("MergeToFreeMemory") {
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, size_in_byte);
+  std::pmr::vector<Address> free_memory(memory_resource.get());
+  MergeToFreeMemory(0, 100, &free_memory);
+  CHECK(free_memory.size() == 1);
+  CHECK(free_memory[0].head_address == 0);
+  CHECK(free_memory[0].size_in_bytes == 100);
+  free_memory = {{{0, 100}}, memory_resource.get()};
+  MergeToFreeMemory(100, 150, &free_memory);
+  CHECK(free_memory.size() == 1);
+  CHECK(free_memory[0].head_address == 0);
+  CHECK(free_memory[0].size_in_bytes == 250);
+  free_memory = {{{100, 150}}, memory_resource.get()};
+  MergeToFreeMemory(0, 100, &free_memory);
+  CHECK(free_memory.size() == 1);
+  CHECK(free_memory[0].head_address == 0);
+  CHECK(free_memory[0].size_in_bytes == 250);
+  free_memory = {{{0, 50},{100, 150}}, memory_resource.get()};
+  MergeToFreeMemory(50, 50, &free_memory);
+  CHECK(free_memory.size() == 1);
+  CHECK(free_memory[0].head_address == 0);
+  CHECK(free_memory[0].size_in_bytes == 250);
+  free_memory = {{{100, 150},{0, 50},}, memory_resource.get()};
+  MergeToFreeMemory(50, 50, &free_memory);
+  CHECK(free_memory.size() == 1);
+  CHECK(free_memory[0].head_address == 0);
+  CHECK(free_memory[0].size_in_bytes == 250);
+  free_memory = {{{0, 50},{101, 150}}, memory_resource.get()};
+  MergeToFreeMemory(50, 50, &free_memory);
+  CHECK(free_memory.size() == 2);
+  CHECK(free_memory[0].head_address == 101);
+  CHECK(free_memory[0].size_in_bytes == 150);
+  CHECK(free_memory[1].head_address == 0);
+  CHECK(free_memory[1].size_in_bytes == 100);
+  free_memory = {{{101, 150},{0, 50},}, memory_resource.get()};
+  MergeToFreeMemory(50, 50, &free_memory);
+  CHECK(free_memory.size() == 2);
+  CHECK(free_memory[0].head_address == 101);
+  CHECK(free_memory[0].size_in_bytes == 150);
+  CHECK(free_memory[1].head_address == 0);
+  CHECK(free_memory[1].size_in_bytes == 100);
+  free_memory = {{{0, 49},{100, 150}}, memory_resource.get()};
+  MergeToFreeMemory(50, 50, &free_memory);
+  CHECK(free_memory.size() == 2);
+  CHECK(free_memory[0].head_address == 0);
+  CHECK(free_memory[0].size_in_bytes == 49);
+  CHECK(free_memory[1].head_address == 50);
+  CHECK(free_memory[1].size_in_bytes == 200);
+  free_memory = {{{100, 150},{0, 49},}, memory_resource.get()};
+  MergeToFreeMemory(50, 50, &free_memory);
+  CHECK(free_memory.size() == 2);
+  CHECK(free_memory[0].head_address == 0);
+  CHECK(free_memory[0].size_in_bytes == 49);
+  CHECK(free_memory[1].head_address == 50);
+  CHECK(free_memory[1].size_in_bytes == 200);
+}
 TEST_CASE("buffer creation desc and allocation") {
   using namespace illuminate;
   using namespace illuminate::gfx;
@@ -1145,7 +1250,7 @@ TEST_CASE("buffer creation desc and allocation") {
   CHECK(physical_buffer_lifetime_end_pass.at(StrId("2")).contains(0));
   CHECK(physical_buffer_lifetime_end_pass.at(StrId("2")).contains(1));
   CHECK(physical_buffer_lifetime_end_pass.at(StrId("2")).contains(4));
-  auto physical_buffer_address_offset = GetPhysicalBufferAddressOffset(culled_render_pass_order, buffer_id_list, physical_buffer_lifetime_begin_pass, physical_buffer_lifetime_end_pass, physical_buffer_size_in_byte, physical_buffer_alignment, memory_resource.get());
+  auto physical_buffer_address_offset = GetPhysicalBufferAddressOffset(culled_render_pass_order, physical_buffer_lifetime_begin_pass, physical_buffer_lifetime_end_pass, physical_buffer_size_in_byte, physical_buffer_alignment, memory_resource.get());
   CHECK(physical_buffer_address_offset[0] == 0);
   CHECK(physical_buffer_address_offset[1] == 4);
   CHECK(physical_buffer_address_offset[2] == 8);
