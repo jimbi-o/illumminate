@@ -213,7 +213,26 @@ auto GetPhysicalBufferSizes(const BufferCreationDescList& buffer_creation_descs,
   return std::make_tuple(physical_buffer_size_in_byte, physical_buffer_alignment);
 }
 auto CalculatePhysicalBufferLiftime(const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, std::pmr::memory_resource* memory_resource) {
-  return std::make_tuple(std::pmr::unordered_map<BufferId, StrId>{}, std::pmr::unordered_map<BufferId, StrId>());
+  std::pmr::unordered_map<BufferId, StrId> physical_buffer_lifetime_begin{memory_resource};
+  for (auto& pass_name : render_pass_order) {
+    auto& pass_buffer_ids = buffer_id_list.at(pass_name);
+    for (auto& buffer_id : pass_buffer_ids) {
+      if (!physical_buffer_lifetime_begin.contains(buffer_id)) {
+        physical_buffer_lifetime_begin.insert({buffer_id, pass_name});
+      }
+    }
+  }
+  std::pmr::unordered_map<BufferId, StrId> physical_buffer_lifetime_end{memory_resource};
+  for (auto it = render_pass_order.crbegin(); it != render_pass_order.crend(); it++) {
+    auto& pass_name = *it;
+    auto& pass_buffer_ids = buffer_id_list.at(pass_name);
+    for (auto& buffer_id : pass_buffer_ids) {
+      if (!physical_buffer_lifetime_end.contains(buffer_id)) {
+        physical_buffer_lifetime_end.insert({buffer_id, pass_name});
+      }
+    }
+  }
+  return std::make_tuple(physical_buffer_lifetime_begin, physical_buffer_lifetime_end);
 }
 auto GetPhysicalBufferAddressOffset(const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, const std::pmr::unordered_map<BufferId, StrId>& physical_buffer_lifetime_begin, const std::pmr::unordered_map<BufferId, StrId>& physical_buffer_lifetime_end, const std::pmr::unordered_map<BufferId, size_t>& physical_buffer_size_in_byte, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, std::pmr::memory_resource* memory_resource) {
   return std::pmr::unordered_map<BufferId, uint32_t>{memory_resource};
