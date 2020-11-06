@@ -204,7 +204,7 @@ auto ConfigureBufferCreationDescs(const RenderPassOrder& render_pass_order, cons
   }
   return buffer_creation_descs;
 }
-auto GetPhysicalBufferSizeInByte(const BufferCreationDescList& buffer_creation_descs, std::function<std::tuple<size_t, uint32_t>(const BufferCreationDesc&)>&& buffer_creation_func, std::pmr::memory_resource* memory_resource) {
+auto GetPhysicalBufferSizes(const BufferCreationDescList& buffer_creation_descs, std::function<std::tuple<size_t, uint32_t>(const BufferCreationDesc&)>&& buffer_creation_func, std::pmr::memory_resource* memory_resource) {
   std::pmr::unordered_map<BufferId, size_t> physical_buffer_size_in_byte{memory_resource};
   std::pmr::unordered_map<BufferId, uint32_t> physical_buffer_alignment{memory_resource};
   for (auto& [id, desc] : buffer_creation_descs) {
@@ -1089,7 +1089,7 @@ TEST_CASE("buffer creation desc and allocation") {
   CHECK(GetClearValueColorBuffer(buffer_creation_descs[4].clear_value) == GetClearValueColorBuffer(GetClearValueDefaultColorBuffer()));
   CHECK(buffer_creation_descs[4].dimension_type == BufferDimensionType::k2d);
   CHECK(buffer_creation_descs[4].depth == 1);
-  auto [physical_buffer_size_in_byte, physical_buffer_alignment] = GetPhysicalBufferSizeInByte(buffer_creation_descs, []([[maybe_unused]] const BufferCreationDesc& desc) { return std::make_tuple<size_t, uint32_t>(sizeof(uint32_t), 4); }, memory_resource.get());
+  auto [physical_buffer_size_in_byte, physical_buffer_alignment] = GetPhysicalBufferSizes(buffer_creation_descs, []([[maybe_unused]] const BufferCreationDesc& desc) { return std::make_tuple<size_t, uint32_t>(sizeof(uint32_t), 4); }, memory_resource.get());
   CHECK(physical_buffer_size_in_byte.size() == 5);
   CHECK(physical_buffer_size_in_byte[0] == 4);
   CHECK(physical_buffer_size_in_byte[1] == 4);
