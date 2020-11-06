@@ -17,7 +17,7 @@ BufferIdList CreateBufferIdList(const RenderPassIdMap& render_pass_id_map, const
   BufferId new_id = 0;
   std::pmr::unordered_map<StrId, BufferId> known_buffer{memory_resource};
   for (auto& pass_name : render_pass_order) {
-    auto& pass_buffer_ids = buffer_id_list.insert({pass_name, {}}).first->second;
+    auto& pass_buffer_ids = buffer_id_list.insert({pass_name, PassBufferIdList{memory_resource}}).first->second;
     auto& pass = render_pass_id_map.at(pass_name);
     pass_buffer_ids.reserve(pass.buffer_list.size());
     for (auto& buffer : pass.buffer_list) {
@@ -213,29 +213,37 @@ auto GetPhysicalBufferSizes(const BufferCreationDescList& buffer_creation_descs,
   return std::make_tuple(physical_buffer_size_in_byte, physical_buffer_alignment);
 }
 auto CalculatePhysicalBufferLiftime(const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, std::pmr::memory_resource* memory_resource) {
-  std::pmr::unordered_map<BufferId, StrId> physical_buffer_lifetime_begin{memory_resource};
+  std::pmr::unordered_map<StrId, std::pmr::unordered_set<BufferId>> physical_buffer_lifetime_begin_pass{memory_resource};
+  std::pmr::unordered_set<BufferId> processed_buffer;
   for (auto& pass_name : render_pass_order) {
     auto& pass_buffer_ids = buffer_id_list.at(pass_name);
+    auto [it, result] = physical_buffer_lifetime_begin_pass.insert({pass_name, std::pmr::unordered_set<BufferId>{memory_resource}});
     for (auto& buffer_id : pass_buffer_ids) {
-      if (!physical_buffer_lifetime_begin.contains(buffer_id)) {
-        physical_buffer_lifetime_begin.insert({buffer_id, pass_name});
+      if (!processed_buffer.contains(buffer_id)) {
+        processed_buffer.insert(buffer_id);
+        it->second.insert(buffer_id);
       }
     }
   }
-  std::pmr::unordered_map<BufferId, StrId> physical_buffer_lifetime_end{memory_resource};
-  for (auto it = render_pass_order.crbegin(); it != render_pass_order.crend(); it++) {
-    auto& pass_name = *it;
+  processed_buffer.clear();
+  std::pmr::unordered_map<StrId, std::pmr::unordered_set<BufferId>> physical_buffer_lifetime_end_pass{memory_resource};
+  for (auto pass_it = render_pass_order.crbegin(); pass_it != render_pass_order.crend(); pass_it++) {
+    auto& pass_name = *pass_it;
     auto& pass_buffer_ids = buffer_id_list.at(pass_name);
+    auto [it, result] = physical_buffer_lifetime_end_pass.insert({pass_name, std::pmr::unordered_set<BufferId>{memory_resource}});
     for (auto& buffer_id : pass_buffer_ids) {
-      if (!physical_buffer_lifetime_end.contains(buffer_id)) {
-        physical_buffer_lifetime_end.insert({buffer_id, pass_name});
+      if (!processed_buffer.contains(buffer_id)) {
+        processed_buffer.insert(buffer_id);
+        it->second.insert(buffer_id);
       }
     }
   }
-  return std::make_tuple(physical_buffer_lifetime_begin, physical_buffer_lifetime_end);
+  return std::make_tuple(physical_buffer_lifetime_begin_pass, physical_buffer_lifetime_end_pass);
 }
-auto GetPhysicalBufferAddressOffset(const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, const std::pmr::unordered_map<BufferId, StrId>& physical_buffer_lifetime_begin, const std::pmr::unordered_map<BufferId, StrId>& physical_buffer_lifetime_end, const std::pmr::unordered_map<BufferId, size_t>& physical_buffer_size_in_byte, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, std::pmr::memory_resource* memory_resource) {
-  return std::pmr::unordered_map<BufferId, uint32_t>{memory_resource};
+auto GetPhysicalBufferAddressOffset(const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<BufferId>>& physical_buffer_lifetime_begin_pass, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<BufferId>>& physical_buffer_lifetime_end_pass, const std::pmr::unordered_map<BufferId, size_t>& physical_buffer_size_in_byte, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, std::pmr::memory_resource* memory_resource) {
+  std::pmr::unordered_map<BufferId, uint32_t> physical_buffer_address_offset{memory_resource};
+  // TODO
+  return physical_buffer_address_offset;
 }
 template <typename T>
 using PhysicalBuffers = std::pmr::unordered_map<BufferId, T>;
@@ -1121,18 +1129,23 @@ TEST_CASE("buffer creation desc and allocation") {
   CHECK(physical_buffer_alignment[2] == 4);
   CHECK(physical_buffer_alignment[3] == 4);
   CHECK(physical_buffer_alignment[4] == 4);
-  auto [physical_buffer_lifetime_begin, physical_buffer_lifetime_end] = CalculatePhysicalBufferLiftime(culled_render_pass_order, buffer_id_list, memory_resource.get());
-  CHECK(physical_buffer_lifetime_begin[0] == StrId("1"));
-  CHECK(physical_buffer_lifetime_end[0]   == StrId("2"));
-  CHECK(physical_buffer_lifetime_begin[1] == StrId("1"));
-  CHECK(physical_buffer_lifetime_end[1]   == StrId("2"));
-  CHECK(physical_buffer_lifetime_begin[2] == StrId("1"));
-  CHECK(physical_buffer_lifetime_end[2]   == StrId("1"));
-  CHECK(physical_buffer_lifetime_begin[3] == StrId("1"));
-  CHECK(physical_buffer_lifetime_end[3]   == StrId("1"));
-  CHECK(physical_buffer_lifetime_begin[4] == StrId("2"));
-  CHECK(physical_buffer_lifetime_end[4]   == StrId("2"));
-  auto physical_buffer_address_offset = GetPhysicalBufferAddressOffset(culled_render_pass_order, buffer_id_list, physical_buffer_lifetime_begin, physical_buffer_lifetime_end, physical_buffer_size_in_byte, physical_buffer_alignment, memory_resource.get());
+  auto [physical_buffer_lifetime_begin_pass, physical_buffer_lifetime_end_pass] = CalculatePhysicalBufferLiftime(culled_render_pass_order, buffer_id_list, memory_resource.get());
+  CHECK(physical_buffer_lifetime_begin_pass.size() == 2);
+  CHECK(physical_buffer_lifetime_begin_pass.at(StrId("1")).size() == 4);
+  CHECK(physical_buffer_lifetime_begin_pass.at(StrId("1")).contains(0));
+  CHECK(physical_buffer_lifetime_begin_pass.at(StrId("1")).contains(1));
+  CHECK(physical_buffer_lifetime_begin_pass.at(StrId("1")).contains(2));
+  CHECK(physical_buffer_lifetime_begin_pass.at(StrId("1")).contains(3));
+  CHECK(physical_buffer_lifetime_end_pass.at(StrId("1")).size() == 2);
+  CHECK(physical_buffer_lifetime_end_pass.at(StrId("1")).contains(2));
+  CHECK(physical_buffer_lifetime_end_pass.at(StrId("1")).contains(3));
+  CHECK(physical_buffer_lifetime_begin_pass.at(StrId("2")).size() == 1);
+  CHECK(physical_buffer_lifetime_begin_pass.at(StrId("2")).contains(4));
+  CHECK(physical_buffer_lifetime_end_pass.at(StrId("2")).size() == 3);
+  CHECK(physical_buffer_lifetime_end_pass.at(StrId("2")).contains(0));
+  CHECK(physical_buffer_lifetime_end_pass.at(StrId("2")).contains(1));
+  CHECK(physical_buffer_lifetime_end_pass.at(StrId("2")).contains(4));
+  auto physical_buffer_address_offset = GetPhysicalBufferAddressOffset(culled_render_pass_order, buffer_id_list, physical_buffer_lifetime_begin_pass, physical_buffer_lifetime_end_pass, physical_buffer_size_in_byte, physical_buffer_alignment, memory_resource.get());
   CHECK(physical_buffer_address_offset[0] == 0);
   CHECK(physical_buffer_address_offset[1] == 4);
   CHECK(physical_buffer_address_offset[2] == 8);
