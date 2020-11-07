@@ -315,6 +315,7 @@ auto AllocatePhysicalBuffers(const BufferCreationDescList& buffer_creation_descs
 namespace {
 const uint32_t size_in_byte = 32 * 1024;
 std::byte buffer[size_in_byte]{};
+std::byte buffer2[16]{};
 using namespace illuminate;
 using namespace illuminate::gfx;
 inline auto CreateRenderPassPrez(std::pmr::memory_resource* memory_resource) {
@@ -1290,8 +1291,8 @@ TEST_CASE("buffer creation desc and allocation") {
   CHECK(physical_buffer_address_offset[3] == 12);
   CHECK(physical_buffer_address_offset[4] == 8);
   using PhysicalBufferType = uint32_t*;
-  auto physical_buffers = AllocatePhysicalBuffers(buffer_creation_descs, physical_buffer_size_in_byte, physical_buffer_alignment, physical_buffer_address_offset, PhysicalBufferAllocationFunc<PhysicalBufferType>{[](const BufferCreationDesc& desc, const uint64_t size_in_byte, const uint32_t alignment, const uint32_t offset_in_byte) { return static_cast<uint32_t*>(static_cast<void*>(&buffer[offset_in_byte])); }}, memory_resource.get());
-  CHECK(reinterpret_cast<std::uintptr_t>(physical_buffers[0]) == reinterpret_cast<std::uintptr_t>(buffer));
+  auto physical_buffers = AllocatePhysicalBuffers(buffer_creation_descs, physical_buffer_size_in_byte, physical_buffer_alignment, physical_buffer_address_offset, PhysicalBufferAllocationFunc<PhysicalBufferType>{[](const BufferCreationDesc& desc, const uint64_t size_in_byte, const uint32_t alignment, const uint32_t offset_in_byte) { return static_cast<uint32_t*>(static_cast<void*>(&buffer2[offset_in_byte])); }}, memory_resource.get());
+  CHECK(reinterpret_cast<std::uintptr_t>(physical_buffers[0]) == reinterpret_cast<std::uintptr_t>(buffer2));
   CHECK(reinterpret_cast<std::uintptr_t>(physical_buffers[1]) == reinterpret_cast<std::uintptr_t>(physical_buffers[0]) + 4);
   CHECK(reinterpret_cast<std::uintptr_t>(physical_buffers[2]) == reinterpret_cast<std::uintptr_t>(physical_buffers[1]) + 4);
   CHECK(reinterpret_cast<std::uintptr_t>(physical_buffers[3]) == reinterpret_cast<std::uintptr_t>(physical_buffers[2]) + 4);
