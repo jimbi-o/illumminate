@@ -213,28 +213,28 @@ auto GetPhysicalBufferSizes(const BufferCreationDescList& buffer_creation_descs,
   return std::make_tuple(physical_buffer_size_in_byte, physical_buffer_alignment);
 }
 auto CalculatePhysicalBufferLiftime(const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, std::pmr::memory_resource* memory_resource) {
-  std::pmr::unordered_map<StrId, std::pmr::unordered_set<BufferId>> physical_buffer_lifetime_begin_pass{memory_resource};
+  std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>> physical_buffer_lifetime_begin_pass{memory_resource};
   std::pmr::unordered_set<BufferId> processed_buffer;
   for (auto& pass_name : render_pass_order) {
     auto& pass_buffer_ids = buffer_id_list.at(pass_name);
-    auto [it, result] = physical_buffer_lifetime_begin_pass.insert({pass_name, std::pmr::unordered_set<BufferId>{memory_resource}});
+    auto [it, result] = physical_buffer_lifetime_begin_pass.insert({pass_name, std::pmr::vector<BufferId>{memory_resource}});
     for (auto& buffer_id : pass_buffer_ids) {
       if (!processed_buffer.contains(buffer_id)) {
         processed_buffer.insert(buffer_id);
-        it->second.insert(buffer_id);
+        it->second.push_back(buffer_id);
       }
     }
   }
   processed_buffer.clear();
-  std::pmr::unordered_map<StrId, std::pmr::unordered_set<BufferId>> physical_buffer_lifetime_end_pass{memory_resource};
+  std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>> physical_buffer_lifetime_end_pass{memory_resource};
   for (auto pass_it = render_pass_order.crbegin(); pass_it != render_pass_order.crend(); pass_it++) {
     auto& pass_name = *pass_it;
     auto& pass_buffer_ids = buffer_id_list.at(pass_name);
-    auto [it, result] = physical_buffer_lifetime_end_pass.insert({pass_name, std::pmr::unordered_set<BufferId>{memory_resource}});
+    auto [it, result] = physical_buffer_lifetime_end_pass.insert({pass_name, std::pmr::vector<BufferId>{memory_resource}});
     for (auto& buffer_id : pass_buffer_ids) {
       if (!processed_buffer.contains(buffer_id)) {
         processed_buffer.insert(buffer_id);
-        it->second.insert(buffer_id);
+        it->second.push_back(buffer_id);
       }
     }
   }
@@ -261,32 +261,35 @@ void MergeToFreeMemory(const uint32_t addr, const uint32_t& size_in_bytes, std::
   }
   free_memory->push_back({addr, size_in_bytes});
 }
+uint32_t AllocateAlignedAddressFromFreeMemory(const uint32_t size_in_bytes, const uint32_t alignment, std::pmr::vector<Address> * const free_memory) {
+  for (auto it = free_memory->begin(); it != free_memory->end(); it++) {
+    if (it->size_in_bytes < size_in_bytes) continue;
+    uint32_t aligned_addr = illuminate::core::AlignAddress(it->head_address, alignment);
+    auto alignment_offset = aligned_addr - it->head_address;
+    auto memory_left = it->size_in_bytes - alignment_offset;
+    if (memory_left < size_in_bytes) continue;
+    auto original_head = it->head_address;
+    free_memory->erase(it);
+    if (alignment_offset > 0) {
+      free_memory->push_back({original_head, alignment_offset});
+    }
+    if (memory_left > size_in_bytes) {
+      free_memory->push_back({aligned_addr + size_in_bytes, memory_left - size_in_bytes});
+    }
+    return aligned_addr;
+  }
+  return std::numeric_limits<uint32_t>::max();
 }
-auto GetPhysicalBufferAddressOffset(const RenderPassOrder& render_pass_order, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<BufferId>>& physical_buffer_lifetime_begin_pass, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<BufferId>>& physical_buffer_lifetime_end_pass, const std::pmr::unordered_map<BufferId, size_t>& physical_buffer_size_in_byte, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, std::pmr::memory_resource* memory_resource) {
-  // TODO buggy
+}
+auto GetPhysicalBufferAddressOffset(const RenderPassOrder& render_pass_order, const std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>& physical_buffer_lifetime_begin_pass, const std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>& physical_buffer_lifetime_end_pass, const std::pmr::unordered_map<BufferId, size_t>& physical_buffer_size_in_byte, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, std::pmr::memory_resource* memory_resource) {
+  // TODO use better tactics with real performance measured.
   std::pmr::unordered_map<BufferId, uint32_t> physical_buffer_address_offset{memory_resource};
   std::pmr::vector<Address> free_memory{{{0, std::numeric_limits<uint32_t>::max()}}, memory_resource};
   for (auto& pass_name : render_pass_order) {
     for (auto& buffer_id : physical_buffer_lifetime_begin_pass.at(pass_name)) {
       if (physical_buffer_address_offset.contains(buffer_id)) continue;
-      for (auto free_entity_it = free_memory.begin(); free_entity_it != free_memory.end(); free_entity_it++) {
-        auto free_entity = *free_entity_it;
-        auto required_size_in_bytes = physical_buffer_size_in_byte.at(buffer_id);
-        if (free_entity.size_in_bytes < required_size_in_bytes) continue;
-        auto addr = illuminate::core::AlignAddress(free_entity.head_address, physical_buffer_alignment.at(buffer_id));
-        uint32_t address_offset = addr - free_entity.head_address;
-        if (free_entity.size_in_bytes - address_offset < required_size_in_bytes) continue;
-        physical_buffer_address_offset.insert({buffer_id, addr});
-        free_memory.erase(free_entity_it);
-        if (address_offset > 0) {
-          free_memory.push_back({free_entity.head_address, address_offset});
-        }
-        uint32_t free_head = addr + physical_buffer_size_in_byte.at(buffer_id);
-        if (free_head < free_entity.head_address + free_entity.size_in_bytes) {
-          free_memory.push_back({free_head, free_entity.head_address + free_entity.size_in_bytes - free_head});
-        }
-        break;
-      }
+      auto aligned_addr = AllocateAlignedAddressFromFreeMemory(physical_buffer_size_in_byte.at(buffer_id), physical_buffer_alignment.at(buffer_id), &free_memory);
+      physical_buffer_address_offset.insert({buffer_id, aligned_addr});
     }
     for (auto& buffer_id : physical_buffer_lifetime_end_pass.at(pass_name)) {
       MergeToFreeMemory(physical_buffer_address_offset.at(buffer_id), physical_buffer_size_in_byte.at(buffer_id), &free_memory);
@@ -1072,6 +1075,32 @@ TEST_CASE("RenderPassNameDupCheck") {
   render_pass_list.push_back(render_pass_list[0]);
   CHECK(IsDuplicateRenderPassNameExists(render_pass_list, memory_resource.get()));
 }
+TEST_CASE("AllocateAlignedAddressFromFreeMemory") {
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, size_in_byte);
+  std::pmr::vector<Address> free_memory(memory_resource.get());
+  free_memory = {{{0, 100}}, memory_resource.get()};
+  CHECK(AllocateAlignedAddressFromFreeMemory(20, 4, &free_memory) == 0);
+  CHECK(free_memory.size() == 1);
+  CHECK(free_memory[0].head_address == 20);
+  CHECK(free_memory[0].size_in_bytes == 80);
+  CHECK(AllocateAlignedAddressFromFreeMemory(20, 8, &free_memory) == 24);
+  CHECK(free_memory.size() == 2);
+  CHECK(free_memory[0].head_address == 20);
+  CHECK(free_memory[0].size_in_bytes == 4);
+  CHECK(free_memory[1].head_address == 44);
+  CHECK(free_memory[1].size_in_bytes == 56);
+  CHECK(AllocateAlignedAddressFromFreeMemory(36, 64, &free_memory) == 64);
+  CHECK(free_memory.size() == 2);
+  CHECK(free_memory[0].head_address == 20);
+  CHECK(free_memory[0].size_in_bytes == 4);
+  CHECK(free_memory[1].head_address == 44);
+  CHECK(free_memory[1].size_in_bytes == 20);
+  free_memory = {{{4, 50}, {64, 50}}, memory_resource.get()};
+  CHECK(AllocateAlignedAddressFromFreeMemory(50, 8, &free_memory) == 64);
+  CHECK(free_memory.size() == 1);
+  CHECK(free_memory[0].head_address == 4);
+  CHECK(free_memory[0].size_in_bytes == 50);
+}
 TEST_CASE("MergeToFreeMemory") {
   auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, size_in_byte);
   std::pmr::vector<Address> free_memory(memory_resource.get());
@@ -1237,19 +1266,19 @@ TEST_CASE("buffer creation desc and allocation") {
   auto [physical_buffer_lifetime_begin_pass, physical_buffer_lifetime_end_pass] = CalculatePhysicalBufferLiftime(culled_render_pass_order, buffer_id_list, memory_resource.get());
   CHECK(physical_buffer_lifetime_begin_pass.size() == 2);
   CHECK(physical_buffer_lifetime_begin_pass.at(StrId("1")).size() == 4);
-  CHECK(physical_buffer_lifetime_begin_pass.at(StrId("1")).contains(0));
-  CHECK(physical_buffer_lifetime_begin_pass.at(StrId("1")).contains(1));
-  CHECK(physical_buffer_lifetime_begin_pass.at(StrId("1")).contains(2));
-  CHECK(physical_buffer_lifetime_begin_pass.at(StrId("1")).contains(3));
+  CHECK(physical_buffer_lifetime_begin_pass.at(StrId("1"))[0] == 0);
+  CHECK(physical_buffer_lifetime_begin_pass.at(StrId("1"))[1] == 1);
+  CHECK(physical_buffer_lifetime_begin_pass.at(StrId("1"))[2] == 2);
+  CHECK(physical_buffer_lifetime_begin_pass.at(StrId("1"))[3] == 3);
   CHECK(physical_buffer_lifetime_end_pass.at(StrId("1")).size() == 2);
-  CHECK(physical_buffer_lifetime_end_pass.at(StrId("1")).contains(2));
-  CHECK(physical_buffer_lifetime_end_pass.at(StrId("1")).contains(3));
+  CHECK(physical_buffer_lifetime_end_pass.at(StrId("1"))[0] == 2);
+  CHECK(physical_buffer_lifetime_end_pass.at(StrId("1"))[1] == 3);
   CHECK(physical_buffer_lifetime_begin_pass.at(StrId("2")).size() == 1);
-  CHECK(physical_buffer_lifetime_begin_pass.at(StrId("2")).contains(4));
+  CHECK(physical_buffer_lifetime_begin_pass.at(StrId("2"))[0] == 4);
   CHECK(physical_buffer_lifetime_end_pass.at(StrId("2")).size() == 3);
-  CHECK(physical_buffer_lifetime_end_pass.at(StrId("2")).contains(0));
-  CHECK(physical_buffer_lifetime_end_pass.at(StrId("2")).contains(1));
-  CHECK(physical_buffer_lifetime_end_pass.at(StrId("2")).contains(4));
+  CHECK(physical_buffer_lifetime_end_pass.at(StrId("2"))[0] == 0);
+  CHECK(physical_buffer_lifetime_end_pass.at(StrId("2"))[1] == 1);
+  CHECK(physical_buffer_lifetime_end_pass.at(StrId("2"))[2] == 4);
   auto physical_buffer_address_offset = GetPhysicalBufferAddressOffset(culled_render_pass_order, physical_buffer_lifetime_begin_pass, physical_buffer_lifetime_end_pass, physical_buffer_size_in_byte, physical_buffer_alignment, memory_resource.get());
   CHECK(physical_buffer_address_offset[0] == 0);
   CHECK(physical_buffer_address_offset[1] == 4);
