@@ -303,7 +303,11 @@ template <typename T>
 using PhysicalBufferAllocationFunc = std::function<T(const BufferCreationDesc&, const uint64_t, const uint32_t, const uint32_t)>;
 template <typename T>
 auto AllocatePhysicalBuffers(const BufferCreationDescList& buffer_creation_descs, const std::pmr::unordered_map<BufferId, size_t>& physical_buffer_size_in_byte, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_address_offset, std::function<T(const BufferCreationDesc&, const uint64_t, const uint32_t, const uint32_t)>&& alloc_func, std::pmr::memory_resource* memory_resource) {
-  return PhysicalBuffers<T>{memory_resource};
+  PhysicalBuffers<T> physical_buffers{memory_resource};
+  for (auto& [buffer_id, desc] : buffer_creation_descs) {
+    physical_buffers.insert({buffer_id, alloc_func(desc, physical_buffer_size_in_byte.at(buffer_id), physical_buffer_alignment.at(buffer_id), physical_buffer_address_offset.at(buffer_id))});
+  }
+  return physical_buffers;
 }
 }
 #ifdef BUILD_WITH_TEST
