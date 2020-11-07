@@ -1212,17 +1212,14 @@ TEST_CASE("buffer creation desc and allocation") {
   CHECK(physical_buffer_address_offset[2] == 8);
   CHECK(physical_buffer_address_offset[3] == 12);
   CHECK(physical_buffer_address_offset[4] == 8);
-  using PhysicalBufferType = uint32_t*;
-  auto physical_buffers = AllocatePhysicalBuffers(buffer_creation_descs, physical_buffer_size_in_byte, physical_buffer_alignment, physical_buffer_address_offset, PhysicalBufferAllocationFunc<PhysicalBufferType>{[]([[maybe_unused]] const BufferCreationDesc& desc, [[maybe_unused]] const uint64_t size_in_bytes, [[maybe_unused]] const uint32_t alignment, const uint32_t offset_in_byte) { return static_cast<uint32_t*>(static_cast<void*>(&buffer2[offset_in_byte])); }}, memory_resource.get());
-  CHECK(reinterpret_cast<std::uintptr_t>(physical_buffers[0]) == reinterpret_cast<std::uintptr_t>(buffer2));
-  CHECK(reinterpret_cast<std::uintptr_t>(physical_buffers[1]) == reinterpret_cast<std::uintptr_t>(physical_buffers[0]) + 4);
-  CHECK(reinterpret_cast<std::uintptr_t>(physical_buffers[2]) == reinterpret_cast<std::uintptr_t>(physical_buffers[1]) + 4);
-  CHECK(reinterpret_cast<std::uintptr_t>(physical_buffers[3]) == reinterpret_cast<std::uintptr_t>(physical_buffers[2]) + 4);
-  CHECK(physical_buffers[4] == physical_buffers[2]);
-  std::pmr::unordered_map<StrId, std::function<void(const PassBufferIdList&, const PhysicalBuffers<PhysicalBufferType>&)>> pass_functions{
+  std::pmr::unordered_map<BufferId, uint32_t*> physical_buffers{memory_resource.get()};
+  for (auto& [buffer_id, offset] : physical_buffer_address_offset) {
+    physical_buffers.insert({buffer_id, static_cast<uint32_t*>(static_cast<void*>(&buffer2[offset]))});
+  }
+  std::pmr::unordered_map<StrId, std::function<void(const PassBufferIdList&, const std::pmr::unordered_map<BufferId, uint32_t*>&)>> pass_functions{
     {
       StrId("1"),
-      [](const PassBufferIdList& buffer_ids, const PhysicalBuffers<PhysicalBufferType>& physical_buffer_ptr_list) {
+      [](const PassBufferIdList& buffer_ids, const std::pmr::unordered_map<BufferId, uint32_t*>& physical_buffer_ptr_list) {
         *physical_buffer_ptr_list.at(buffer_ids[0]) = 255;
         *physical_buffer_ptr_list.at(buffer_ids[1]) = 512;
         *physical_buffer_ptr_list.at(buffer_ids[2]) = 1001;
@@ -1231,7 +1228,7 @@ TEST_CASE("buffer creation desc and allocation") {
     },
     {
       StrId("2"),
-      [](const PassBufferIdList& buffer_ids, const PhysicalBuffers<PhysicalBufferType>& physical_buffer_ptr_list) {
+      [](const PassBufferIdList& buffer_ids, const std::pmr::unordered_map<BufferId, uint32_t*>& physical_buffer_ptr_list) {
         *physical_buffer_ptr_list.at(buffer_ids[0]) = *physical_buffer_ptr_list.at(buffer_ids[0]) + 1;
         *physical_buffer_ptr_list.at(buffer_ids[2]) = *physical_buffer_ptr_list.at(buffer_ids[1]) + 1024;
       }

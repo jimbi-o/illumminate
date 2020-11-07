@@ -180,17 +180,5 @@ BufferCreationDescList ConfigureBufferCreationDescs(const RenderPassOrder& rende
 std::tuple<std::pmr::unordered_map<BufferId, uint32_t>, std::pmr::unordered_map<BufferId, uint32_t>> GetPhysicalBufferSizes(const BufferCreationDescList& buffer_creation_descs, std::function<std::tuple<uint32_t, uint32_t>(const BufferCreationDesc&)>&& buffer_creation_func, std::pmr::memory_resource* memory_resource);
 std::tuple<std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>, std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>> CalculatePhysicalBufferLiftime(const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, std::pmr::memory_resource* memory_resource);
 std::pmr::unordered_map<BufferId, uint32_t> GetPhysicalBufferAddressOffset(const RenderPassOrder& render_pass_order, const std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>& physical_buffer_lifetime_begin_pass, const std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>& physical_buffer_lifetime_end_pass, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_size_in_byte, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, std::pmr::memory_resource* memory_resource);
-template <typename T>
-using PhysicalBuffers = std::pmr::unordered_map<BufferId, T>;
-template <typename T>
-using PhysicalBufferAllocationFunc = std::function<T(const BufferCreationDesc&, const uint64_t, const uint32_t, const uint32_t)>;
-template <typename T>
-auto AllocatePhysicalBuffers(const BufferCreationDescList& buffer_creation_descs, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_size_in_byte, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_address_offset, std::function<T(const BufferCreationDesc&, const uint64_t, const uint32_t, const uint32_t)>&& alloc_func, std::pmr::memory_resource* memory_resource) {
-  PhysicalBuffers<T> physical_buffers{memory_resource};
-  for (auto& [buffer_id, desc] : buffer_creation_descs) {
-    physical_buffers.insert({buffer_id, alloc_func(desc, physical_buffer_size_in_byte.at(buffer_id), physical_buffer_alignment.at(buffer_id), physical_buffer_address_offset.at(buffer_id))});
-  }
-  return physical_buffers;
-}
 }
 #endif
