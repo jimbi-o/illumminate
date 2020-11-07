@@ -124,5 +124,73 @@ MandatoryOutputBufferIdList IdentifyMandatoryOutputBufferId(const RenderPassIdMa
 std::pmr::unordered_set<StrId> GetUsedRenderPassList(const RenderPassAdjacencyGraph& adjacency_graph, MandatoryOutputBufferIdList&& mandatory_buffer_id_list, std::pmr::memory_resource* memory_resource);
 RenderPassOrder CullUnusedRenderPass(RenderPassOrder&& render_pass_order, const std::pmr::unordered_set<StrId>& used_render_pass_list, const RenderPassIdMap& render_pass_id_map);
 bool IsDuplicateRenderPassNameExists(const RenderPassList& list, std::pmr::memory_resource* memory_resource);
+enum BufferStateFlags : uint32_t {
+  kBufferStateFlagNone = 0x0000,
+  kBufferStateFlagCbv = 0x0001,
+  kBufferStateFlagSrv = 0x0002,
+  kBufferStateFlagUav = 0x0004,
+  kBufferStateFlagRtv = 0x0008,
+  kBufferStateFlagDsv = 0x0010,
+  kBufferStateFlagCopySrc = 0x0020,
+  kBufferStateFlagCopyDst = 0x0040,
+};
+constexpr BufferStateFlags GetBufferStateFlag(const BufferStateType type) {
+  switch (type) {
+    case kCbv: return kBufferStateFlagCbv;
+    case kSrv: return kBufferStateFlagSrv;
+    case kUav: return kBufferStateFlagUav;
+    case kRtv: return kBufferStateFlagRtv;
+    case kDsv: return kBufferStateFlagDsv;
+    case kCopySrc: return kBufferStateFlagCopySrc;
+    case kCopyDst: return kBufferStateFlagCopyDst;
+  }
+}
+class BufferCreationDesc {
+ public:
+  BufferCreationDesc()
+      : format(BufferFormat::kUnknown),
+        dimension_type(BufferDimensionType::k2d),
+        initial_state(BufferStateType::kCbv),
+        state_flags(kBufferStateFlagNone),
+        width(0),
+        height(0),
+        depth(1),
+        clear_value({})
+  {}
+  BufferCreationDesc(const BufferConfig& config, const BufferSize2d& mainbuffer, const BufferSize2d& swapchain)
+      : format(config.format),
+        dimension_type(config.dimension_type),
+        initial_state(config.state_type),
+        state_flags(GetBufferStateFlag(config.state_type)),
+        width(GetPhsicalBufferWidth(config, mainbuffer, swapchain)),
+        height(GetPhsicalBufferHeight(config, mainbuffer, swapchain)),
+        depth(config.depth),
+        clear_value(config.clear_value) // TODO consider using move.
+  {}
+  BufferFormat format;
+  BufferDimensionType dimension_type;
+  BufferStateType initial_state;
+  std::byte _pad;
+  BufferStateFlags state_flags;
+  uint32_t width, height, depth;
+  ClearValue clear_value;
+};
+using BufferCreationDescList = std::pmr::unordered_map<BufferId, BufferCreationDesc>;
+BufferCreationDescList ConfigureBufferCreationDescs(const RenderPassOrder& render_pass_order, const RenderPassIdMap& render_pass_id_map, const BufferIdList& buffer_id_list, const BufferSize2d& mainbuffer_size, const BufferSize2d& swapchain_size, std::pmr::memory_resource* memory_resource);
+std::tuple<std::pmr::unordered_map<BufferId, uint32_t>, std::pmr::unordered_map<BufferId, uint32_t>> GetPhysicalBufferSizes(const BufferCreationDescList& buffer_creation_descs, std::function<std::tuple<uint32_t, uint32_t>(const BufferCreationDesc&)>&& buffer_creation_func, std::pmr::memory_resource* memory_resource);
+std::tuple<std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>, std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>> CalculatePhysicalBufferLiftime(const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, std::pmr::memory_resource* memory_resource);
+std::pmr::unordered_map<BufferId, uint32_t> GetPhysicalBufferAddressOffset(const RenderPassOrder& render_pass_order, const std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>& physical_buffer_lifetime_begin_pass, const std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>& physical_buffer_lifetime_end_pass, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_size_in_byte, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, std::pmr::memory_resource* memory_resource);
+template <typename T>
+using PhysicalBuffers = std::pmr::unordered_map<BufferId, T>;
+template <typename T>
+using PhysicalBufferAllocationFunc = std::function<T(const BufferCreationDesc&, const uint64_t, const uint32_t, const uint32_t)>;
+template <typename T>
+auto AllocatePhysicalBuffers(const BufferCreationDescList& buffer_creation_descs, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_size_in_byte, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_address_offset, std::function<T(const BufferCreationDesc&, const uint64_t, const uint32_t, const uint32_t)>&& alloc_func, std::pmr::memory_resource* memory_resource) {
+  PhysicalBuffers<T> physical_buffers{memory_resource};
+  for (auto& [buffer_id, desc] : buffer_creation_descs) {
+    physical_buffers.insert({buffer_id, alloc_func(desc, physical_buffer_size_in_byte.at(buffer_id), physical_buffer_alignment.at(buffer_id), physical_buffer_address_offset.at(buffer_id))});
+  }
+  return physical_buffers;
+}
 }
 #endif

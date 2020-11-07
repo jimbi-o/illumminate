@@ -129,66 +129,7 @@ bool IsDuplicateRenderPassNameExists(const RenderPassList& list, std::pmr::memor
   }
   return false;
 }
-auto GetUsedBufferList(const std::pmr::unordered_set<StrId>& used_render_pass_list, const BufferIdList& buffer_id_list, std::pmr::memory_resource* memory_resource) {
-  std::pmr::unordered_set<BufferId> used_buffers{memory_resource};
-  for (auto& pass : used_render_pass_list) {
-    auto& pass_buffers = buffer_id_list.at(pass);
-    used_buffers.insert(pass_buffers.begin(), pass_buffers.end());
-  }
-  return used_buffers;
-}
-enum BufferStateFlags : uint32_t {
-  kBufferStateFlagNone = 0x0000,
-  kBufferStateFlagCbv = 0x0001,
-  kBufferStateFlagSrv = 0x0002,
-  kBufferStateFlagUav = 0x0004,
-  kBufferStateFlagRtv = 0x0008,
-  kBufferStateFlagDsv = 0x0010,
-  kBufferStateFlagCopySrc = 0x0020,
-  kBufferStateFlagCopyDst = 0x0040,
-};
-constexpr BufferStateFlags GetBufferStateFlag(const BufferStateType type) {
-  switch (type) {
-    case kCbv: return kBufferStateFlagCbv;
-    case kSrv: return kBufferStateFlagSrv;
-    case kUav: return kBufferStateFlagUav;
-    case kRtv: return kBufferStateFlagRtv;
-    case kDsv: return kBufferStateFlagDsv;
-    case kCopySrc: return kBufferStateFlagCopySrc;
-    case kCopyDst: return kBufferStateFlagCopyDst;
-  }
-}
-class BufferCreationDesc {
- public:
-  BufferCreationDesc()
-      : format(BufferFormat::kUnknown),
-        dimension_type(BufferDimensionType::k2d),
-        initial_state(BufferStateType::kCbv),
-        state_flags(kBufferStateFlagNone),
-        width(0),
-        height(0),
-        depth(1),
-        clear_value({})
-  {}
-  BufferCreationDesc(const BufferConfig& config, const BufferSize2d& mainbuffer, const BufferSize2d& swapchain)
-      : format(config.format),
-        dimension_type(config.dimension_type),
-        initial_state(config.state_type),
-        state_flags(GetBufferStateFlag(config.state_type)),
-        width(GetPhsicalBufferWidth(config, mainbuffer, swapchain)),
-        height(GetPhsicalBufferHeight(config, mainbuffer, swapchain)),
-        depth(config.depth),
-        clear_value(config.clear_value) // TODO consider using move.
-  {}
-  BufferFormat format;
-  BufferDimensionType dimension_type;
-  BufferStateType initial_state;
-  BufferStateFlags state_flags;
-  uint32_t width, height, depth;
-  ClearValue clear_value;
-};
-using BufferCreationDescList = std::pmr::unordered_map<BufferId, BufferCreationDesc>;
-auto ConfigureBufferCreationDescs(const RenderPassOrder& render_pass_order, const RenderPassIdMap& render_pass_id_map, const BufferIdList& buffer_id_list, const std::pmr::unordered_set<BufferId>& used_buffer_list, const BufferSize2d& mainbuffer_size, const BufferSize2d& swapchain_size, std::pmr::memory_resource* memory_resource) {
+BufferCreationDescList ConfigureBufferCreationDescs(const RenderPassOrder& render_pass_order, const RenderPassIdMap& render_pass_id_map, const BufferIdList& buffer_id_list, const BufferSize2d& mainbuffer_size, const BufferSize2d& swapchain_size, std::pmr::memory_resource* memory_resource) {
   BufferCreationDescList buffer_creation_descs{memory_resource};
   for (auto& pass_name : render_pass_order) {
     auto& pass = render_pass_id_map.at(pass_name);
@@ -204,15 +145,15 @@ auto ConfigureBufferCreationDescs(const RenderPassOrder& render_pass_order, cons
   }
   return buffer_creation_descs;
 }
-auto GetPhysicalBufferSizes(const BufferCreationDescList& buffer_creation_descs, std::function<std::tuple<size_t, uint32_t>(const BufferCreationDesc&)>&& buffer_creation_func, std::pmr::memory_resource* memory_resource) {
-  std::pmr::unordered_map<BufferId, size_t> physical_buffer_size_in_byte{memory_resource};
+std::tuple<std::pmr::unordered_map<BufferId, uint32_t>, std::pmr::unordered_map<BufferId, uint32_t>> GetPhysicalBufferSizes(const BufferCreationDescList& buffer_creation_descs, std::function<std::tuple<uint32_t, uint32_t>(const BufferCreationDesc&)>&& buffer_creation_func, std::pmr::memory_resource* memory_resource) {
+  std::pmr::unordered_map<BufferId, uint32_t> physical_buffer_size_in_byte{memory_resource};
   std::pmr::unordered_map<BufferId, uint32_t> physical_buffer_alignment{memory_resource};
   for (auto& [id, desc] : buffer_creation_descs) {
     std::tie(physical_buffer_size_in_byte[id], physical_buffer_alignment[id]) = buffer_creation_func(desc);
   }
-  return std::make_tuple(physical_buffer_size_in_byte, physical_buffer_alignment);
+  return {physical_buffer_size_in_byte, physical_buffer_alignment};
 }
-auto CalculatePhysicalBufferLiftime(const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, std::pmr::memory_resource* memory_resource) {
+std::tuple<std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>, std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>> CalculatePhysicalBufferLiftime(const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, std::pmr::memory_resource* memory_resource) {
   std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>> physical_buffer_lifetime_begin_pass{memory_resource};
   std::pmr::unordered_set<BufferId> processed_buffer;
   for (auto& pass_name : render_pass_order) {
@@ -238,7 +179,7 @@ auto CalculatePhysicalBufferLiftime(const RenderPassOrder& render_pass_order, co
       }
     }
   }
-  return std::make_tuple(physical_buffer_lifetime_begin_pass, physical_buffer_lifetime_end_pass);
+  return {physical_buffer_lifetime_begin_pass, physical_buffer_lifetime_end_pass};
 }
 namespace {
 struct Address { uint32_t head_address, size_in_bytes; };
@@ -264,7 +205,7 @@ void MergeToFreeMemory(const uint32_t addr, const uint32_t& size_in_bytes, std::
 uint32_t AllocateAlignedAddressFromFreeMemory(const uint32_t size_in_bytes, const uint32_t alignment, std::pmr::vector<Address> * const free_memory) {
   for (auto it = free_memory->begin(); it != free_memory->end(); it++) {
     if (it->size_in_bytes < size_in_bytes) continue;
-    uint32_t aligned_addr = illuminate::core::AlignAddress(it->head_address, alignment);
+    auto aligned_addr = static_cast<uint32_t>(illuminate::core::AlignAddress(it->head_address, alignment));
     auto alignment_offset = aligned_addr - it->head_address;
     auto memory_left = it->size_in_bytes - alignment_offset;
     if (memory_left < size_in_bytes) continue;
@@ -281,7 +222,7 @@ uint32_t AllocateAlignedAddressFromFreeMemory(const uint32_t size_in_bytes, cons
   return std::numeric_limits<uint32_t>::max();
 }
 }
-auto GetPhysicalBufferAddressOffset(const RenderPassOrder& render_pass_order, const std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>& physical_buffer_lifetime_begin_pass, const std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>& physical_buffer_lifetime_end_pass, const std::pmr::unordered_map<BufferId, size_t>& physical_buffer_size_in_byte, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, std::pmr::memory_resource* memory_resource) {
+std::pmr::unordered_map<BufferId, uint32_t> GetPhysicalBufferAddressOffset(const RenderPassOrder& render_pass_order, const std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>& physical_buffer_lifetime_begin_pass, const std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>& physical_buffer_lifetime_end_pass, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_size_in_byte, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, std::pmr::memory_resource* memory_resource) {
   // TODO use better tactics with real performance measured.
   std::pmr::unordered_map<BufferId, uint32_t> physical_buffer_address_offset{memory_resource};
   std::pmr::vector<Address> free_memory{{{0, std::numeric_limits<uint32_t>::max()}}, memory_resource};
@@ -297,24 +238,12 @@ auto GetPhysicalBufferAddressOffset(const RenderPassOrder& render_pass_order, co
   }
   return physical_buffer_address_offset;
 }
-template <typename T>
-using PhysicalBuffers = std::pmr::unordered_map<BufferId, T>;
-template <typename T>
-using PhysicalBufferAllocationFunc = std::function<T(const BufferCreationDesc&, const uint64_t, const uint32_t, const uint32_t)>;
-template <typename T>
-auto AllocatePhysicalBuffers(const BufferCreationDescList& buffer_creation_descs, const std::pmr::unordered_map<BufferId, size_t>& physical_buffer_size_in_byte, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_address_offset, std::function<T(const BufferCreationDesc&, const uint64_t, const uint32_t, const uint32_t)>&& alloc_func, std::pmr::memory_resource* memory_resource) {
-  PhysicalBuffers<T> physical_buffers{memory_resource};
-  for (auto& [buffer_id, desc] : buffer_creation_descs) {
-    physical_buffers.insert({buffer_id, alloc_func(desc, physical_buffer_size_in_byte.at(buffer_id), physical_buffer_alignment.at(buffer_id), physical_buffer_address_offset.at(buffer_id))});
-  }
-  return physical_buffers;
-}
 }
 #ifdef BUILD_WITH_TEST
 #include "minimal_for_cpp.h"
 namespace {
-const uint32_t size_in_byte = 32 * 1024;
-std::byte buffer[size_in_byte]{};
+const uint32_t buffer_size_in_bytes = 32 * 1024;
+std::byte buffer[buffer_size_in_bytes]{};
 std::byte buffer2[16]{};
 using namespace illuminate;
 using namespace illuminate::gfx;
@@ -721,7 +650,7 @@ TEST_CASE("BufferConfig") {
 TEST_CASE("CreateRenderPassListSimple") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, size_in_byte);
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
   auto render_pass_list = CreateRenderPassListSimple(memory_resource.get());
   auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
   CHECK(render_pass_id_map.size() == 3);
@@ -779,7 +708,7 @@ TEST_CASE("CreateRenderPassListSimple") {
 TEST_CASE("CreateRenderPassListShadow") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, size_in_byte);
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
   auto render_pass_list = CreateRenderPassListShadow(memory_resource.get());
   auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
   auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
@@ -910,7 +839,7 @@ TEST_CASE("CreateRenderPassListShadow") {
 TEST_CASE("CreateRenderPassListDebug") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, size_in_byte);
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
   auto render_pass_list = CreateRenderPassListDebug(memory_resource.get());
   auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
   auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
@@ -930,7 +859,7 @@ TEST_CASE("CreateRenderPassListDebug") {
 TEST_CASE("CreateRenderPassListWithSkyboxCreation") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, size_in_byte);
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
   auto render_pass_list = CreateRenderPassListWithSkyboxCreation(memory_resource.get());
   auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
   auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
@@ -954,7 +883,7 @@ TEST_CASE("CreateRenderPassListWithSkyboxCreation") {
 TEST_CASE("CreateRenderPassListTransferTexture") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, size_in_byte);
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
   auto render_pass_list = CreateRenderPassListTransferTexture(memory_resource.get());
   auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
   auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
@@ -971,7 +900,7 @@ TEST_CASE("CreateRenderPassListTransferTexture") {
 TEST_CASE("CreateRenderPassListTransparent") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, size_in_byte);
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
   auto render_pass_list = CreateRenderPassListTransparent(memory_resource.get());
   auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
   auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
@@ -990,7 +919,7 @@ TEST_CASE("CreateRenderPassListTransparent") {
 TEST_CASE("CreateRenderPassListCombined") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, size_in_byte);
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
   auto render_pass_list = CreateRenderPassListCombined(memory_resource.get());
   auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
   CHECK(render_pass_order.size() == 11);
@@ -1074,14 +1003,14 @@ TEST_CASE("CreateRenderPassListCombined") {
 TEST_CASE("RenderPassNameDupCheck") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, size_in_byte);
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
   auto render_pass_list = CreateRenderPassListSimple(memory_resource.get());
   CHECK(!IsDuplicateRenderPassNameExists(render_pass_list, memory_resource.get()));
   render_pass_list.push_back(render_pass_list[0]);
   CHECK(IsDuplicateRenderPassNameExists(render_pass_list, memory_resource.get()));
 }
 TEST_CASE("AllocateAlignedAddressFromFreeMemory") {
-  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, size_in_byte);
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
   std::pmr::vector<Address> free_memory(memory_resource.get());
   free_memory = {{{0, 100}}, memory_resource.get()};
   CHECK(AllocateAlignedAddressFromFreeMemory(20, 4, &free_memory) == 0);
@@ -1107,7 +1036,7 @@ TEST_CASE("AllocateAlignedAddressFromFreeMemory") {
   CHECK(free_memory[0].size_in_bytes == 50);
 }
 TEST_CASE("MergeToFreeMemory") {
-  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, size_in_byte);
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
   std::pmr::vector<Address> free_memory(memory_resource.get());
   MergeToFreeMemory(0, 100, &free_memory);
   CHECK(free_memory.size() == 1);
@@ -1165,7 +1094,7 @@ TEST_CASE("MergeToFreeMemory") {
 TEST_CASE("buffer creation desc and allocation") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, size_in_byte);
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
   RenderPassList render_pass_list(memory_resource.get());
   render_pass_list.push_back(RenderPass(
       StrId("1"),
@@ -1205,14 +1134,7 @@ TEST_CASE("buffer creation desc and allocation") {
   auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("4")}, memory_resource.get());
   auto used_render_pass_list = GetUsedRenderPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
   auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
-  auto used_buffer_list = GetUsedBufferList(used_render_pass_list, buffer_id_list, memory_resource.get());
-  CHECK(used_buffer_list.size() == 5);
-  CHECK(used_buffer_list.contains(0));
-  CHECK(used_buffer_list.contains(1));
-  CHECK(used_buffer_list.contains(2));
-  CHECK(used_buffer_list.contains(3));
-  CHECK(used_buffer_list.contains(4));
-  auto buffer_creation_descs = ConfigureBufferCreationDescs(culled_render_pass_order, render_pass_id_map, buffer_id_list, used_buffer_list, {12, 34}, {56, 78}, memory_resource.get());
+  auto buffer_creation_descs = ConfigureBufferCreationDescs(culled_render_pass_order, render_pass_id_map, buffer_id_list, {12, 34}, {56, 78}, memory_resource.get());
   CHECK(buffer_creation_descs.size() == 5);
   CHECK(buffer_creation_descs[0].initial_state == BufferStateType::kRtv);
   CHECK(buffer_creation_descs[0].state_flags == kBufferStateFlagRtv);
@@ -1255,7 +1177,7 @@ TEST_CASE("buffer creation desc and allocation") {
   CHECK(GetClearValueColorBuffer(buffer_creation_descs[4].clear_value) == GetClearValueColorBuffer(GetClearValueDefaultColorBuffer()));
   CHECK(buffer_creation_descs[4].dimension_type == BufferDimensionType::k2d);
   CHECK(buffer_creation_descs[4].depth == 1);
-  auto [physical_buffer_size_in_byte, physical_buffer_alignment] = GetPhysicalBufferSizes(buffer_creation_descs, []([[maybe_unused]] const BufferCreationDesc& desc) { return std::make_tuple<size_t, uint32_t>(sizeof(uint32_t), 4); }, memory_resource.get());
+  auto [physical_buffer_size_in_byte, physical_buffer_alignment] = GetPhysicalBufferSizes(buffer_creation_descs, []([[maybe_unused]] const BufferCreationDesc& desc) { return std::make_tuple<uint32_t, uint32_t>(sizeof(uint32_t), 4); }, memory_resource.get());
   CHECK(physical_buffer_size_in_byte.size() == 5);
   CHECK(physical_buffer_size_in_byte[0] == 4);
   CHECK(physical_buffer_size_in_byte[1] == 4);
@@ -1291,7 +1213,7 @@ TEST_CASE("buffer creation desc and allocation") {
   CHECK(physical_buffer_address_offset[3] == 12);
   CHECK(physical_buffer_address_offset[4] == 8);
   using PhysicalBufferType = uint32_t*;
-  auto physical_buffers = AllocatePhysicalBuffers(buffer_creation_descs, physical_buffer_size_in_byte, physical_buffer_alignment, physical_buffer_address_offset, PhysicalBufferAllocationFunc<PhysicalBufferType>{[](const BufferCreationDesc& desc, const uint64_t size_in_byte, const uint32_t alignment, const uint32_t offset_in_byte) { return static_cast<uint32_t*>(static_cast<void*>(&buffer2[offset_in_byte])); }}, memory_resource.get());
+  auto physical_buffers = AllocatePhysicalBuffers(buffer_creation_descs, physical_buffer_size_in_byte, physical_buffer_alignment, physical_buffer_address_offset, PhysicalBufferAllocationFunc<PhysicalBufferType>{[]([[maybe_unused]] const BufferCreationDesc& desc, [[maybe_unused]] const uint64_t size_in_bytes, [[maybe_unused]] const uint32_t alignment, const uint32_t offset_in_byte) { return static_cast<uint32_t*>(static_cast<void*>(&buffer2[offset_in_byte])); }}, memory_resource.get());
   CHECK(reinterpret_cast<std::uintptr_t>(physical_buffers[0]) == reinterpret_cast<std::uintptr_t>(buffer2));
   CHECK(reinterpret_cast<std::uintptr_t>(physical_buffers[1]) == reinterpret_cast<std::uintptr_t>(physical_buffers[0]) + 4);
   CHECK(reinterpret_cast<std::uintptr_t>(physical_buffers[2]) == reinterpret_cast<std::uintptr_t>(physical_buffers[1]) + 4);
@@ -1300,18 +1222,18 @@ TEST_CASE("buffer creation desc and allocation") {
   std::pmr::unordered_map<StrId, std::function<void(const PassBufferIdList&, const PhysicalBuffers<PhysicalBufferType>&)>> pass_functions{
     {
       StrId("1"),
-      [](const PassBufferIdList& buffer_ids, const PhysicalBuffers<PhysicalBufferType>& physical_buffers) {
-        *physical_buffers.at(buffer_ids[0]) = 255;
-        *physical_buffers.at(buffer_ids[1]) = 512;
-        *physical_buffers.at(buffer_ids[2]) = 1001;
-        *physical_buffers.at(buffer_ids[3]) = 1010;
+      [](const PassBufferIdList& buffer_ids, const PhysicalBuffers<PhysicalBufferType>& physical_buffer_ptr_list) {
+        *physical_buffer_ptr_list.at(buffer_ids[0]) = 255;
+        *physical_buffer_ptr_list.at(buffer_ids[1]) = 512;
+        *physical_buffer_ptr_list.at(buffer_ids[2]) = 1001;
+        *physical_buffer_ptr_list.at(buffer_ids[3]) = 1010;
       }
     },
     {
       StrId("2"),
-      [](const PassBufferIdList& buffer_ids, const PhysicalBuffers<PhysicalBufferType>& physical_buffers) {
-        *physical_buffers.at(buffer_ids[0]) = *physical_buffers.at(buffer_ids[0]) + 1;
-        *physical_buffers.at(buffer_ids[2]) = *physical_buffers.at(buffer_ids[1]) + 1024;
+      [](const PassBufferIdList& buffer_ids, const PhysicalBuffers<PhysicalBufferType>& physical_buffer_ptr_list) {
+        *physical_buffer_ptr_list.at(buffer_ids[0]) = *physical_buffer_ptr_list.at(buffer_ids[0]) + 1;
+        *physical_buffer_ptr_list.at(buffer_ids[2]) = *physical_buffer_ptr_list.at(buffer_ids[1]) + 1024;
       }
     },
   };
