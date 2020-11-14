@@ -23,6 +23,7 @@ class StrId final {
   constexpr StrId(StrId&& strid) : hash_(std::move(strid.hash_)), str_(std::move(strid.str_)) {}
   constexpr StrId() : hash_(0), str_(nullptr) {}
   constexpr StrId operator=(const StrId& strid)  { hash_ = strid.hash_; str_ = strid.str_; return *this; }
+  constexpr StrId operator=(StrId&& strid)  { hash_ = std::move(strid.hash_); str_ = std::move(strid.str_); return *this; }
   constexpr operator uint32_t() const { return hash_; }
   constexpr bool operator==(const StrId& id) const { return hash_ == id.hash_; } // for unordered_map
   constexpr StrHash GetHash() const { return hash_; }

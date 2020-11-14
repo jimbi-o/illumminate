@@ -78,28 +78,41 @@ class BufferConfig {
   uint32_t         depth;
 };
 struct BufferSize2d { uint32_t width, height; };
-constexpr uint32_t GetPhsicalBufferWidth(const BufferConfig& config, const BufferSize2d& mainbuffer, const BufferSize2d& swapchain) {
-  return GetPhsicalBufferSize(config.size_type, config.width, mainbuffer.width, swapchain.width);
+constexpr uint32_t GetPhysicalBufferWidth(const BufferConfig& config, const BufferSize2d& mainbuffer, const BufferSize2d& swapchain) {
+  return GetPhysicalBufferSize(config.size_type, config.width, mainbuffer.width, swapchain.width);
 }
-constexpr uint32_t GetPhsicalBufferHeight(const BufferConfig& config, const BufferSize2d& mainbuffer, const BufferSize2d& swapchain) {
-  return GetPhsicalBufferSize(config.size_type, config.height, mainbuffer.height, swapchain.height);
+constexpr uint32_t GetPhysicalBufferHeight(const BufferConfig& config, const BufferSize2d& mainbuffer, const BufferSize2d& swapchain) {
+  return GetPhysicalBufferSize(config.size_type, config.height, mainbuffer.height, swapchain.height);
 }
 using BufferConfigList = std::pmr::vector<BufferConfig>;
+using AsyncComputeEnabled = illuminate::core::EnableDisable;
 class RenderPass {
  public:
   RenderPass()
-      : mandatory_pass(false)
+      : command_queue_type(CommandQueueType::kGraphics),
+        mandatory_pass(false),
+        async_compute_enabled(AsyncComputeEnabled::kDisabled)
   {}
   RenderPass(StrId&& buffer_name, BufferConfigList&& buffer_config_list)
       : name(std::move(buffer_name)),
         buffer_list(std::move(buffer_config_list)),
-        mandatory_pass(false)
+        command_queue_type(CommandQueueType::kGraphics),
+        mandatory_pass(false),
+        async_compute_enabled(AsyncComputeEnabled::kDisabled)
   {}
-  constexpr RenderPass& Mandatory(const bool b) { mandatory_pass = b; return *this; }
+  constexpr RenderPass& CommandQueueTypeGraphics() { command_queue_type = CommandQueueType::kGraphics; return *this; }
+  constexpr RenderPass& CommandQueueTypeCompute() { command_queue_type = CommandQueueType::kCompute; return *this; }
+  constexpr RenderPass& CommandQueueTypeTransfer() { command_queue_type = CommandQueueType::kTransfer; return *this; }
+  constexpr RenderPass& Mandatory(const bool b = true) { mandatory_pass = b; return *this; }
+  constexpr RenderPass& AsyncComputeGroup(StrId&& group_name) { async_compute_group = std::move(group_name); return EnableAsyncCompute(); }
+  constexpr RenderPass& EnableAsyncCompute() { async_compute_enabled = AsyncComputeEnabled::kEnabled; return *this; }
   StrId name;
   BufferConfigList buffer_list;
+  CommandQueueType command_queue_type;
   bool mandatory_pass;
-  std::byte _pad[7];
+  AsyncComputeEnabled async_compute_enabled;
+  std::byte _pad[5];
+  StrId async_compute_group;
 };
 using RenderPassList = std::pmr::vector<RenderPass>;
 using RenderPassIdMap = std::pmr::unordered_map<StrId, RenderPass>;
@@ -162,8 +175,8 @@ class BufferCreationDesc {
         dimension_type(config.dimension_type),
         initial_state(config.state_type),
         state_flags(GetBufferStateFlag(config.state_type)),
-        width(GetPhsicalBufferWidth(config, mainbuffer, swapchain)),
-        height(GetPhsicalBufferHeight(config, mainbuffer, swapchain)),
+        width(GetPhysicalBufferWidth(config, mainbuffer, swapchain)),
+        height(GetPhysicalBufferHeight(config, mainbuffer, swapchain)),
         depth(config.depth),
         clear_value(config.clear_value) // TODO consider using move.
   {}

@@ -16,7 +16,7 @@ enum class BufferSizeType : uint8_t {
   kSwapchainRelative,
   kAbsolute,
 };
-constexpr uint32_t GetPhsicalBufferSize(const BufferSizeType size_type, const float val, const uint32_t mainbuffer, const uint32_t swapchain) {
+constexpr uint32_t GetPhysicalBufferSize(const BufferSizeType size_type, const float val, const uint32_t mainbuffer, const uint32_t swapchain) {
   switch (size_type) {
     case BufferSizeType::kSwapchainRelative:  return static_cast<uint32_t>(val * static_cast<float>(swapchain));
     case BufferSizeType::kMainbufferRelative: return static_cast<uint32_t>(val * static_cast<float>(mainbuffer));
