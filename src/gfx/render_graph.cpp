@@ -323,7 +323,40 @@ auto ConfigureAsyncComputeBatching(const RenderPassIdMap& render_pass_id_map, Re
   }
   return std::make_tuple(batch_info, render_pass_unprocessed);
 }
-auto ConfigureAsyncComputeResourceDependency(const RenderPassIdMap& render_pass_id_map, BatchInfoList&& batch_info, const BufferIdList& buffer_id_list, std::pmr::memory_resource* memory_resource) {
+using BatchWaitPassInfo = std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>;
+auto DetectWaitRequiredPass(const RenderPassIdMap& render_pass_id_map, const BatchInfoList& async_compute_batching, const ConsumerProducerRenderPassMap& consumer_producer_render_pass_map, std::pmr::memory_resource* memory_resource) {
+  BatchWaitPassInfo wait_required_pass{memory_resource};
+  for (auto& batch : async_compute_batching) {
+    for (auto& [command_queue_type, pass_list] : batch) {
+      for (auto& pass_id : pass_list) {
+        if (!consumer_producer_render_pass_map.contains(pass_id)) continue;
+        for (auto& dependent_pass : consumer_producer_render_pass_map.at(pass_id)) {
+          if (render_pass_id_map.at(dependent_pass).command_queue_type != command_queue_type) {
+            wait_required_pass[pass_id].insert(dependent_pass);
+          }
+        }
+      }
+    }
+  }
+  return wait_required_pass;
+}
+auto RemoveRedundantWaitPass(const BatchInfoList& async_compute_batching, BatchWaitPassInfo&& redundant_wait_required_pass, std::pmr::memory_resource* memory_resource) {
+  // TODO
+  return redundant_wait_required_pass;
+}
+auto ConfigureBatchWaitPass(BatchInfoList&& async_compute_batching, const BatchWaitPassInfo& redundant_wait_required_pass, std::pmr::memory_resource* memory_resource) {
+  // TODO
+  return async_compute_batching;
+}
+auto ConfigureBatchPassDependency(const RenderPassIdMap& render_pass_id_map, BatchInfoList&& batch_info, const ConsumerProducerRenderPassMap& consumer_producer_render_pass_map, std::pmr::memory_resource* memory_resource) { // TODO remove
+  for (auto& batch : batch_info) {
+    for (auto& [command_queue_type, pass_list] : batch) {
+      for (auto& pass_id : pass_list) {
+        auto& pass = render_pass_id_map.at(pass_id);
+        auto& producer_pass_list = consumer_producer_render_pass_map.at(pass_id);
+      }
+    }
+  }
   // TODO
   return batch_info;
 }
@@ -1437,6 +1470,74 @@ TEST_CASE("buffer creation desc and allocation") {
   CHECK(*physical_buffers.at(3) == 1010);
   CHECK(*physical_buffers.at(4) == 512 + 1024);
 }
+TEST_CASE("ConfigureBatchWaitPass") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
+  RenderPassIdMap render_pass_id_map{memory_resource.get()};
+  render_pass_id_map.insert({StrId("A"), RenderPass(StrId("A"), {})});
+  render_pass_id_map.insert({StrId("B"), RenderPass(StrId("B"), {})});
+  render_pass_id_map.insert({StrId("C"), RenderPass(StrId("C"), {}).CommandQueueTypeCompute()});
+  render_pass_id_map.insert({StrId("D"), RenderPass(StrId("D"), {}).CommandQueueTypeCompute()});
+  render_pass_id_map.insert({StrId("E"), RenderPass(StrId("E"), {})});
+  render_pass_id_map.insert({StrId("F"), RenderPass(StrId("F"), {})});
+  render_pass_id_map.insert({StrId("G"), RenderPass(StrId("G"), {})});
+  std::pmr::unordered_map<CommandQueueType, std::pmr::vector<StrId>> pass_map{memory_resource.get()};
+  pass_map.insert({CommandQueueType::kGraphics, std::pmr::vector<StrId>{memory_resource.get()}});
+  pass_map.insert({CommandQueueType::kCompute, std::pmr::vector<StrId>{memory_resource.get()}});
+  pass_map.at(CommandQueueType::kGraphics).push_back(StrId("A"));
+  pass_map.at(CommandQueueType::kGraphics).push_back(StrId("B"));
+  pass_map.at(CommandQueueType::kGraphics).push_back(StrId("E"));
+  pass_map.at(CommandQueueType::kGraphics).push_back(StrId("F"));
+  pass_map.at(CommandQueueType::kGraphics).push_back(StrId("G"));
+  pass_map.at(CommandQueueType::kCompute).push_back(StrId("C"));
+  pass_map.at(CommandQueueType::kCompute).push_back(StrId("D"));
+  BatchInfoList async_compute_batching{memory_resource.get()};
+  async_compute_batching.push_back(std::move(pass_map));
+  ConsumerProducerRenderPassMap consumer_producer_render_pass_map{memory_resource.get()};
+  consumer_producer_render_pass_map.insert({StrId("B"), std::pmr::unordered_set<StrId>{}});
+  consumer_producer_render_pass_map.at(StrId("B")).insert(StrId("A"));
+  consumer_producer_render_pass_map.insert({StrId("C"), std::pmr::unordered_set<StrId>{}});
+  consumer_producer_render_pass_map.at(StrId("C")).insert(StrId("A"));
+  consumer_producer_render_pass_map.insert({StrId("D"), std::pmr::unordered_set<StrId>{}});
+  consumer_producer_render_pass_map.at(StrId("D")).insert(StrId("A"));
+  consumer_producer_render_pass_map.insert({StrId("E"), std::pmr::unordered_set<StrId>{}});
+  consumer_producer_render_pass_map.at(StrId("E")).insert(StrId("B"));
+  consumer_producer_render_pass_map.at(StrId("E")).insert(StrId("D"));
+  consumer_producer_render_pass_map.insert({StrId("F"), std::pmr::unordered_set<StrId>{}});
+  consumer_producer_render_pass_map.at(StrId("F")).insert(StrId("D"));
+  consumer_producer_render_pass_map.at(StrId("F")).insert(StrId("C"));
+  consumer_producer_render_pass_map.insert({StrId("G"), std::pmr::unordered_set<StrId>{}});
+  consumer_producer_render_pass_map.at(StrId("G")).insert(StrId("C"));
+  auto wait_required_pass_list = DetectWaitRequiredPass(render_pass_id_map, async_compute_batching, consumer_producer_render_pass_map, memory_resource.get());
+  CHECK(wait_required_pass_list.size() == 5);
+  CHECK(wait_required_pass_list[StrId("C")].contains(StrId("A")));
+  CHECK(wait_required_pass_list[StrId("D")].contains(StrId("A")));
+  CHECK(wait_required_pass_list[StrId("E")].contains(StrId("D")));
+  CHECK(wait_required_pass_list[StrId("F")].contains(StrId("D")));
+  CHECK(wait_required_pass_list[StrId("F")].contains(StrId("C")));
+  CHECK(wait_required_pass_list[StrId("G")].contains(StrId("C")));
+  wait_required_pass_list = RemoveRedundantWaitPass(async_compute_batching, std::move(wait_required_pass_list), memory_resource.get());
+  CHECK(wait_required_pass_list.size() == 2);
+  CHECK(wait_required_pass_list[StrId("C")].contains(StrId("A")));
+  CHECK(wait_required_pass_list[StrId("E")].contains(StrId("D")));
+  async_compute_batching = ConfigureBatchWaitPass(std::move(async_compute_batching), wait_required_pass_list, memory_resource.get());
+  CHECK(async_compute_batching.size() == 3);
+  CHECK(async_compute_batching[0].size() == 1);
+  CHECK(async_compute_batching[0][CommandQueueType::kGraphics].size() == 1);
+  CHECK(async_compute_batching[0][CommandQueueType::kGraphics][0] == StrId("A"));
+  CHECK(async_compute_batching[1].size() == 2);
+  CHECK(async_compute_batching[1][CommandQueueType::kGraphics].size() == 1);
+  CHECK(async_compute_batching[1][CommandQueueType::kGraphics][0] == StrId("B"));
+  CHECK(async_compute_batching[1][CommandQueueType::kCompute].size() == 2);
+  CHECK(async_compute_batching[1][CommandQueueType::kCompute][0] == StrId("C"));
+  CHECK(async_compute_batching[1][CommandQueueType::kCompute][1] == StrId("D"));
+  CHECK(async_compute_batching[2].size() == 1);
+  CHECK(async_compute_batching[2][CommandQueueType::kGraphics].size() == 3);
+  CHECK(async_compute_batching[2][CommandQueueType::kGraphics][0] == StrId("E"));
+  CHECK(async_compute_batching[2][CommandQueueType::kGraphics][1] == StrId("F"));
+  CHECK(async_compute_batching[2][CommandQueueType::kGraphics][2] == StrId("G"));
+}
 TEST_CASE("AsyncComputeIntraFrame") {
   using namespace illuminate;
   using namespace illuminate::gfx;
@@ -1444,6 +1545,7 @@ TEST_CASE("AsyncComputeIntraFrame") {
   auto render_pass_list = CreateRenderPassListAsyncComputeIntraFrame(memory_resource.get());
   auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
   auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
+  auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, memory_resource.get());
   BatchInfoList async_compute_batching;
   RenderPassOrder render_pass_unprocessed;
   SUBCASE("with group name") {
@@ -1479,7 +1581,8 @@ TEST_CASE("AsyncComputeIntraFrame") {
     CHECK(async_compute_batching[0][CommandQueueType::kCompute][0] == StrId("ao"));
     CHECK(render_pass_unprocessed.empty());
   }
-  async_compute_batching = ConfigureAsyncComputeResourceDependency(render_pass_id_map, std::move(async_compute_batching), buffer_id_list, memory_resource.get());
+  auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
+  async_compute_batching = ConfigureBatchPassDependency(render_pass_id_map, std::move(async_compute_batching), consumer_producer_render_pass_map, memory_resource.get());
   CHECK(async_compute_batching.size() == 3);
   CHECK(async_compute_batching[0].size() == 1);
   CHECK(async_compute_batching[0][CommandQueueType::kGraphics].size() == 1);
