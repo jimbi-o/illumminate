@@ -341,14 +341,51 @@ auto DetectWaitRequiredPass(const RenderPassIdMap& render_pass_id_map, const Bat
   return wait_required_pass;
 }
 auto RemoveRedundantWaitPass(const BatchInfoList& async_compute_batching, BatchWaitPassInfo&& redundant_wait_required_pass, std::pmr::memory_resource* memory_resource) {
-  // TODO
-  return redundant_wait_required_pass;
+  std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>> preceding_pass_list{memory_resource};
+  for (std::pmr::unordered_map<CommandQueueType, StrId> prev_pass_of_each_queue; auto& batch : async_compute_batching) {
+    for (auto& [command_queue_type, pass_list] : batch) {
+      for (auto& prev_pass = prev_pass_of_each_queue[command_queue_type]; auto& pass_id : pass_list) {
+        if (prev_pass) {
+          preceding_pass_list[pass_id] = preceding_pass_list[prev_pass];
+          preceding_pass_list[pass_id].insert(prev_pass);
+        }
+        prev_pass = pass_id;
+      }
+    }
+  }
+  BatchWaitPassInfo wait_required_pass{memory_resource};
+  std::pmr::unordered_map<CommandQueueType, std::pmr::unordered_set<StrId>> already_waiting_pass_all_queue{memory_resource};
+  for (auto& batch : async_compute_batching) {
+    for (auto& [command_queue_type, pass_list] : batch) {
+      for (auto& already_waiting_pass_list = already_waiting_pass_all_queue[command_queue_type]; auto& pass_id : pass_list) {
+        if (!redundant_wait_required_pass.contains(pass_id)) continue;
+        auto&& wait_pass_list = std::move(redundant_wait_required_pass.at(pass_id));
+        while (!wait_pass_list.empty()) {
+          auto wait_pass_candidate = std::move(*wait_pass_list.begin());
+          wait_pass_list.erase(wait_pass_candidate);
+          if (already_waiting_pass_list.contains(wait_pass_candidate)) continue;
+          bool insert_candidate = true;
+          for (auto& already_waiting_pass : already_waiting_pass_list) {
+            if (preceding_pass_list.at(already_waiting_pass).contains(wait_pass_candidate)) {
+              insert_candidate = false;
+              break;
+            }
+          }
+          if (insert_candidate) {
+            already_waiting_pass_list.insert(wait_pass_candidate);
+            wait_required_pass[pass_id].insert(wait_pass_candidate);
+          }
+        }
+      }
+    }
+  }
+  return wait_required_pass;
 }
 auto ConfigureBatchWaitPass(BatchInfoList&& async_compute_batching, const BatchWaitPassInfo& redundant_wait_required_pass, std::pmr::memory_resource* memory_resource) {
   // TODO
   return async_compute_batching;
 }
-auto ConfigureBatchPassDependency(const RenderPassIdMap& render_pass_id_map, BatchInfoList&& batch_info, const ConsumerProducerRenderPassMap& consumer_producer_render_pass_map, std::pmr::memory_resource* memory_resource) { // TODO remove
+auto ConfigureBatchPassDependency(const RenderPassIdMap& render_pass_id_map, BatchInfoList&& batch_info, const ConsumerProducerRenderPassMap& consumer_producer_render_pass_map, std::pmr::memory_resource* memory_resource) { // TODO remove this function.
   for (auto& batch : batch_info) {
     for (auto& [command_queue_type, pass_list] : batch) {
       for (auto& pass_id : pass_list) {
@@ -357,7 +394,6 @@ auto ConfigureBatchPassDependency(const RenderPassIdMap& render_pass_id_map, Bat
       }
     }
   }
-  // TODO
   return batch_info;
 }
 }
@@ -1511,16 +1547,24 @@ TEST_CASE("ConfigureBatchWaitPass") {
   consumer_producer_render_pass_map.at(StrId("G")).insert(StrId("C"));
   auto wait_required_pass_list = DetectWaitRequiredPass(render_pass_id_map, async_compute_batching, consumer_producer_render_pass_map, memory_resource.get());
   CHECK(wait_required_pass_list.size() == 5);
+  CHECK(wait_required_pass_list[StrId("C")].size() == 1);
   CHECK(wait_required_pass_list[StrId("C")].contains(StrId("A")));
+  CHECK(wait_required_pass_list[StrId("D")].size() == 1);
   CHECK(wait_required_pass_list[StrId("D")].contains(StrId("A")));
+  CHECK(wait_required_pass_list[StrId("E")].size() == 1);
   CHECK(wait_required_pass_list[StrId("E")].contains(StrId("D")));
+  CHECK(wait_required_pass_list[StrId("F")].size() == 2);
   CHECK(wait_required_pass_list[StrId("F")].contains(StrId("D")));
   CHECK(wait_required_pass_list[StrId("F")].contains(StrId("C")));
+  CHECK(wait_required_pass_list[StrId("G")].size() == 1);
   CHECK(wait_required_pass_list[StrId("G")].contains(StrId("C")));
   wait_required_pass_list = RemoveRedundantWaitPass(async_compute_batching, std::move(wait_required_pass_list), memory_resource.get());
   CHECK(wait_required_pass_list.size() == 2);
   CHECK(wait_required_pass_list[StrId("C")].contains(StrId("A")));
+  CHECK(!wait_required_pass_list.contains(StrId("D")));
   CHECK(wait_required_pass_list[StrId("E")].contains(StrId("D")));
+  CHECK(!wait_required_pass_list.contains(StrId("F")));
+  CHECK(!wait_required_pass_list.contains(StrId("G")));
   async_compute_batching = ConfigureBatchWaitPass(std::move(async_compute_batching), wait_required_pass_list, memory_resource.get());
   CHECK(async_compute_batching.size() == 3);
   CHECK(async_compute_batching[0].size() == 1);
