@@ -31,8 +31,9 @@ struct BufferDesc {
   float x, y, z;
   ClearValue clear_value;
 };
-enum class CommandQueueType : uint8_t { kGraphics, kCompute, kTransfer, };
+enum class CommandQueueType : uint8_t { kGraphics = 0, kCompute, kTransfer, kNum, };
 static const CommandQueueType kCommandQueueTypeSet[]{CommandQueueType::kGraphics, CommandQueueType::kCompute, CommandQueueType::kTransfer};
+static const auto kCommandQueueTypeNum = static_cast<uint32_t>(CommandQueueType::kNum);
 constexpr auto GetClearValueDefaultColorBuffer() {
   return ClearValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f});
 }

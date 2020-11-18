@@ -85,7 +85,7 @@ constexpr uint32_t GetPhysicalBufferHeight(const BufferConfig& config, const Buf
   return GetPhysicalBufferSize(config.size_type, config.height, mainbuffer.height, swapchain.height);
 }
 using BufferConfigList = std::pmr::vector<BufferConfig>;
-using AsyncComputeEnabled = illuminate::core::EnableDisable;
+using AsyncComputeEnabled = illuminate::EnableDisable;
 class RenderPass {
  public:
   RenderPass()

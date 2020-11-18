@@ -1,4 +1,5 @@
 #include "render_graph.h"
+#include "minimal_for_cpp.h"
 namespace illuminate::gfx {
 std::tuple<RenderPassIdMap, RenderPassOrder> FormatRenderPassList(RenderPassList&& render_pass_list, std::pmr::memory_resource* memory_resource) {
   RenderPassIdMap render_pass_id_map{memory_resource};
@@ -381,9 +382,50 @@ auto RemoveRedundantWaitPass(const BatchInfoList& async_compute_batching, BatchW
   }
   return wait_required_pass;
 }
-auto ConfigureBatchWaitPass(BatchInfoList&& async_compute_batching, const BatchWaitPassInfo& redundant_wait_required_pass, std::pmr::memory_resource* memory_resource) {
+using BatchEndPassList = std::pmr::vector<std::unordered_map<CommandQueueType, StrId>>;
+auto GetBatchEndPassList(const BatchInfoList& async_compute_batching, const BatchWaitPassInfo& wait_required_pass, std::pmr::memory_resource* memory_resource) {
   // TODO
-  return async_compute_batching;
+  std::unordered_map<CommandQueueType, std::pmr::unordered_set<StrId>> signal_pass, wait_pass;
+  for (auto& wait_info : wait_required_pass) {
+    //    signal_pass.
+  }
+  BatchEndPassList batch_end_pass_list{memory_resource};
+  return batch_end_pass_list;
+}
+auto AppendBatchEndPassListToCurrentBatch(BatchInfoList&& async_compute_batching, BatchEndPassList&& batch_end_pass_list, std::pmr::memory_resource* memory_resource) {
+  BatchInfoList batch_info{memory_resource};
+  std::pmr::unordered_set<CommandQueueType> used_end_pass{memory_resource};
+  used_end_pass.reserve(kCommandQueueTypeNum);
+  while (!async_compute_batching.empty() || !batch_end_pass_list.empty()) {
+    batch_info.push_back({});
+    for (auto&& [command_queue_type, pass_list] : async_compute_batching.front()) {
+      if (pass_list.empty()) continue;
+      auto end_it = pass_list.end();
+      if (!used_end_pass.contains(command_queue_type) && !batch_end_pass_list.empty() && batch_end_pass_list.front().contains(command_queue_type)) {
+        auto& end_pass = batch_end_pass_list.front().at(command_queue_type);
+        end_it = std::find_if(pass_list.begin(), pass_list.end(), [&end_pass](const StrId pass){ return pass == end_pass; }) + 1;
+        used_end_pass.insert(command_queue_type);
+      }
+      batch_info.back().insert({command_queue_type, std::pmr::vector<StrId>{memory_resource}});
+      std::move(pass_list.begin(), end_it, std::back_inserter(batch_info.back().at(command_queue_type)));
+      pass_list.erase(pass_list.begin(), end_it);
+    }
+    if (!batch_end_pass_list.empty() && batch_end_pass_list.front().size() == used_end_pass.size()) {
+      batch_end_pass_list.erase(batch_end_pass_list.begin());
+      used_end_pass.clear();
+    }
+    bool all_pass_used = true;
+    for (auto&& [command_queue_type, pass_list] : async_compute_batching.front()) {
+      if (!pass_list.empty()) {
+        all_pass_used = false;
+        break;
+      }
+    }
+    if (all_pass_used) {
+      async_compute_batching.erase(async_compute_batching.begin());
+    }
+  }
+  return batch_info;
 }
 auto ConfigureBatchPassDependency(const RenderPassIdMap& render_pass_id_map, BatchInfoList&& batch_info, const ConsumerProducerRenderPassMap& consumer_producer_render_pass_map, std::pmr::memory_resource* memory_resource) { // TODO remove this function.
   for (auto& batch : batch_info) {
@@ -677,6 +719,7 @@ auto CreateAsyncComputeGroupInfo(StrId&& group_name, const AsyncComputeBatchPair
 #endif
 #include "doctest/doctest.h"
 TEST_CASE("BufferConfig") {
+  static_assert(std::size(kCommandQueueTypeSet) == kCommandQueueTypeNum);
   CHECK(BufferConfig(StrId("rtv"), BufferStateType::kRtv).name == StrId("rtv"));
   CHECK(BufferConfig(StrId("rtv"), BufferStateType::kRtv).state_type == BufferStateType::kRtv);
   CHECK(BufferConfig(StrId("rtv"), BufferStateType::kRtv).load_op_type == BufferLoadOpType::kDontCare);
@@ -1506,7 +1549,28 @@ TEST_CASE("buffer creation desc and allocation") {
   CHECK(*physical_buffers.at(3) == 1010);
   CHECK(*physical_buffers.at(4) == 512 + 1024);
 }
-TEST_CASE("ConfigureBatchWaitPass") {
+TEST_CASE("AppendBatchEndPassListToCurrentBatch-simple") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
+  BatchInfoList async_compute_batching{memory_resource.get()};
+  async_compute_batching.push_back({{CommandQueueType::kGraphics, {{StrId("A")}, memory_resource.get()}}});
+  async_compute_batching.push_back({{CommandQueueType::kCompute, {{StrId("B"), StrId("C")}, memory_resource.get()}}});
+  BatchEndPassList batch_end_pass_list{memory_resource.get()};
+  batch_end_pass_list.push_back({{CommandQueueType::kCompute, StrId("B")}});
+  async_compute_batching = AppendBatchEndPassListToCurrentBatch(std::move(async_compute_batching), std::move(batch_end_pass_list), memory_resource.get());
+  CHECK(async_compute_batching.size() == 3);
+  CHECK(async_compute_batching[0].size() == 1);
+  CHECK(async_compute_batching[0][CommandQueueType::kGraphics].size() == 1);
+  CHECK(async_compute_batching[0][CommandQueueType::kGraphics][0] == StrId("A"));
+  CHECK(async_compute_batching[1].size() == 1);
+  CHECK(async_compute_batching[1][CommandQueueType::kCompute].size() == 1);
+  CHECK(async_compute_batching[1][CommandQueueType::kCompute][0] == StrId("B"));
+  CHECK(async_compute_batching[2].size() == 1);
+  CHECK(async_compute_batching[2][CommandQueueType::kCompute].size() == 1);
+  CHECK(async_compute_batching[2][CommandQueueType::kCompute][0] == StrId("C"));
+}
+TEST_CASE("AppendBatchEndPassListToCurrentBatch") {
   using namespace illuminate;
   using namespace illuminate::gfx;
   auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
@@ -1565,7 +1629,13 @@ TEST_CASE("ConfigureBatchWaitPass") {
   CHECK(wait_required_pass_list[StrId("E")].contains(StrId("D")));
   CHECK(!wait_required_pass_list.contains(StrId("F")));
   CHECK(!wait_required_pass_list.contains(StrId("G")));
-  async_compute_batching = ConfigureBatchWaitPass(std::move(async_compute_batching), wait_required_pass_list, memory_resource.get());
+  auto batch_end_pass_list = GetBatchEndPassList(async_compute_batching, wait_required_pass_list, memory_resource.get()); // TODO
+  CHECK(batch_end_pass_list.size() == 2);
+  CHECK(batch_end_pass_list[0][CommandQueueType::kGraphics] == StrId("A"));
+  CHECK(!batch_end_pass_list[0].contains(CommandQueueType::kCompute));
+  CHECK(batch_end_pass_list[1][CommandQueueType::kGraphics] == StrId("B"));
+  CHECK(batch_end_pass_list[1][CommandQueueType::kCompute]  == StrId("D"));
+  async_compute_batching = AppendBatchEndPassListToCurrentBatch(std::move(async_compute_batching), std::move(batch_end_pass_list), memory_resource.get());
   CHECK(async_compute_batching.size() == 3);
   CHECK(async_compute_batching[0].size() == 1);
   CHECK(async_compute_batching[0][CommandQueueType::kGraphics].size() == 1);
@@ -1698,3 +1768,4 @@ TEST_CASE("AsyncComputeInterFrame") {
 // TODO ConfigureBufferCreationDescs for ping-pong buffers
 // TODO resource dependency batching
 // TODO barrier, fence
+// TODO set.erase -> use ret iterator
