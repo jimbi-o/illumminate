@@ -367,29 +367,27 @@ auto ConfigureBufferResourceDependency(const RenderPassIdMap& render_pass_id_map
 }
 auto ApplyResourceDependencyToBatch(const RenderPassIdMap& render_pass_id_map, BatchInfoList&& src_batch, const ProducerPassSignalList& producer_pass_signal_list, const ConsumerPassWaitingSignalList& consumer_pass_waiting_signal_list, std::pmr::memory_resource* memory_resource) {
   BatchInfoList batch_info_list{memory_resource};
-  {
+  auto batch_it = src_batch.begin();
+  std::pmr::unordered_set<CommandQueueType> pass_per_command_queue{memory_resource};
+  while (batch_it != src_batch.end()) {
     batch_info_list.push_back(std::pmr::vector<StrId>{memory_resource});
-    auto batch_it = src_batch.begin();
-    while (batch_it != src_batch.end()) {
-      auto pass_it = batch_it->begin();
-      while (pass_it != batch_it->end()) {
-        auto&& pass_name = std::move(*pass_it);
-        pass_it = batch_it->erase(pass_it);
-        if (consumer_pass_waiting_signal_list.contains(pass_name) && !batch_info_list.back().empty()) {
-          batch_info_list.push_back(std::pmr::vector<StrId>{memory_resource});
-        }
-        batch_info_list.back().push_back(std::move(pass_name));
-        if (producer_pass_signal_list.contains(pass_name) && pass_it != batch_it->end()) {
-          batch_info_list.push_back(std::pmr::vector<StrId>{memory_resource});
-        }
+    pass_per_command_queue.clear();
+    auto pass_it = batch_it->begin();
+    while (pass_it != batch_it->end()) {
+      auto&& pass_name = std::move(*pass_it);
+      auto command_queue_type = render_pass_id_map.at(pass_name).command_queue_type;
+      if (consumer_pass_waiting_signal_list.contains(pass_name) && pass_per_command_queue.contains(command_queue_type)) {
+        batch_info_list.push_back(std::pmr::vector<StrId>{memory_resource});
       }
-      if (src_batch.begin()->empty()) {
-        batch_it = src_batch.erase(src_batch.begin());
-        if (batch_it != src_batch.end()) {
-          batch_info_list.push_back(std::pmr::vector<StrId>{memory_resource});
-        }
+      batch_info_list.back().push_back(std::move(pass_name));
+      pass_per_command_queue.insert(command_queue_type);
+      if (producer_pass_signal_list.contains(pass_name) && (pass_it + 1) != batch_it->end()) {
+        batch_info_list.push_back(std::pmr::vector<StrId>{memory_resource});
+        pass_per_command_queue.clear();
       }
+      pass_it = batch_it->erase(pass_it);
     }
+    batch_it = src_batch.erase(src_batch.begin());
   }
   return batch_info_list;
 }
