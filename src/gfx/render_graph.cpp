@@ -1560,6 +1560,7 @@ TEST_CASE("AsyncComputeIntraFrame") {
   auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
   auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
   auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, memory_resource.get());
+  auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
   BatchInfoList async_compute_batching;
   RenderPassOrder render_pass_unprocessed;
   SUBCASE("with group name") {
@@ -1576,6 +1577,19 @@ TEST_CASE("AsyncComputeIntraFrame") {
     CHECK(async_compute_batching[1][4] == StrId("lighting"));
     CHECK(async_compute_batching[1][5] == StrId("postprocess"));
     CHECK(render_pass_unprocessed.empty());
+    auto [producer_pass_signal_list, consumer_pass_waiting_signal_list] = ConfigureBufferResourceDependency(render_pass_id_map, async_compute_batching, consumer_producer_render_pass_map, memory_resource.get());
+    async_compute_batching = ApplyResourceDependencyToBatch(render_pass_id_map, std::move(async_compute_batching), producer_pass_signal_list, consumer_pass_waiting_signal_list, memory_resource.get());
+    CHECK(async_compute_batching.size() == 3);
+    CHECK(async_compute_batching[0].size() == 1);
+    CHECK(async_compute_batching[0][0] == StrId("prez"));
+    CHECK(async_compute_batching[1].size() == 3);
+    CHECK(async_compute_batching[1][0] == StrId("shadowmap"));
+    CHECK(async_compute_batching[1][1] == StrId("ao"));
+    CHECK(async_compute_batching[1][2] == StrId("gbuffer"));
+    CHECK(async_compute_batching[2].size() == 3);
+    CHECK(async_compute_batching[2][0] == StrId("deferredshadow-pcss"));
+    CHECK(async_compute_batching[2][1] == StrId("lighting"));
+    CHECK(async_compute_batching[2][2] == StrId("postprocess"));
   }
   SUBCASE("no group name") {
     std::tie(async_compute_batching, render_pass_unprocessed) = ConfigureAsyncComputeBatching(render_pass_id_map, std::move(render_pass_order), {}, {}, memory_resource.get());
