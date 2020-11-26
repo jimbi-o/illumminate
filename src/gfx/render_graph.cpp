@@ -336,10 +336,7 @@ auto ConfigureBufferResourceDependency(const RenderPassIdMap& render_pass_id_map
         next_signal_val[consumer_command_queue_type]++;
         if (!consumer_producer_render_pass_map.contains(consumer_pass_name)) continue;
         for (auto& producer_pass_name : consumer_producer_render_pass_map.at(consumer_pass_name)) {
-          if (!producer_pass_signal_list.contains(producer_pass_name)) {
-            logwarn("ConfigureResourceDependencyBatching missing producer {}@{}", producer_pass_name, consumer_pass_name);
-            continue;
-          }
+          if (!producer_pass_signal_list.contains(producer_pass_name)) continue;
           auto producer_command_queue_type = render_pass_id_map.at(producer_pass_name).command_queue_type;
           if (producer_command_queue_type == consumer_command_queue_type) continue;
           if (max_waiting_signal_val.contains(consumer_command_queue_type)
@@ -1611,6 +1608,9 @@ TEST_CASE("AsyncComputeInterFrame") {
   auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
   auto render_pass_list = CreateRenderPassListAsyncComputeInterFrame(memory_resource.get());
   auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
+  auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
+  auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, memory_resource.get());
+  auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
   auto async_group_info = CreateAsyncComputeGroupInfo(StrId("prez"), AsyncComputeBatchPairType::kPairComputeWithNextFrameGraphics, memory_resource.get());
   auto [async_compute_batching, render_pass_unprocessed] = ConfigureAsyncComputeBatching(render_pass_id_map, std::move(render_pass_order), {}, async_group_info, memory_resource.get());
   CHECK(async_compute_batching.size() == 1);
@@ -1623,6 +1623,13 @@ TEST_CASE("AsyncComputeInterFrame") {
   CHECK(render_pass_unprocessed[1] == StrId("deferredshadow-pcss"));
   CHECK(render_pass_unprocessed[2] == StrId("lighting"));
   CHECK(render_pass_unprocessed[3] == StrId("postprocess"));
+  auto [producer_pass_signal_list, consumer_pass_waiting_signal_list] = ConfigureBufferResourceDependency(render_pass_id_map, async_compute_batching, consumer_producer_render_pass_map, memory_resource.get());
+  async_compute_batching = ApplyResourceDependencyToBatch(render_pass_id_map, std::move(async_compute_batching), producer_pass_signal_list, consumer_pass_waiting_signal_list, memory_resource.get());
+  CHECK(async_compute_batching.size() == 1);
+  CHECK(async_compute_batching[0].size() == 3);
+  CHECK(async_compute_batching[0][0] == StrId("prez"));
+  CHECK(async_compute_batching[0][1] == StrId("shadowmap"));
+  CHECK(async_compute_batching[0][2] == StrId("gbuffer"));
   render_pass_list = CreateRenderPassListAsyncComputeInterFrame(memory_resource.get());
   std::tie(render_pass_id_map, render_pass_order) = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
   std::tie(async_compute_batching, render_pass_unprocessed) = ConfigureAsyncComputeBatching(render_pass_id_map, std::move(render_pass_order), std::move(render_pass_unprocessed), async_group_info, memory_resource.get());
@@ -1640,6 +1647,17 @@ TEST_CASE("AsyncComputeInterFrame") {
   CHECK(render_pass_unprocessed[1] == StrId("deferredshadow-pcss"));
   CHECK(render_pass_unprocessed[2] == StrId("lighting"));
   CHECK(render_pass_unprocessed[3] == StrId("postprocess"));
+  std::tie(producer_pass_signal_list, consumer_pass_waiting_signal_list) = ConfigureBufferResourceDependency(render_pass_id_map, async_compute_batching, consumer_producer_render_pass_map, memory_resource.get());
+  async_compute_batching = ApplyResourceDependencyToBatch(render_pass_id_map, std::move(async_compute_batching), producer_pass_signal_list, consumer_pass_waiting_signal_list, memory_resource.get());
+  CHECK(async_compute_batching.size() == 1);
+  CHECK(async_compute_batching[0].size() == 7);
+  CHECK(async_compute_batching[0][0] == StrId("ao"));
+  CHECK(async_compute_batching[0][1] == StrId("deferredshadow-pcss"));
+  CHECK(async_compute_batching[0][2] == StrId("lighting"));
+  CHECK(async_compute_batching[0][3] == StrId("postprocess"));
+  CHECK(async_compute_batching[0][4] == StrId("prez"));
+  CHECK(async_compute_batching[0][5] == StrId("shadowmap"));
+  CHECK(async_compute_batching[0][6] == StrId("gbuffer"));
   std::tie(async_compute_batching, render_pass_unprocessed) = ConfigureAsyncComputeBatching(render_pass_id_map, {}, std::move(render_pass_unprocessed), async_group_info, memory_resource.get());
   CHECK(async_compute_batching.size() == 1);
   CHECK(async_compute_batching[0].size() == 4);
@@ -1648,6 +1666,14 @@ TEST_CASE("AsyncComputeInterFrame") {
   CHECK(async_compute_batching[0][2] == StrId("lighting"));
   CHECK(async_compute_batching[0][3] == StrId("postprocess"));
   CHECK(render_pass_unprocessed.empty());
+  std::tie(producer_pass_signal_list, consumer_pass_waiting_signal_list) = ConfigureBufferResourceDependency(render_pass_id_map, async_compute_batching, consumer_producer_render_pass_map, memory_resource.get());
+  async_compute_batching = ApplyResourceDependencyToBatch(render_pass_id_map, std::move(async_compute_batching), producer_pass_signal_list, consumer_pass_waiting_signal_list, memory_resource.get());
+  CHECK(async_compute_batching.size() == 1);
+  CHECK(async_compute_batching[0].size() == 4);
+  CHECK(async_compute_batching[0][0] == StrId("ao"));
+  CHECK(async_compute_batching[0][1] == StrId("deferredshadow-pcss"));
+  CHECK(async_compute_batching[0][2] == StrId("lighting"));
+  CHECK(async_compute_batching[0][3] == StrId("postprocess"));
 }
 #ifdef __clang__
 #pragma clang diagnostic pop
