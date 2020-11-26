@@ -96,11 +96,11 @@ MandatoryOutputBufferIdList IdentifyMandatoryOutputBufferId(const RenderPassIdMa
 }
 std::pmr::unordered_set<StrId> GetBufferProducerPassList(const RenderPassAdjacencyGraph& adjacency_graph, std::pmr::unordered_set<BufferId>&& buffer_id_list, std::pmr::memory_resource* memory_resource) {
   std::pmr::unordered_set<StrId> buffer_producer_pass_list{memory_resource};
-  while (!buffer_id_list.empty()) {
-    auto buffer_id = *buffer_id_list.begin();
-    buffer_id_list.erase(buffer_id);
-    auto& producer_pass = adjacency_graph.output_buffer_producer_pass.at(buffer_id);
+  auto buffer_id_it = buffer_id_list.begin();
+  while (buffer_id_it != buffer_id_list.end()) {
+    auto& producer_pass = adjacency_graph.output_buffer_producer_pass.at(*buffer_id_it);
     buffer_producer_pass_list.insert(producer_pass.begin(), producer_pass.end());
+    buffer_id_it = buffer_id_list.erase(buffer_id_it);
   }
   return buffer_producer_pass_list;
 }
@@ -258,10 +258,9 @@ std::tuple<BatchInfoList, RenderPassOrder> ConfigureAsyncComputeBatching(const R
   batch_info.push_back(std::pmr::vector<StrId>{memory_resource});
   RenderPassOrder render_pass_unprocessed{memory_resource};
   std::pmr::unordered_map<StrId, uint32_t> async_group_batch_index{memory_resource};
-  while (!prev_render_pass_order.empty()) {
-    auto pass_name_it = prev_render_pass_order.begin();
-    auto current_pass_name = std::move(*pass_name_it);
-    prev_render_pass_order.erase(pass_name_it);
+  auto pass_name_it = prev_render_pass_order.begin();
+  while (pass_name_it != prev_render_pass_order.end()) {
+    auto&& current_pass_name = std::move(*pass_name_it);
     auto& pass = render_pass_id_map.at(current_pass_name);
     auto batch_index = batch_info.size() - 1;
     for (auto& [group_name, pair_type] : async_group_info) {
@@ -278,11 +277,11 @@ std::tuple<BatchInfoList, RenderPassOrder> ConfigureAsyncComputeBatching(const R
       break;
     }
     batch_info[batch_index].push_back(std::move(current_pass_name));
+    pass_name_it = prev_render_pass_order.erase(pass_name_it);
   }
-  while (!current_render_pass_order.empty()) {
-    auto pass_name_it = current_render_pass_order.begin();
-    auto current_pass_name = std::move(*pass_name_it);
-    current_render_pass_order.erase(pass_name_it);
+  pass_name_it = current_render_pass_order.begin();
+  while (pass_name_it != current_render_pass_order.end()) {
+    auto&& current_pass_name = std::move(*pass_name_it);
     auto& pass = render_pass_id_map.at(current_pass_name);
     auto batch_index = batch_info.size() - 1;
     for (auto& [group_name, pair_type] : async_group_info) {
@@ -307,9 +306,10 @@ std::tuple<BatchInfoList, RenderPassOrder> ConfigureAsyncComputeBatching(const R
     }
     if (batch_index == ~0u) {
       render_pass_unprocessed.push_back(std::move(current_pass_name));
-      continue;
+    } else {
+      batch_info[batch_index].push_back(std::move(current_pass_name));
     }
-    batch_info[batch_index].push_back(std::move(current_pass_name));
+    pass_name_it = current_render_pass_order.erase(pass_name_it);
   }
   return {batch_info, render_pass_unprocessed};
 }
@@ -1673,7 +1673,4 @@ TEST_CASE("AsyncComputeInterFrame") {
 #pragma clang diagnostic pop
 #endif
 #endif
-// TODO ConfigureBufferCreationDescs for ping-pong buffers
-// TODO resource dependency batching
 // TODO barrier, fence
-// TODO set.erase -> use ret iterator
