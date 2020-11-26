@@ -253,10 +253,7 @@ std::pmr::unordered_map<BufferId, uint32_t> GetPhysicalBufferAddressOffset(const
   }
   return physical_buffer_address_offset;
 }
-using BatchInfoList = std::pmr::vector<std::pmr::vector<StrId>>;
-enum class AsyncComputeBatchPairType : uint8_t { kCurrentFrame = 0, kPairComputeWithNextFrameGraphics, };
-using AsyncComputePairInfo = std::pmr::unordered_map<StrId, AsyncComputeBatchPairType>;
-auto ConfigureAsyncComputeBatching(const RenderPassIdMap& render_pass_id_map, RenderPassOrder&& current_render_pass_order, RenderPassOrder&& prev_render_pass_order, const AsyncComputePairInfo& async_group_info, std::pmr::memory_resource* memory_resource) {
+std::tuple<BatchInfoList, RenderPassOrder> ConfigureAsyncComputeBatching(const RenderPassIdMap& render_pass_id_map, RenderPassOrder&& current_render_pass_order, RenderPassOrder&& prev_render_pass_order, const AsyncComputePairInfo& async_group_info, std::pmr::memory_resource* memory_resource) {
   BatchInfoList batch_info{memory_resource};
   batch_info.push_back(std::pmr::vector<StrId>{memory_resource});
   RenderPassOrder render_pass_unprocessed{memory_resource};
@@ -312,14 +309,11 @@ auto ConfigureAsyncComputeBatching(const RenderPassIdMap& render_pass_id_map, Re
       render_pass_unprocessed.push_back(std::move(current_pass_name));
       continue;
     }
-    auto command_queue_type = (pass.command_queue_type != CommandQueueType::kCompute || IsEnabled(pass.async_compute_enabled)) ? pass.command_queue_type : CommandQueueType::kGraphics;
     batch_info[batch_index].push_back(std::move(current_pass_name));
   }
-  return std::make_tuple(batch_info, render_pass_unprocessed);
+  return {batch_info, render_pass_unprocessed};
 }
-using ProducerPassSignalList = std::pmr::unordered_map<StrId, uint32_t>;
-using ConsumerPassWaitingSignalList = ProducerPassSignalList;
-auto ConfigureBufferResourceDependency(const RenderPassIdMap& render_pass_id_map, const BatchInfoList& src_batch, const ConsumerProducerRenderPassMap& consumer_producer_render_pass_map, std::pmr::memory_resource* memory_resource) {
+std::tuple<ProducerPassSignalList, ConsumerPassWaitingSignalList> ConfigureBufferResourceDependency(const RenderPassIdMap& render_pass_id_map, const BatchInfoList& src_batch, const ConsumerProducerRenderPassMap& consumer_producer_render_pass_map, std::pmr::memory_resource* memory_resource) {
   ProducerPassSignalList producer_pass_signal_list{memory_resource};
   ConsumerPassWaitingSignalList consumer_pass_waiting_signal_list{memory_resource};
   std::pmr::unordered_set<StrId> signal_consumed_producers{memory_resource};
@@ -360,9 +354,9 @@ auto ConfigureBufferResourceDependency(const RenderPassIdMap& render_pass_id_map
     }
     it = producer_pass_signal_list.erase(it);
   }
-  return std::make_tuple(producer_pass_signal_list, consumer_pass_waiting_signal_list);
+  return {producer_pass_signal_list, consumer_pass_waiting_signal_list};
 }
-auto ApplyResourceDependencyToBatch(const RenderPassIdMap& render_pass_id_map, BatchInfoList&& src_batch, const ProducerPassSignalList& producer_pass_signal_list, const ConsumerPassWaitingSignalList& consumer_pass_waiting_signal_list, std::pmr::memory_resource* memory_resource) {
+BatchInfoList ApplyResourceDependencyToBatch(const RenderPassIdMap& render_pass_id_map, BatchInfoList&& src_batch, const ProducerPassSignalList& producer_pass_signal_list, const ConsumerPassWaitingSignalList& consumer_pass_waiting_signal_list, std::pmr::memory_resource* memory_resource) {
   BatchInfoList batch_info_list{memory_resource};
   auto batch_it = src_batch.begin();
   std::pmr::unordered_set<CommandQueueType> pass_per_command_queue{memory_resource};
