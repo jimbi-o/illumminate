@@ -10,7 +10,7 @@
 # TODO build RelWithDebugInfo,Release (not Debug only)
 MakeUnix()
 {
-	cmake -S src/$1 -B build/unix/$1 -G Ninja -DCMAKE_CXX_COMPILER=clang++-11 -DCMAKE_CXX_FLAGS="-Weverything -Wno-c++98-c++11-c++14-compat -Wno-c++98-compat -Wno-c++98-compat-pedantic"
+	cmake -S src/$1 -B build/unix/$1 -G Ninja -DCMAKE_CXX_COMPILER=clang++-11 -DCMAKE_CXX_FLAGS="-Weverything -Wno-c++98-c++11-c++14-compat -Wno-c++98-compat -Wno-c++98-compat-pedantic -Wno-c++20-compat"
 }
 BuildUnix()
 {
@@ -18,7 +18,7 @@ BuildUnix()
 }
 CheckSyntaxUnix()
 {
-	clang++-11 -fsyntax-only -std=c++20 -Weverything -Wno-c++98-c++11-c++14-compat -Wno-c++98-compat -Wno-c++98-compat-pedantic $1
+	clang++-11 -fsyntax-only -std=c++20 -Weverything -Wno-c++98-c++11-c++14-compat -Wno-c++98-compat -Wno-c++98-compat-pedantic -Wno-c++20-compat $1
 }
 MakeWindows()
 {

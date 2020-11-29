@@ -154,7 +154,7 @@ BufferCreationDescList ConfigureBufferCreationDescs(const RenderPassOrder& rende
       if (!buffer_creation_descs.contains(buffer_id)) {
         buffer_creation_descs.insert({buffer_id, BufferCreationDesc(buffer, mainbuffer_size, swapchain_size)});
       }
-      buffer_creation_descs.at(buffer_id).state_flags = static_cast<BufferStateFlags>(buffer_creation_descs.at(buffer_id).state_flags | GetBufferStateFlag(buffer.state_type));
+      buffer_creation_descs.at(buffer_id).state_flags = static_cast<BufferStateFlags>(buffer_creation_descs.at(buffer_id).state_flags | GetBufferStateFlag(buffer.state_type, buffer.load_op_type));
       buffer_index++;
     }
   }
@@ -1385,7 +1385,7 @@ TEST_CASE("buffer creation desc and allocation") {
   auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
   auto buffer_creation_descs = ConfigureBufferCreationDescs(culled_render_pass_order, render_pass_id_map, buffer_id_list, {12, 34}, {56, 78}, memory_resource.get());
   CHECK(buffer_creation_descs.size() == 5);
-  CHECK(buffer_creation_descs[0].initial_state == BufferStateType::kRtv);
+  CHECK(buffer_creation_descs[0].initial_state_flag == kBufferStateFlagRtv);
   CHECK(buffer_creation_descs[0].state_flags == kBufferStateFlagRtv);
   CHECK(buffer_creation_descs[0].format == BufferFormat::kR8G8B8A8Unorm);
   CHECK(buffer_creation_descs[0].width == 12);
@@ -1393,7 +1393,7 @@ TEST_CASE("buffer creation desc and allocation") {
   CHECK(GetClearValueColorBuffer(buffer_creation_descs[0].clear_value) == GetClearValueColorBuffer(GetClearValueDefaultColorBuffer()));
   CHECK(buffer_creation_descs[0].dimension_type == BufferDimensionType::k2d);
   CHECK(buffer_creation_descs[0].depth == 1);
-  CHECK(buffer_creation_descs[1].initial_state == BufferStateType::kUav);
+  CHECK(buffer_creation_descs[1].initial_state_flag == kBufferStateFlagUav);
   CHECK(buffer_creation_descs[1].state_flags == (kBufferStateFlagUav | kBufferStateFlagSrv));
   CHECK(buffer_creation_descs[1].format == BufferFormat::kR8G8B8A8Unorm);
   CHECK(buffer_creation_descs[1].width == 5);
@@ -1401,8 +1401,8 @@ TEST_CASE("buffer creation desc and allocation") {
   CHECK(GetClearValueColorBuffer(buffer_creation_descs[1].clear_value) == GetClearValueColorBuffer(GetClearValueDefaultColorBuffer()));
   CHECK(buffer_creation_descs[1].dimension_type == BufferDimensionType::k2d);
   CHECK(buffer_creation_descs[1].depth == 1);
-  CHECK(buffer_creation_descs[2].initial_state == BufferStateType::kDsv);
-  CHECK(buffer_creation_descs[2].state_flags == kBufferStateFlagDsv);
+  CHECK(buffer_creation_descs[2].initial_state_flag == kBufferStateFlagDsvWrite);
+  CHECK(buffer_creation_descs[2].state_flags == kBufferStateFlagDsvWrite);
   CHECK(buffer_creation_descs[2].format == BufferFormat::kD32Float);
   CHECK(buffer_creation_descs[2].width == 12);
   CHECK(buffer_creation_descs[2].height == 34);
@@ -1410,7 +1410,7 @@ TEST_CASE("buffer creation desc and allocation") {
   CHECK(GetClearValueDepthBuffer(buffer_creation_descs[2].clear_value).stencil == GetClearValueDepthBuffer(GetClearValueDefaultDepthBuffer()).stencil);
   CHECK(buffer_creation_descs[2].dimension_type == BufferDimensionType::k2d);
   CHECK(buffer_creation_descs[2].depth == 1);
-  CHECK(buffer_creation_descs[3].initial_state == BufferStateType::kRtv);
+  CHECK(buffer_creation_descs[3].initial_state_flag == kBufferStateFlagRtv);
   CHECK(buffer_creation_descs[3].state_flags == kBufferStateFlagRtv);
   CHECK(buffer_creation_descs[3].format == BufferFormat::kR8G8B8A8Unorm);
   CHECK(buffer_creation_descs[3].width == 12);
@@ -1418,7 +1418,7 @@ TEST_CASE("buffer creation desc and allocation") {
   CHECK(GetClearValueColorBuffer(buffer_creation_descs[3].clear_value) == GetClearValueColorBuffer(GetClearValueDefaultColorBuffer()));
   CHECK(buffer_creation_descs[3].dimension_type == BufferDimensionType::k3d);
   CHECK(buffer_creation_descs[3].depth == 8);
-  CHECK(buffer_creation_descs[4].initial_state == BufferStateType::kRtv);
+  CHECK(buffer_creation_descs[4].initial_state_flag == kBufferStateFlagRtv);
   CHECK(buffer_creation_descs[4].state_flags == kBufferStateFlagRtv);
   CHECK(buffer_creation_descs[4].format == BufferFormat::kR8G8B8A8Unorm);
   CHECK(buffer_creation_descs[4].width == 56 * 2);
@@ -1673,4 +1673,5 @@ TEST_CASE("AsyncComputeInterFrame") {
 #pragma clang diagnostic pop
 #endif
 #endif
-// TODO barrier, fence
+// TODO barrier
+// TODO fence (present swapchain, cbv frame buffering)

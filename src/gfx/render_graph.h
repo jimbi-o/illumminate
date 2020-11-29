@@ -141,22 +141,25 @@ std::pmr::unordered_set<StrId> GetUsedRenderPassList(std::pmr::unordered_set<Str
 RenderPassOrder CullUnusedRenderPass(RenderPassOrder&& render_pass_order, const std::pmr::unordered_set<StrId>& used_render_pass_list, const RenderPassIdMap& render_pass_id_map);
 bool IsDuplicateRenderPassNameExists(const RenderPassList& list, std::pmr::memory_resource* memory_resource);
 enum BufferStateFlags : uint32_t {
-  kBufferStateFlagNone = 0x0000,
-  kBufferStateFlagCbv = 0x0001,
-  kBufferStateFlagSrv = 0x0002,
-  kBufferStateFlagUav = 0x0004,
-  kBufferStateFlagRtv = 0x0008,
-  kBufferStateFlagDsv = 0x0010,
-  kBufferStateFlagCopySrc = 0x0020,
-  kBufferStateFlagCopyDst = 0x0040,
+  kBufferStateFlagNone      = 0x0000,
+  kBufferStateFlagCbv       = 0x0001,
+  kBufferStateFlagSrvPsOnly = 0x0002,
+  kBufferStateFlagSrvNonPs  = 0x0004,
+  kBufferStateFlagUav       = 0x0008,
+  kBufferStateFlagRtv       = 0x0010,
+  kBufferStateFlagDsvWrite  = 0x0020,
+  kBufferStateFlagDsvRead   = 0x0040,
+  kBufferStateFlagCopySrc   = 0x0080,
+  kBufferStateFlagCopyDst   = 0x0100,
+  kBufferStateFlagSrv       = kBufferStateFlagSrvPsOnly | kBufferStateFlagSrvNonPs,
 };
-constexpr BufferStateFlags GetBufferStateFlag(const BufferStateType type) {
+constexpr BufferStateFlags GetBufferStateFlag(const BufferStateType type, const BufferLoadOpType load_op_type) {
   switch (type) {
     case kCbv: return kBufferStateFlagCbv;
     case kSrv: return kBufferStateFlagSrv;
     case kUav: return kBufferStateFlagUav;
     case kRtv: return kBufferStateFlagRtv;
-    case kDsv: return kBufferStateFlagDsv;
+    case kDsv: return (load_op_type == BufferLoadOpType::kLoadReadOnly) ? kBufferStateFlagDsvRead : kBufferStateFlagDsvWrite;
     case kCopySrc: return kBufferStateFlagCopySrc;
     case kCopyDst: return kBufferStateFlagCopyDst;
   }
@@ -166,7 +169,7 @@ class BufferCreationDesc {
   BufferCreationDesc()
       : format(BufferFormat::kUnknown),
         dimension_type(BufferDimensionType::k2d),
-        initial_state(BufferStateType::kCbv),
+        initial_state_flag(kBufferStateFlagNone),
         state_flags(kBufferStateFlagNone),
         width(0),
         height(0),
@@ -176,8 +179,8 @@ class BufferCreationDesc {
   BufferCreationDesc(const BufferConfig& config, const BufferSize2d& mainbuffer, const BufferSize2d& swapchain)
       : format(config.format),
         dimension_type(config.dimension_type),
-        initial_state(config.state_type),
-        state_flags(GetBufferStateFlag(config.state_type)),
+        initial_state_flag(GetBufferStateFlag(config.state_type, config.load_op_type)),
+        state_flags(initial_state_flag),
         width(GetPhysicalBufferWidth(config, mainbuffer, swapchain)),
         height(GetPhysicalBufferHeight(config, mainbuffer, swapchain)),
         depth(config.depth),
@@ -185,8 +188,8 @@ class BufferCreationDesc {
   {}
   BufferFormat format;
   BufferDimensionType dimension_type;
-  BufferStateType initial_state;
-  std::byte _pad;
+  std::byte _pad[2];
+  BufferStateFlags initial_state_flag;
   BufferStateFlags state_flags;
   uint32_t width, height, depth;
   ClearValue clear_value;
