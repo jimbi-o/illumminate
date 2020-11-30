@@ -1669,9 +1669,365 @@ TEST_CASE("AsyncComputeInterFrame") {
   CHECK(async_compute_batching[0][2] == StrId("lighting"));
   CHECK(async_compute_batching[0][3] == StrId("postprocess"));
 }
+namespace {
+using namespace illuminate;
+using namespace illuminate::gfx;
+using BufferStateList = std::pmr::unordered_map<uint32_t, BufferStateFlags>;
+enum class BarrierSplitType : uint8_t { kNone = 0, kBegin, kEnd, };
+struct BarrierConfig {
+  BufferStateFlags state_flag_before_pass;
+  BufferStateFlags state_flag_after_pass;
+  BarrierSplitType split_type;
+  std::byte _pad[3];
+};
+using PassBarrierInfo = std::pmr::unordered_map<StrId, std::pmr::vector<BarrierConfig>>;
+struct PassBarrierInfoSet {
+  PassBarrierInfo barrier_before_pass;
+  PassBarrierInfo barrier_after_pass;
+};
+PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const RenderPassIdMap& render_pass_id_map, const BufferIdList& buffer_id_list, const BufferStateList& buffer_state_before_render_pass_list, const BufferStateList& buffer_state_after_render_pass_list, std::pmr::memory_resource* memory_resource) {
+  // TODO
+  return {};
+}
+BufferIdList CreateBufferIdList(const BatchInfoList& batch_info_list, const RenderPassIdMap& render_pass_id_map, std::pmr::memory_resource* memory_resource) {
+  BufferIdList buffer_id_list{memory_resource};
+  BufferId new_id = 0;
+  std::pmr::unordered_map<StrId, BufferId> known_buffer{memory_resource};
+  for (auto& batch : batch_info_list) {
+    for (auto& pass_name : batch) {
+      auto& pass_buffer_ids = buffer_id_list.insert({pass_name, PassBufferIdList{memory_resource}}).first->second;
+      auto& pass = render_pass_id_map.at(pass_name);
+      for (auto& buffer : pass.buffer_list) {
+        if (buffer.load_op_type == BufferLoadOpType::kDontCare || buffer.load_op_type == BufferLoadOpType::kClear || !known_buffer.contains(buffer.name)) {
+          pass_buffer_ids.push_back(new_id);
+          known_buffer.insert({buffer.name, new_id});
+          new_id++;
+        } else {
+          pass_buffer_ids.push_back(known_buffer.at(buffer.name));
+        }
+      }
+    }
+  }
+  return buffer_id_list;
+}
+}
+TEST_CASE("barrier") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
+  {
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("A"));
+    batch_info_list.back().push_back(StrId("B"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("A"), RenderPass(StrId("A"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("B"), RenderPass(StrId("B"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv).LoadOpType(BufferLoadOpType::kLoadReadOnly)}, memory_resource.get()})});
+    auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
+    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
+    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
+    auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
+    CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_after_pass  == kBufferStateFlagDsvRead);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].split_type == BarrierSplitType::kNone);
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("B")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("B")));
+  }
+  {
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("A"));
+    batch_info_list.back().push_back(StrId("-"));
+    batch_info_list.back().push_back(StrId("B"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("A"), RenderPass(StrId("A"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("-"), RenderPass(StrId("-"), {{BufferConfig(StrId("shadowmap"), BufferStateType::kDsv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("B"), RenderPass(StrId("B"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv).LoadOpType(BufferLoadOpType::kLoadReadOnly)}, memory_resource.get()})});
+    auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
+    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
+    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
+    auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
+    CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_after_pass  == kBufferStateFlagDsvRead);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].split_type == BarrierSplitType::kBegin);
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("-")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("-")));
+    CHECK(barrier_info.barrier_before_pass[StrId("B")].size() == 1);
+    CHECK(barrier_info.barrier_before_pass[StrId("B")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
+    CHECK(barrier_info.barrier_before_pass[StrId("B")][0].state_flag_after_pass  == kBufferStateFlagDsvRead);
+    CHECK(barrier_info.barrier_before_pass[StrId("B")][0].split_type == BarrierSplitType::kEnd);
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("B")));
+  }
+  {
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("A"));
+    batch_info_list.back().push_back(StrId("B"));
+    batch_info_list.back().push_back(StrId("C"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("A"), RenderPass(StrId("A"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("B"), RenderPass(StrId("B"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv).LoadOpType(BufferLoadOpType::kLoadReadOnly)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("C"), RenderPass(StrId("C"), {{BufferConfig(StrId("depth"), BufferStateType::kSrv)}, memory_resource.get()})});
+    auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
+    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
+    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
+    auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
+    CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_after_pass  == kBufferStateFlagDsvRead);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].split_type == BarrierSplitType::kNone);
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("B")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("B")));
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("C")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("C")));
+  }
+  {
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("A"));
+    batch_info_list.back().push_back(StrId("B"));
+    batch_info_list.back().push_back(StrId("C"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("A"), RenderPass(StrId("A"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("B"), RenderPass(StrId("B"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv).LoadOpType(BufferLoadOpType::kLoadReadOnly)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("C"), RenderPass(StrId("C"), {{BufferConfig(StrId("depth"), BufferStateType::kSrv)}, memory_resource.get()}).CommandQueueTypeCompute()});
+    auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
+    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
+    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
+    auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
+    CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_after_pass  == (kBufferStateFlagDsvRead | kBufferStateFlagSrv));
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].split_type == BarrierSplitType::kNone);
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("B")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("B")));
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("C")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("C")));
+  }
+  {
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("A"));
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("B"));
+    batch_info_list.back().push_back(StrId("C"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("A"), RenderPass(StrId("A"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("B"), RenderPass(StrId("B"), {{BufferConfig(StrId("shadowmap"), BufferStateType::kDsv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("C"), RenderPass(StrId("C"), {{BufferConfig(StrId("depth"), BufferStateType::kSrv)}, memory_resource.get()}).CommandQueueTypeCompute()});
+    auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
+    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
+    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
+    buffer_state_before_render_pass_list.insert({1, kBufferStateFlagDsvWrite});
+    auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
+    CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_after_pass  == kBufferStateFlagDsvRead);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].split_type == BarrierSplitType::kBegin);
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("B")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("B")));
+    CHECK(barrier_info.barrier_before_pass[StrId("C")].size() == 1);
+    CHECK(barrier_info.barrier_before_pass[StrId("C")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
+    CHECK(barrier_info.barrier_before_pass[StrId("C")][0].state_flag_after_pass  == kBufferStateFlagSrv);
+    CHECK(barrier_info.barrier_before_pass[StrId("C")][0].split_type == BarrierSplitType::kEnd);
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("C")));
+  }
+  {
+    // same resource used in multiple batches
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("A"));
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("B"));
+    batch_info_list.back().push_back(StrId("C"));
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("D"));
+    batch_info_list.back().push_back(StrId("E"));
+    batch_info_list.back().push_back(StrId("F"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("A"), RenderPass(StrId("A"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("B"), RenderPass(StrId("B"), {{BufferConfig(StrId("uav"), BufferStateType::kUav)}, memory_resource.get()}).CommandQueueTypeCompute()});
+    render_pass_id_map.insert({StrId("C"), RenderPass(StrId("C"), {{BufferConfig(StrId("depth"), BufferStateType::kSrv)}, memory_resource.get()}).CommandQueueTypeCompute()});
+    render_pass_id_map.insert({StrId("D"), RenderPass(StrId("D"), {{BufferConfig(StrId("shadowmap"), BufferStateType::kDsv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("E"), RenderPass(StrId("E"), {{BufferConfig(StrId("shadowmap"), BufferStateType::kDsv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("F"), RenderPass(StrId("F"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv).LoadOpType(BufferLoadOpType::kLoadReadOnly)}, memory_resource.get()})});
+    auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
+    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
+    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
+    buffer_state_before_render_pass_list.insert({1, kBufferStateFlagUav});
+    buffer_state_before_render_pass_list.insert({2, kBufferStateFlagDsvWrite});
+    buffer_state_before_render_pass_list.insert({3, kBufferStateFlagDsvWrite});
+    auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
+    CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_after_pass  == kBufferStateFlagDsvRead);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].split_type == BarrierSplitType::kBegin);
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("B")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("B")));
+    CHECK(barrier_info.barrier_before_pass[StrId("C")].size() == 1);
+    CHECK(barrier_info.barrier_before_pass[StrId("C")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
+    CHECK(barrier_info.barrier_before_pass[StrId("C")][0].state_flag_after_pass  == kBufferStateFlagSrv);
+    CHECK(barrier_info.barrier_before_pass[StrId("C")][0].split_type == BarrierSplitType::kEnd);
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("C")));
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("D")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("D")));
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("E")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("E")));
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("F")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("F")));
+  }
+  {
+    // same resource used on same batch, different queue
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("A"));
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("B"));
+    batch_info_list.back().push_back(StrId("C"));
+    batch_info_list.back().push_back(StrId("D"));
+    batch_info_list.back().push_back(StrId("E"));
+    batch_info_list.back().push_back(StrId("F"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("A"), RenderPass(StrId("A"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("B"), RenderPass(StrId("B"), {{BufferConfig(StrId("uav"), BufferStateType::kUav)}, memory_resource.get()}).CommandQueueTypeCompute()});
+    render_pass_id_map.insert({StrId("C"), RenderPass(StrId("C"), {{BufferConfig(StrId("depth"), BufferStateType::kSrv)}, memory_resource.get()}).CommandQueueTypeCompute()});
+    render_pass_id_map.insert({StrId("D"), RenderPass(StrId("D"), {{BufferConfig(StrId("shadowmap"), BufferStateType::kDsv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("E"), RenderPass(StrId("E"), {{BufferConfig(StrId("shadowmap"), BufferStateType::kDsv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("F"), RenderPass(StrId("F"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv).LoadOpType(BufferLoadOpType::kLoadReadOnly)}, memory_resource.get()})});
+    auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
+    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
+    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
+    buffer_state_before_render_pass_list.insert({1, kBufferStateFlagUav});
+    buffer_state_before_render_pass_list.insert({2, kBufferStateFlagDsvWrite});
+    buffer_state_before_render_pass_list.insert({3, kBufferStateFlagDsvWrite});
+    auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
+    CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_after_pass  == kBufferStateFlagDsvRead);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].split_type == BarrierSplitType::kNone);
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("B")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("B")));
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("C")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("C")));
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("D")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("D")));
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("E")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("E")));
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("F")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("F")));
+  }
+  {
+    // swapchain
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("A"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("A"), RenderPass(StrId("A"), {{BufferConfig(StrId("main"), BufferStateType::kRtv)}, memory_resource.get()})});
+    auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
+    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
+    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagPresent});
+    BufferStateList buffer_state_after_render_pass_list{memory_resource.get()};
+    buffer_state_after_render_pass_list.insert({0, kBufferStateFlagPresent});
+    auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, buffer_state_before_render_pass_list, memory_resource.get());
+    CHECK(barrier_info.barrier_before_pass[StrId("A")].size() == 1);
+    CHECK(barrier_info.barrier_before_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagPresent);
+    CHECK(barrier_info.barrier_before_pass[StrId("A")][0].state_flag_after_pass  == kBufferStateFlagRtv);
+    CHECK(barrier_info.barrier_before_pass[StrId("A")][0].split_type == BarrierSplitType::kNone);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagRtv);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_after_pass  == kBufferStateFlagPresent);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].split_type == BarrierSplitType::kNone);
+  }
+  {
+    // rtv->srv->rtv(alpha blend)
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("A"));
+    batch_info_list.back().push_back(StrId("B"));
+    batch_info_list.back().push_back(StrId("C"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("A"), RenderPass(StrId("A"), {{BufferConfig(StrId("main"), BufferStateType::kRtv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("B"), RenderPass(StrId("B"), {{BufferConfig(StrId("main"), BufferStateType::kSrv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("C"), RenderPass(StrId("C"), {{BufferConfig(StrId("main"), BufferStateType::kRtv).LoadOpType(BufferLoadOpType::kLoadWrite)}, memory_resource.get()})});
+    auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
+    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
+    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagRtv});
+    auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
+    CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagRtv);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_after_pass  == kBufferStateFlagSrv);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].split_type == BarrierSplitType::kNone);
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("B")));
+    CHECK(barrier_info.barrier_after_pass[StrId("B")].size() == 1);
+    CHECK(barrier_info.barrier_after_pass[StrId("B")][0].state_flag_before_pass == kBufferStateFlagSrv);
+    CHECK(barrier_info.barrier_after_pass[StrId("B")][0].state_flag_after_pass  == kBufferStateFlagRtv);
+    CHECK(barrier_info.barrier_after_pass[StrId("B")][0].split_type == BarrierSplitType::kNone);
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("C")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("C")));
+  }
+  {
+    // dsv w->r(dsv only)->w => no barrier
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("A"));
+    batch_info_list.back().push_back(StrId("B"));
+    batch_info_list.back().push_back(StrId("C"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("A"), RenderPass(StrId("A"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("B"), RenderPass(StrId("B"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv).LoadOpType(BufferLoadOpType::kLoadReadOnly)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("C"), RenderPass(StrId("C"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv).LoadOpType(BufferLoadOpType::kLoadWrite)}, memory_resource.get()})});
+    auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
+    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
+    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
+    auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    CHECK(barrier_info.barrier_before_pass.empty());
+    CHECK(barrier_info.barrier_after_pass.empty());
+  }
+  {
+    // dsv w->r(dsv|srv)->w  => need barrier (if copy is preferrable, add copy pass manually)
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("A"));
+    batch_info_list.back().push_back(StrId("B"));
+    batch_info_list.back().push_back(StrId("C"));
+    batch_info_list.back().push_back(StrId("D"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("A"), RenderPass(StrId("A"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("B"), RenderPass(StrId("B"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv).LoadOpType(BufferLoadOpType::kLoadReadOnly)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("C"), RenderPass(StrId("C"), {{BufferConfig(StrId("depth"), BufferStateType::kSrv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("D"), RenderPass(StrId("D"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv).LoadOpType(BufferLoadOpType::kLoadWrite)}, memory_resource.get()})});
+    auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
+    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
+    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
+    auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
+    CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_after_pass  == (kBufferStateFlagDsvRead | kBufferStateFlagSrv));
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].split_type == BarrierSplitType::kNone);
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("B")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("B")));
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("C")));
+    CHECK(barrier_info.barrier_after_pass[StrId("C")].size() == 1);
+    CHECK(barrier_info.barrier_after_pass[StrId("C")][0].state_flag_before_pass == (kBufferStateFlagDsvRead | kBufferStateFlagSrv));
+    CHECK(barrier_info.barrier_after_pass[StrId("C")][0].state_flag_after_pass  == kBufferStateFlagDsvWrite);
+    CHECK(barrier_info.barrier_after_pass[StrId("C")][0].split_type == BarrierSplitType::kNone);
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("D")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("D")));
+  }
+}
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
 #endif
-// TODO barrier
 // TODO fence (present swapchain, cbv frame buffering)

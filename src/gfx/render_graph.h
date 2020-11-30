@@ -151,6 +151,7 @@ enum BufferStateFlags : uint32_t {
   kBufferStateFlagDsvRead   = 0x0040,
   kBufferStateFlagCopySrc   = 0x0080,
   kBufferStateFlagCopyDst   = 0x0100,
+  kBufferStateFlagPresent   = 0x0200,
   kBufferStateFlagSrv       = kBufferStateFlagSrvPsOnly | kBufferStateFlagSrvNonPs,
 };
 constexpr BufferStateFlags GetBufferStateFlag(const BufferStateType type, const BufferLoadOpType load_op_type) {
