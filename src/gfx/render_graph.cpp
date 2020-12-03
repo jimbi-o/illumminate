@@ -1675,10 +1675,11 @@ using namespace illuminate::gfx;
 using BufferStateList = std::pmr::unordered_map<uint32_t, BufferStateFlags>;
 enum class BarrierSplitType : uint8_t { kNone = 0, kBegin, kEnd, };
 struct BarrierConfig {
+  BufferId buffer_id;
   BufferStateFlags state_flag_before_pass;
   BufferStateFlags state_flag_after_pass;
   BarrierSplitType split_type;
-  std::byte _pad[3];
+  std::byte _pad[3]{};
 };
 using PassBarrierInfo = std::pmr::unordered_map<StrId, std::pmr::vector<BarrierConfig>>;
 struct PassBarrierInfoSet {
@@ -1686,10 +1687,96 @@ struct PassBarrierInfoSet {
   PassBarrierInfo barrier_after_pass;
 };
 PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const RenderPassIdMap& render_pass_id_map, const BufferIdList& buffer_id_list, const BufferStateList& buffer_state_before_render_pass_list, const BufferStateList& buffer_state_after_render_pass_list, std::pmr::memory_resource* memory_resource) {
-  // TODO
-  return {};
+  struct BufferStateChangeInfo {
+    uint32_t last_pass_to_access_prev_buffer_state;
+    uint32_t first_pass_to_access_next_buffer_state;
+    BufferStateFlags prev_buffer_state;
+    BufferStateFlags next_buffer_state;
+  };
+  const uint32_t kInvalidPassIndex = ~0u;
+  std::pmr::unordered_map<BufferId, std::pmr::vector<BufferStateChangeInfo>> buffer_state_change_list;
+  std::pmr::unordered_map<BufferId, uint32_t> last_pass_accessed;
+  std::pmr::unordered_map<uint32_t, StrId> pass_index_to_name;
+  for (auto& batch : batch_info_list) {
+    for (uint32_t pass_index = 0; auto& pass_name : batch) {
+      pass_index_to_name.insert({pass_index, pass_name});
+      auto& pass = render_pass_id_map.at(pass_name);
+      auto& buffer_ids = buffer_id_list.at(pass_name);
+      for (uint32_t buffer_index = 0; auto& buffer_config : pass.buffer_list) {
+        auto& buffer_id = buffer_ids[buffer_index];
+        buffer_index++;
+        auto last_flag = buffer_state_change_list.contains(buffer_id) ? buffer_state_change_list.at(buffer_id).back().next_buffer_state : buffer_state_before_render_pass_list.at(buffer_id);
+        auto flag = GetBufferStateFlag(buffer_config.state_type, buffer_config.load_op_type);
+        if (auto can_merge_flag = (buffer_state_change_list.contains(buffer_id) && IsBufferStateFlagMergeable(last_flag, flag)); (last_flag & flag) || can_merge_flag) {
+          if (can_merge_flag) {
+            buffer_state_change_list.at(buffer_id).back().next_buffer_state = static_cast<decltype(flag)>(flag | last_flag);
+          }
+          last_pass_accessed.insert_or_assign(buffer_id, pass_index);
+          continue;
+        }
+        if (!buffer_state_change_list.contains(buffer_id)) {
+          buffer_state_change_list.insert({buffer_id, std::pmr::vector<BufferStateChangeInfo>{memory_resource}});
+        }
+        auto& prev_pass = last_pass_accessed.contains(buffer_id) ? last_pass_accessed.at(buffer_id) : kInvalidPassIndex;
+        buffer_state_change_list.at(buffer_id).push_back({prev_pass, pass_index, last_flag, flag});
+        last_pass_accessed.insert_or_assign(buffer_id, pass_index);
+      }
+      pass_index++;
+    }
+  }
+  for (auto& [buffer_id, flag] : buffer_state_after_render_pass_list) {
+    if (!buffer_state_change_list.contains(buffer_id)) continue;
+    auto& last_flag = buffer_state_change_list.at(buffer_id).back().next_buffer_state;
+    if (last_flag & flag) continue;
+    if (IsBufferStateFlagMergeable(last_flag, flag)) {
+      last_flag = static_cast<decltype(flag)>(flag | last_flag);
+    } else {
+      buffer_state_change_list.at(buffer_id).push_back({buffer_state_change_list.at(buffer_id).back().first_pass_to_access_next_buffer_state, kInvalidPassIndex, last_flag, flag});
+    }
+  }
+  PassBarrierInfo barrier_before_pass{memory_resource};
+  PassBarrierInfo barrier_after_pass{memory_resource};
+  for (auto& [buffer_id, buffer_state_change_list] : buffer_state_change_list) {
+    for (auto& buffer_state_change : buffer_state_change_list) {
+      if (buffer_state_change.last_pass_to_access_prev_buffer_state + 1 == buffer_state_change.first_pass_to_access_next_buffer_state
+          || buffer_state_change.first_pass_to_access_next_buffer_state == 0
+          || buffer_state_change.last_pass_to_access_prev_buffer_state == pass_index_to_name.size() - 1) {
+        // no split
+        auto pass_index = buffer_state_change.last_pass_to_access_prev_buffer_state;
+        auto barrier_list_ptr = &barrier_after_pass;
+        if (pass_index == kInvalidPassIndex) {
+          pass_index = 0;
+          barrier_list_ptr = &barrier_before_pass;
+        }
+        auto& pass = pass_index_to_name.at(pass_index);
+        if (!barrier_list_ptr->contains(pass)) {
+          barrier_list_ptr->insert({pass, std::pmr::vector<BarrierConfig>{memory_resource}});
+        }
+        barrier_list_ptr->at(pass).push_back({buffer_id, buffer_state_change.prev_buffer_state, buffer_state_change.next_buffer_state, BarrierSplitType::kNone});
+      } else {
+        // split barrier
+        {
+          // begin
+          auto& pass = pass_index_to_name.at(buffer_state_change.last_pass_to_access_prev_buffer_state);
+          if (!barrier_after_pass.contains(pass)) {
+            barrier_after_pass.insert({pass, std::pmr::vector<BarrierConfig>{memory_resource}});
+          }
+          barrier_after_pass.at(pass).push_back({buffer_id, buffer_state_change.prev_buffer_state, buffer_state_change.next_buffer_state, BarrierSplitType::kBegin});
+        }
+        {
+          // end
+          auto& pass = pass_index_to_name.at(buffer_state_change.first_pass_to_access_next_buffer_state);
+          if (!barrier_before_pass.contains(pass)) {
+            barrier_before_pass.insert({pass, std::pmr::vector<BarrierConfig>{memory_resource}});
+          }
+          barrier_before_pass.at(pass).push_back({buffer_id, buffer_state_change.prev_buffer_state, buffer_state_change.next_buffer_state, BarrierSplitType::kEnd});
+        }
+      }
+    }
+  }
+  return {std::move(barrier_before_pass), std::move(barrier_after_pass)};
 }
-BufferIdList CreateBufferIdList(const BatchInfoList& batch_info_list, const RenderPassIdMap& render_pass_id_map, std::pmr::memory_resource* memory_resource) {
+static BufferIdList CreateBufferIdList(const BatchInfoList& batch_info_list, const RenderPassIdMap& render_pass_id_map, std::pmr::memory_resource* memory_resource) {
   BufferIdList buffer_id_list{memory_resource};
   BufferId new_id = 0;
   std::pmr::unordered_map<StrId, BufferId> known_buffer{memory_resource};
@@ -1697,13 +1784,13 @@ BufferIdList CreateBufferIdList(const BatchInfoList& batch_info_list, const Rend
     for (auto& pass_name : batch) {
       auto& pass_buffer_ids = buffer_id_list.insert({pass_name, PassBufferIdList{memory_resource}}).first->second;
       auto& pass = render_pass_id_map.at(pass_name);
-      for (auto& buffer : pass.buffer_list) {
-        if (buffer.load_op_type == BufferLoadOpType::kDontCare || buffer.load_op_type == BufferLoadOpType::kClear || !known_buffer.contains(buffer.name)) {
+      for (auto& buffer_config : pass.buffer_list) {
+        if (buffer_config.load_op_type == BufferLoadOpType::kDontCare || buffer_config.load_op_type == BufferLoadOpType::kClear || !known_buffer.contains(buffer_config.name)) {
           pass_buffer_ids.push_back(new_id);
-          known_buffer.insert({buffer.name, new_id});
+          known_buffer.insert({buffer_config.name, new_id});
           new_id++;
         } else {
-          pass_buffer_ids.push_back(known_buffer.at(buffer.name));
+          pass_buffer_ids.push_back(known_buffer.at(buffer_config.name));
         }
       }
     }
@@ -1748,6 +1835,7 @@ TEST_CASE("barrier") {
     auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
+    buffer_state_before_render_pass_list.insert({1, kBufferStateFlagDsvWrite});
     auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);

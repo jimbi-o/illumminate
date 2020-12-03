@@ -165,6 +165,19 @@ constexpr BufferStateFlags GetBufferStateFlag(const BufferStateType type, const 
     case kCopyDst: return kBufferStateFlagCopyDst;
   }
 }
+constexpr bool IsWritableState(const BufferStateFlags state) {
+  if (state & kBufferStateFlagUav) return true;
+  if (state & kBufferStateFlagRtv) return true;
+  if (state & kBufferStateFlagDsvWrite) return true;
+  if (state & kBufferStateFlagCopyDst) return true;
+  return false;
+}
+constexpr bool IsBufferStateFlagMergeable(const BufferStateFlags a, const BufferStateFlags b) {
+  if (a == kBufferStateFlagDsvWrite && b == kBufferStateFlagDsvRead) return true;
+  if (b == kBufferStateFlagDsvWrite && a == kBufferStateFlagDsvRead) return true;
+  if (IsWritableState(a) && IsWritableState(b)) return false;
+  return true;
+}
 class BufferCreationDesc {
  public:
   BufferCreationDesc()
