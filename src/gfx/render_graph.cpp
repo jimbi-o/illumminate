@@ -1702,8 +1702,8 @@ PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const 
   std::pmr::unordered_map<BufferId, std::pmr::vector<BufferStateChangeInfo>> buffer_state_change_list;
   std::pmr::unordered_map<BufferId, uint32_t> last_pass_accessed;
   std::pmr::unordered_map<uint32_t, StrId> pass_index_to_name;
-  for (auto& batch : batch_info_list) {
-    for (uint32_t pass_index = 0; auto& pass_name : batch) {
+  for (uint32_t pass_index = 0; auto& batch : batch_info_list) {
+    for (auto& pass_name : batch) {
       pass_index_to_name.insert({pass_index, pass_name});
       auto& pass = render_pass_id_map.at(pass_name);
       auto& buffer_ids = buffer_id_list.at(pass_name);
@@ -1744,8 +1744,7 @@ PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const 
   for (auto& [buffer_id, buffer_state_change_list] : buffer_state_change_list) {
     for (auto& buffer_state_change : buffer_state_change_list) {
       if (buffer_state_change.last_pass_to_access_prev_buffer_state + 1 == buffer_state_change.first_pass_to_access_next_buffer_state
-          || buffer_state_change.first_pass_to_access_next_buffer_state == 0
-          || buffer_state_change.last_pass_to_access_prev_buffer_state == pass_index_to_name.size() - 1) {
+          || buffer_state_change.first_pass_to_access_next_buffer_state == 0) {
         // no split
         auto pass_index = buffer_state_change.last_pass_to_access_prev_buffer_state;
         auto barrier_list_ptr = &barrier_after_pass;
