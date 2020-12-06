@@ -1639,10 +1639,11 @@ PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const 
     BufferStateFlags prev_buffer_state;
     BufferStateFlags next_buffer_state;
   };
-  const StrId kInvalidPass;
   std::pmr::unordered_map<BufferId, std::pmr::vector<BufferStateChangeInfo>> buffer_state_change_list;
   std::pmr::unordered_map<BufferId, StrId> last_pass_accessed;
   std::pmr::unordered_map<StrId, uint32_t> pass_name_to_index;
+  const StrId kInvalidPass;
+  pass_name_to_index.insert({kInvalidPass, ~0u});
   for (uint32_t pass_index = 0; auto& batch : batch_info_list) {
     for (auto& pass_name : batch) {
       pass_name_to_index.insert({pass_name, pass_index});
@@ -1651,7 +1652,7 @@ PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const 
       for (uint32_t buffer_index = 0; auto& buffer_config : pass.buffer_list) {
         auto& buffer_id = buffer_ids[buffer_index];
         buffer_index++;
-        auto last_flag = buffer_state_change_list.contains(buffer_id) ? buffer_state_change_list.at(buffer_id).back().next_buffer_state : buffer_state_before_render_pass_list.at(buffer_id);
+        auto& last_flag = buffer_state_change_list.contains(buffer_id) ? buffer_state_change_list.at(buffer_id).back().next_buffer_state : buffer_state_before_render_pass_list.at(buffer_id);
         auto flag = GetBufferStateFlag(buffer_config.state_type, buffer_config.load_op_type);
         if (auto can_merge_flag = (buffer_state_change_list.contains(buffer_id) && IsBufferStateFlagMergeable(last_flag, flag)); (last_flag & flag) || can_merge_flag) {
           if (can_merge_flag) {
@@ -1685,9 +1686,9 @@ PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const 
   for (auto& [buffer_id, buffer_state_change_list] : buffer_state_change_list) {
     for (auto& buffer_state_change : buffer_state_change_list) {
       auto& pass_name_begin = buffer_state_change.last_pass_to_access_prev_buffer_state;
-      auto pass_index_begin = pass_name_begin == kInvalidPass ? ~0u : pass_name_to_index.at(pass_name_begin);
+      auto& pass_index_begin = pass_name_to_index.at(pass_name_begin);
       auto& pass_name_end = buffer_state_change.first_pass_to_access_next_buffer_state;
-      auto pass_index_end = pass_name_end == kInvalidPass ? ~0u : pass_name_to_index.at(pass_name_end);
+      auto& pass_index_end = pass_name_to_index.at(pass_name_end);
       if (pass_index_begin + 1 == pass_index_end || pass_index_end == 0) {
         // no split
         auto barrier_list_ptr = &barrier_after_pass;
@@ -2057,6 +2058,7 @@ TEST_CASE("barrier") {
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("D")));
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("D")));
   }
+  // TODO add tests using producer_pass_signal_list, consumer_pass_waiting_signal_list
 }
 #ifdef __clang__
 #pragma clang diagnostic pop
