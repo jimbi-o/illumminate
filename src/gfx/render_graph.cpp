@@ -1632,7 +1632,7 @@ struct PassBarrierInfoSet {
   PassBarrierInfo barrier_before_pass;
   PassBarrierInfo barrier_after_pass;
 };
-PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const RenderPassIdMap& render_pass_id_map, const BufferIdList& buffer_id_list, const BufferStateList& buffer_state_before_render_pass_list, const BufferStateList& buffer_state_after_render_pass_list, std::pmr::memory_resource* memory_resource) {
+PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const ProducerPassSignalList& producer_pass_signal_list, const ConsumerPassWaitingSignalList& consumer_pass_waiting_signal_list, const RenderPassIdMap& render_pass_id_map, const BufferIdList& buffer_id_list, const BufferStateList& buffer_state_before_render_pass_list, const BufferStateList& buffer_state_after_render_pass_list, std::pmr::memory_resource* memory_resource) {
   struct BufferStateChangeInfo {
     StrId last_pass_to_access_prev_buffer_state;
     StrId first_pass_to_access_next_buffer_state;
@@ -1756,7 +1756,7 @@ TEST_CASE("barrier") {
     auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
-    auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(batch_info_list, {}, {}, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
@@ -1779,7 +1779,7 @@ TEST_CASE("barrier") {
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
     buffer_state_before_render_pass_list.insert({1, kBufferStateFlagDsvWrite});
-    auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(batch_info_list, {}, {}, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
@@ -1806,7 +1806,7 @@ TEST_CASE("barrier") {
     auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
-    auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(batch_info_list, {}, {}, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
@@ -1831,7 +1831,7 @@ TEST_CASE("barrier") {
     auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
-    auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(batch_info_list, {}, {}, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
@@ -1857,7 +1857,7 @@ TEST_CASE("barrier") {
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
     buffer_state_before_render_pass_list.insert({1, kBufferStateFlagDsvWrite});
-    auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(batch_info_list, {}, {}, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
@@ -1896,7 +1896,7 @@ TEST_CASE("barrier") {
     buffer_state_before_render_pass_list.insert({1, kBufferStateFlagUav});
     buffer_state_before_render_pass_list.insert({2, kBufferStateFlagDsvWrite});
     buffer_state_before_render_pass_list.insert({3, kBufferStateFlagDsvWrite});
-    auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(batch_info_list, {}, {}, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
@@ -1940,7 +1940,7 @@ TEST_CASE("barrier") {
     buffer_state_before_render_pass_list.insert({1, kBufferStateFlagUav});
     buffer_state_before_render_pass_list.insert({2, kBufferStateFlagDsvWrite});
     buffer_state_before_render_pass_list.insert({3, kBufferStateFlagDsvWrite});
-    auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(batch_info_list, {}, {}, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
@@ -1958,45 +1958,6 @@ TEST_CASE("barrier") {
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("F")));
   }
   {
-    // same resource used on same batch, different queue, a batch in between
-    BatchInfoList batch_info_list{memory_resource.get()};
-    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
-    batch_info_list.back().push_back(StrId("A"));
-    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
-    batch_info_list.back().push_back(StrId("B"));
-    batch_info_list.back().push_back(StrId("C"));
-    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
-    batch_info_list.back().push_back(StrId("D"));
-    batch_info_list.back().push_back(StrId("E"));
-    RenderPassIdMap render_pass_id_map{memory_resource.get()};
-    render_pass_id_map.insert({StrId("A"), RenderPass(StrId("A"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv)}, memory_resource.get()})});
-    render_pass_id_map.insert({StrId("B"), RenderPass(StrId("B"), {{BufferConfig(StrId("shadowmap"), BufferStateType::kDsv)}, memory_resource.get()})});
-    render_pass_id_map.insert({StrId("C"), RenderPass(StrId("C"), {{BufferConfig(StrId("uav"), BufferStateType::kUav)}, memory_resource.get()}).CommandQueueTypeCompute()});
-    render_pass_id_map.insert({StrId("D"), RenderPass(StrId("D"), {{BufferConfig(StrId("depth"), BufferStateType::kSrv)}, memory_resource.get()}).CommandQueueTypeCompute()});
-    render_pass_id_map.insert({StrId("E"), RenderPass(StrId("E"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv).LoadOpType(BufferLoadOpType::kLoadReadOnly)}, memory_resource.get()})});
-    auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
-    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
-    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
-    buffer_state_before_render_pass_list.insert({1, kBufferStateFlagUav});
-    buffer_state_before_render_pass_list.insert({2, kBufferStateFlagDsvWrite});
-    buffer_state_before_render_pass_list.insert({3, kBufferStateFlagDsvWrite});
-    auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
-    CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
-    CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
-    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
-    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_after_pass  == (kBufferStateFlagDsvRead | kBufferStateFlagSrv));
-    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].split_type == BarrierSplitType::kNone);
-    CHECK(!barrier_info.barrier_before_pass.contains(StrId("B")));
-    CHECK(!barrier_info.barrier_after_pass.contains(StrId("B")));
-    CHECK(!barrier_info.barrier_before_pass.contains(StrId("C")));
-    CHECK(!barrier_info.barrier_after_pass.contains(StrId("C")));
-    CHECK(!barrier_info.barrier_before_pass.contains(StrId("D")));
-    CHECK(!barrier_info.barrier_after_pass.contains(StrId("D")));
-    CHECK(!barrier_info.barrier_before_pass.contains(StrId("E")));
-    CHECK(!barrier_info.barrier_after_pass.contains(StrId("E")));
-    // pass E needs signal from A -> if split-end added after pass B, E needs to wait for B -> chose no split not to add extra sync.
-  }
-  {
     // swapchain
     BatchInfoList batch_info_list{memory_resource.get()};
     batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
@@ -2008,7 +1969,7 @@ TEST_CASE("barrier") {
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagPresent});
     BufferStateList buffer_state_after_render_pass_list{memory_resource.get()};
     buffer_state_after_render_pass_list.insert({0, kBufferStateFlagPresent});
-    auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, buffer_state_before_render_pass_list, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(batch_info_list, {}, {}, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, buffer_state_before_render_pass_list, memory_resource.get());
     CHECK(barrier_info.barrier_before_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_before_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagPresent);
     CHECK(barrier_info.barrier_before_pass[StrId("A")][0].state_flag_after_pass  == kBufferStateFlagRtv);
@@ -2032,7 +1993,7 @@ TEST_CASE("barrier") {
     auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagRtv});
-    auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(batch_info_list, {}, {}, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagRtv);
@@ -2060,7 +2021,7 @@ TEST_CASE("barrier") {
     auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
-    auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(batch_info_list, {}, {}, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
     CHECK(barrier_info.barrier_before_pass.empty());
     CHECK(barrier_info.barrier_after_pass.empty());
   }
@@ -2080,7 +2041,7 @@ TEST_CASE("barrier") {
     auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
-    auto barrier_info = ConfigureBarrier(batch_info_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(batch_info_list, {}, {}, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
