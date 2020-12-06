@@ -1678,6 +1678,21 @@ namespace {
 using namespace illuminate;
 using namespace illuminate::gfx;
 using BufferStateList = std::pmr::unordered_map<uint32_t, BufferStateFlags>;
+enum CommandQueueTypeFlag : uint8_t {
+  kCommandQueueTypeFlagNone     = 0x0,
+  kCommandQueueTypeFlagGraphics = 0x1,
+  kCommandQueueTypeFlagCompute  = 0x2,
+  kCommandQueueTypeFlagTransfer = 0x4,
+};
+constexpr CommandQueueTypeFlag GetCommandQueueTypeFlag(const CommandQueueType type) {
+  switch (type) {
+    case CommandQueueType::kGraphics: return kCommandQueueTypeFlagGraphics;
+    case CommandQueueType::kCompute:  return kCommandQueueTypeFlagCompute;
+    case CommandQueueType::kTransfer: return kCommandQueueTypeFlagTransfer;
+    case CommandQueueType::kNum:      return kCommandQueueTypeFlagNone;
+  }
+  return kCommandQueueTypeFlagNone;
+}
 enum class BarrierSplitType : uint8_t { kNone = 0, kBegin, kEnd, };
 struct BarrierConfig {
   BufferId buffer_id;
@@ -2053,7 +2068,7 @@ TEST_CASE("barrier") {
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("D")));
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("E")));
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("E")));
-    // pass E needs signal from A -> if split added after pass B, E needs to wait for B -> chose no split not to add extra sync.
+    // pass E needs signal from A -> if split-end added after pass B, E needs to wait for B -> chose no split not to add extra sync.
   }
   {
     // swapchain
