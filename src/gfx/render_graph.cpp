@@ -346,7 +346,7 @@ std::tuple<ProducerPassSignalList, ConsumerPassWaitingSignalList> ConfigureBuffe
           }
           max_waiting_signal_val.at(consumer_command_queue_type)[producer_command_queue_type] = producer_pass_signal_list.at(producer_pass_name);
           signal_consumed_producers.insert(producer_pass_name);
-          consumer_pass_waiting_signal_list.insert({consumer_pass_name, producer_pass_signal_list.at(producer_pass_name)});
+          consumer_pass_waiting_signal_list.insert({consumer_pass_name, producer_pass_name});
         }
       }
     }
@@ -1533,8 +1533,8 @@ TEST_CASE("ConfigureResourceDependencyBatching") {
   CHECK(producer_pass_signal_list.contains(StrId("A")));
   CHECK(producer_pass_signal_list.contains(StrId("D")));
   CHECK(consumer_pass_waiting_signal_list.size() == 2);
-  CHECK(consumer_pass_waiting_signal_list[StrId("C")] == producer_pass_signal_list.at(StrId("A")));
-  CHECK(consumer_pass_waiting_signal_list[StrId("E")] == producer_pass_signal_list.at(StrId("D")));
+  CHECK(consumer_pass_waiting_signal_list[StrId("C")] == StrId("A"));
+  CHECK(consumer_pass_waiting_signal_list[StrId("E")] == StrId("D"));
   auto batch_info = ApplyResourceDependencyToBatch(render_pass_id_map, std::move(async_compute_batching), producer_pass_signal_list, consumer_pass_waiting_signal_list, memory_resource.get());
   CHECK(batch_info.size() == 3);
   CHECK(batch_info[0].size() == 1);
