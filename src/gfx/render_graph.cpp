@@ -2229,8 +2229,8 @@ TEST_CASE("barrier") {
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
     buffer_state_before_render_pass_list.insert({1, kBufferStateFlagUav});
-    buffer_state_before_render_pass_list.insert({2, kBufferStateFlagDsvWrite});
-    buffer_state_before_render_pass_list.insert({3, kBufferStateFlagDsvWrite});
+    buffer_state_before_render_pass_list.insert({2, kBufferStateFlagUav});
+    buffer_state_before_render_pass_list.insert({3, kBufferStateFlagUav});
     auto barrier_info = ConfigureBarrier(batch_info_list, {}, {}, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
