@@ -1714,28 +1714,30 @@ PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const 
   }
   PassBarrierInfo barrier_before_pass{memory_resource};
   PassBarrierInfo barrier_after_pass{memory_resource};
-  for (auto& [buffer_id, buffer_state_change_list] : buffer_state_change_list) {
-    for (auto& buffer_state_change : buffer_state_change_list) {
+  for (auto& [buffer_id, buffer_state_change_list_per_pass] : buffer_state_change_list) {
+    for (auto& buffer_state_change : buffer_state_change_list_per_pass) {
       auto& pass_name_begin = buffer_state_change.last_pass_to_access_prev_buffer_state;
       auto& pass_index_begin = pass_name_to_index.at(pass_name_begin);
       auto& batch_index_begin = pass_batch_map.at(pass_name_begin);
-      auto& pass_begin = render_pass_id_map.at(pass_name_begin);
-      auto& queue_begin = pass_begin.command_queue_type;
+      auto  queue_begin = render_pass_id_map.contains(pass_name_begin) ? render_pass_id_map.at(pass_name_begin).command_queue_type : CommandQueueType::kInvalid;
       auto& pass_name_end = buffer_state_change.first_pass_to_access_next_buffer_state;
       auto& pass_index_end = pass_name_to_index.at(pass_name_end);
       auto& batch_index_end = pass_batch_map.at(pass_name_end);
-      auto& pass_end = render_pass_id_map.at(pass_name_end);
-      auto& queue_end = pass_end.command_queue_type;
-      if (pass_index_begin + 1 == pass_index_end || pass_index_end == 0 || (last_pass_in_batch.contains(pass_name_begin) && (batch_index_begin + 1 == batch_index_end) && CountSetBitNum(buffer_state_change.queues_in_next_batch_to_access_next_buffer_state) > 1)) {
+      auto  queue_end = render_pass_id_map.contains(pass_name_end) ? render_pass_id_map.at(pass_name_end).command_queue_type : CommandQueueType::kInvalid;
+      if (pass_index_begin + 1 == pass_index_end ||
+          pass_index_end == 0 ||
+          (last_pass_in_batch.contains(pass_name_begin) && (batch_index_begin + 1 == batch_index_end) && CountSetBitNum(buffer_state_change.queues_in_next_batch_to_access_next_buffer_state) > 1)) {
         // no split
         auto barrier_list_ptr = &barrier_after_pass;
+        auto& pass_name = pass_name_begin;
         if (pass_name_begin == kInvalidPass) {
+          pass_name = pass_name_end;
           barrier_list_ptr = &barrier_before_pass;
         }
-        if (!barrier_list_ptr->contains(pass_name_begin)) {
-          barrier_list_ptr->insert({pass_name_begin, std::pmr::vector<BarrierConfig>{memory_resource}});
+        if (!barrier_list_ptr->contains(pass_name)) {
+          barrier_list_ptr->insert({pass_name, std::pmr::vector<BarrierConfig>{memory_resource}});
         }
-        barrier_list_ptr->at(pass_name_begin).push_back({buffer_id, buffer_state_change.prev_buffer_state, buffer_state_change.next_buffer_state, BarrierSplitType::kNone});
+        barrier_list_ptr->at(pass_name).push_back({buffer_id, buffer_state_change.prev_buffer_state, buffer_state_change.next_buffer_state, BarrierSplitType::kNone});
       } else {
         // split barrier
         {
@@ -2265,6 +2267,122 @@ TEST_CASE("barrier") {
     BufferStateList buffer_state_after_render_pass_list{memory_resource.get()};
     buffer_state_after_render_pass_list.insert({0, kBufferStateFlagPresent});
     auto barrier_info = ConfigureBarrier(batch_info_list, {}, {}, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, buffer_state_before_render_pass_list, memory_resource.get());
+    CHECK(barrier_info.barrier_before_pass[StrId("A")].size() == 1);
+    CHECK(barrier_info.barrier_before_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagPresent);
+    CHECK(barrier_info.barrier_before_pass[StrId("A")][0].state_flag_after_pass  == kBufferStateFlagRtv);
+    CHECK(barrier_info.barrier_before_pass[StrId("A")][0].split_type == BarrierSplitType::kNone);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagRtv);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_after_pass  == kBufferStateFlagPresent);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].split_type == BarrierSplitType::kNone);
+  }
+  {
+    // swapchain with preceding pass
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("-"));
+    batch_info_list.back().push_back(StrId("A"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("-"), RenderPass(StrId("-"), {{BufferConfig(StrId("dmy"), BufferStateType::kRtv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("A"), RenderPass(StrId("A"), {{BufferConfig(StrId("main"), BufferStateType::kRtv)}, memory_resource.get()})});
+    auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
+    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
+    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagRtv});
+    buffer_state_before_render_pass_list.insert({1, kBufferStateFlagPresent});
+    BufferStateList buffer_state_after_render_pass_list{memory_resource.get()};
+    buffer_state_after_render_pass_list.insert({1, kBufferStateFlagPresent});
+    auto barrier_info = ConfigureBarrier(batch_info_list, {}, {}, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, buffer_state_before_render_pass_list, memory_resource.get());
+    CHECK(barrier_info.barrier_before_pass[StrId("-")].size() == 1);
+    CHECK(barrier_info.barrier_before_pass[StrId("-")][0].state_flag_before_pass == kBufferStateFlagPresent);
+    CHECK(barrier_info.barrier_before_pass[StrId("-")][0].state_flag_after_pass  == kBufferStateFlagRtv);
+    CHECK(barrier_info.barrier_before_pass[StrId("-")][0].split_type == BarrierSplitType::kNone);
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("-")));
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
+    CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagRtv);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_after_pass  == kBufferStateFlagPresent);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].split_type == BarrierSplitType::kNone);
+  }
+  {
+    // swapchain with preceding compute queue pass
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("-"));
+    batch_info_list.back().push_back(StrId("A"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("-"), RenderPass(StrId("-"), {{BufferConfig(StrId("dmy"), BufferStateType::kUav)}, memory_resource.get()}).CommandQueueTypeCompute()});
+    render_pass_id_map.insert({StrId("A"), RenderPass(StrId("A"), {{BufferConfig(StrId("main"), BufferStateType::kRtv)}, memory_resource.get()})});
+    auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
+    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
+    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagRtv});
+    buffer_state_before_render_pass_list.insert({1, kBufferStateFlagPresent});
+    BufferStateList buffer_state_after_render_pass_list{memory_resource.get()};
+    buffer_state_after_render_pass_list.insert({1, kBufferStateFlagPresent});
+    auto barrier_info = ConfigureBarrier(batch_info_list, {}, {}, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, buffer_state_before_render_pass_list, memory_resource.get());
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("-")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("-")));
+    CHECK(barrier_info.barrier_before_pass[StrId("A")].size() == 1);
+    CHECK(barrier_info.barrier_before_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagPresent);
+    CHECK(barrier_info.barrier_before_pass[StrId("A")][0].state_flag_after_pass  == kBufferStateFlagRtv);
+    CHECK(barrier_info.barrier_before_pass[StrId("A")][0].split_type == BarrierSplitType::kNone);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagRtv);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_after_pass  == kBufferStateFlagPresent);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].split_type == BarrierSplitType::kNone);
+  }
+  {
+    // swapchain with following pass
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("-"));
+    batch_info_list.back().push_back(StrId("A"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("-"), RenderPass(StrId("-"), {{BufferConfig(StrId("dmy"), BufferStateType::kRtv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("A"), RenderPass(StrId("A"), {{BufferConfig(StrId("main"), BufferStateType::kRtv)}, memory_resource.get()})});
+    // TODO
+    auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
+    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
+    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagRtv});
+    buffer_state_before_render_pass_list.insert({1, kBufferStateFlagPresent});
+    BufferStateList buffer_state_after_render_pass_list{memory_resource.get()};
+    buffer_state_after_render_pass_list.insert({1, kBufferStateFlagPresent});
+    auto barrier_info = ConfigureBarrier(batch_info_list, {}, {}, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, buffer_state_before_render_pass_list, memory_resource.get());
+    // TODO
+    CHECK(barrier_info.barrier_before_pass[StrId("-")].size() == 1);
+    CHECK(barrier_info.barrier_before_pass[StrId("-")][0].state_flag_before_pass == kBufferStateFlagPresent);
+    CHECK(barrier_info.barrier_before_pass[StrId("-")][0].state_flag_after_pass  == kBufferStateFlagRtv);
+    CHECK(barrier_info.barrier_before_pass[StrId("-")][0].split_type == BarrierSplitType::kNone);
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("-")));
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
+    CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagRtv);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_after_pass  == kBufferStateFlagPresent);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].split_type == BarrierSplitType::kNone);
+  }
+  {
+    // swapchain with following compute queue pass
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("-"));
+    batch_info_list.back().push_back(StrId("A"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("-"), RenderPass(StrId("-"), {{BufferConfig(StrId("dmy"), BufferStateType::kUav)}, memory_resource.get()}).CommandQueueTypeCompute()});
+    render_pass_id_map.insert({StrId("A"), RenderPass(StrId("A"), {{BufferConfig(StrId("main"), BufferStateType::kRtv)}, memory_resource.get()})});
+    // TODO
+    auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
+    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
+    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagRtv});
+    buffer_state_before_render_pass_list.insert({1, kBufferStateFlagPresent});
+    BufferStateList buffer_state_after_render_pass_list{memory_resource.get()};
+    buffer_state_after_render_pass_list.insert({1, kBufferStateFlagPresent});
+    auto barrier_info = ConfigureBarrier(batch_info_list, {}, {}, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, buffer_state_before_render_pass_list, memory_resource.get());
+    // TODO
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("-")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("-")));
     CHECK(barrier_info.barrier_before_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_before_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagPresent);
     CHECK(barrier_info.barrier_before_pass[StrId("A")][0].state_flag_after_pass  == kBufferStateFlagRtv);
