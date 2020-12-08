@@ -1660,10 +1660,9 @@ PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const 
   std::unordered_set<StrId> last_pass_in_batch;
   std::unordered_map<StrId, uint32_t> pass_batch_map;
   pass_batch_map.insert({kInvalidPass, kInvalidBatch});
-  std::unordered_map<uint32_t, StrId> last_pass_per_batch;
-  last_pass_per_batch.insert({kInvalidBatch, kInvalidPass});
+  std::unordered_map<uint32_t, std::pmr::unordered_map<CommandQueueType, StrId>> last_pass_per_batch;
   for (uint32_t batch_index = 0, pass_index = 0; auto& batch : batch_info_list) {
-    StrId last_pass_name;
+    std::pmr::unordered_map<CommandQueueType, StrId> last_pass_name;
     for (auto& pass_name : batch) {
       pass_name_to_index.insert({pass_name, pass_index});
       auto& pass = render_pass_id_map.at(pass_name);
@@ -1692,12 +1691,15 @@ PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const 
         }
         last_pass_accessed.insert_or_assign(buffer_id, pass_name);
       }
-      last_pass_name = pass_name;
+      last_pass_name.insert_or_assign(pass.command_queue_type, pass_name);
       pass_batch_map.insert({pass_name, batch_index});
       pass_index++;
     }
-    last_pass_in_batch.insert(last_pass_name);
-    last_pass_per_batch.insert({batch_index, last_pass_name});
+    last_pass_per_batch.insert({batch_index, std::pmr::unordered_map<CommandQueueType, StrId>{memory_resource}});
+    for (auto& [queue, pass_name] : last_pass_name) {
+      last_pass_in_batch.insert(pass_name);
+      last_pass_per_batch.at(batch_index).insert({queue, pass_name});
+    }
     batch_index++;
   }
   for (auto& [buffer_id, flag] : buffer_state_after_render_pass_list) {
@@ -1717,9 +1719,13 @@ PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const 
       auto& pass_name_begin = buffer_state_change.last_pass_to_access_prev_buffer_state;
       auto& pass_index_begin = pass_name_to_index.at(pass_name_begin);
       auto& batch_index_begin = pass_batch_map.at(pass_name_begin);
+      auto& pass_begin = render_pass_id_map.at(pass_name_begin);
+      auto& queue_begin = pass_begin.command_queue_type;
       auto& pass_name_end = buffer_state_change.first_pass_to_access_next_buffer_state;
       auto& pass_index_end = pass_name_to_index.at(pass_name_end);
       auto& batch_index_end = pass_batch_map.at(pass_name_end);
+      auto& pass_end = render_pass_id_map.at(pass_name_end);
+      auto& queue_end = pass_end.command_queue_type;
       if (pass_index_begin + 1 == pass_index_end || pass_index_end == 0 || (last_pass_in_batch.contains(pass_name_begin) && (batch_index_begin + 1 == batch_index_end) && CountSetBitNum(buffer_state_change.queues_in_next_batch_to_access_next_buffer_state) > 1)) {
         // no split
         auto barrier_list_ptr = &barrier_after_pass;
@@ -1744,7 +1750,14 @@ PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const 
           auto& pass_name_end_batch_considered = pass_name_end;
           auto barrier_list_ptr = &barrier_before_pass;
           if (CountSetBitNum(buffer_state_change.queues_in_next_batch_to_access_next_buffer_state) > 1 && batch_index_begin < batch_index_end) {
-            pass_name_end_batch_considered = last_pass_per_batch.at(batch_index_end - 1);
+            auto& prev_batch_for_end = last_pass_per_batch.at(batch_index_end - 1);
+            if (prev_batch_for_end.contains(queue_end)) {
+              pass_name_end_batch_considered = prev_batch_for_end.at(queue_end);
+            } else if (prev_batch_for_end.contains(queue_begin)) {
+              pass_name_end_batch_considered = prev_batch_for_end.at(queue_begin);
+            } else {
+              pass_name_end_batch_considered = prev_batch_for_end.begin()->second;
+            }
             barrier_list_ptr = &barrier_after_pass;
           }
           if (!barrier_list_ptr->contains(pass_name_end_batch_considered)) {
@@ -1794,8 +1807,8 @@ TEST_CASE("CountSetBitNum") {
 TEST_CASE("barrier") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
   {
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
     BatchInfoList batch_info_list{memory_resource.get()};
     batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
     batch_info_list.back().push_back(StrId("A"));
@@ -1816,6 +1829,7 @@ TEST_CASE("barrier") {
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("B")));
   }
   {
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
     BatchInfoList batch_info_list{memory_resource.get()};
     batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
     batch_info_list.back().push_back(StrId("A"));
@@ -1844,6 +1858,7 @@ TEST_CASE("barrier") {
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("B")));
   }
   {
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
     BatchInfoList batch_info_list{memory_resource.get()};
     batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
     batch_info_list.back().push_back(StrId("A"));
@@ -1868,6 +1883,7 @@ TEST_CASE("barrier") {
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("C")));
   }
   {
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
     BatchInfoList batch_info_list{memory_resource.get()};
     batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
     batch_info_list.back().push_back(StrId("A"));
@@ -1893,6 +1909,7 @@ TEST_CASE("barrier") {
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("C")));
   }
   {
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
     BatchInfoList batch_info_list{memory_resource.get()};
     batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
     batch_info_list.back().push_back(StrId("A"));
@@ -1923,6 +1940,7 @@ TEST_CASE("barrier") {
   }
   {
     // same resource used in multiple batches
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
     BatchInfoList batch_info_list{memory_resource.get()};
     batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
     batch_info_list.back().push_back(StrId("A"));
@@ -1968,6 +1986,7 @@ TEST_CASE("barrier") {
   }
   {
     // same resource used on same batch, different queue
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
     BatchInfoList batch_info_list{memory_resource.get()};
     batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
     batch_info_list.back().push_back(StrId("A"));
@@ -2012,6 +2031,7 @@ TEST_CASE("barrier") {
   }
   {
     // same resource used on same batch, different queue with succeeding pass on different queue
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
     BatchInfoList batch_info_list{memory_resource.get()};
     batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
     batch_info_list.back().push_back(StrId("A"));
@@ -2053,6 +2073,7 @@ TEST_CASE("barrier") {
   }
   {
     // same resource used on same batch, different queue with succeeding pass on same queue
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
     BatchInfoList batch_info_list{memory_resource.get()};
     batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
     batch_info_list.back().push_back(StrId("A"));
@@ -2094,6 +2115,53 @@ TEST_CASE("barrier") {
   }
   {
     // same resource used on same batch, different queue, batch in between
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("A"));
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("B"));
+    batch_info_list.back().push_back(StrId("C"));
+    batch_info_list.back().push_back(StrId("D"));
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("E"));
+    batch_info_list.back().push_back(StrId("F"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("A"), RenderPass(StrId("A"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("B"), RenderPass(StrId("B"), {{BufferConfig(StrId("shadowmap"), BufferStateType::kDsv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("C"), RenderPass(StrId("C"), {{BufferConfig(StrId("shadowmap"), BufferStateType::kDsv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("D"), RenderPass(StrId("D"), {{BufferConfig(StrId("uav"), BufferStateType::kUav)}, memory_resource.get()}).CommandQueueTypeCompute()});
+    render_pass_id_map.insert({StrId("E"), RenderPass(StrId("E"), {{BufferConfig(StrId("depth"), BufferStateType::kSrv)}, memory_resource.get()}).CommandQueueTypeCompute()});
+    render_pass_id_map.insert({StrId("F"), RenderPass(StrId("F"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv).LoadOpType(BufferLoadOpType::kLoadReadOnly)}, memory_resource.get()})});
+    auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
+    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
+    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
+    buffer_state_before_render_pass_list.insert({1, kBufferStateFlagDsvWrite});
+    buffer_state_before_render_pass_list.insert({2, kBufferStateFlagDsvWrite});
+    buffer_state_before_render_pass_list.insert({3, kBufferStateFlagUav});
+    auto barrier_info = ConfigureBarrier(batch_info_list, {}, {}, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
+    CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_after_pass  == (kBufferStateFlagDsvRead | kBufferStateFlagSrv));
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].split_type == BarrierSplitType::kBegin);
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("B")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("B")));
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("C")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("C")));
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("D")));
+    CHECK(barrier_info.barrier_after_pass[StrId("D")].size() == 1);
+    CHECK(barrier_info.barrier_after_pass[StrId("D")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
+    CHECK(barrier_info.barrier_after_pass[StrId("D")][0].state_flag_after_pass  == (kBufferStateFlagDsvRead | kBufferStateFlagSrv));
+    CHECK(barrier_info.barrier_after_pass[StrId("D")][0].split_type == BarrierSplitType::kEnd);
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("E")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("E")));
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("F")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("F")));
+  }
+  {
+    // same resource used on same batch, different queue, batch in between
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
     BatchInfoList batch_info_list{memory_resource.get()};
     batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
     batch_info_list.back().push_back(StrId("A"));
@@ -2124,14 +2192,14 @@ TEST_CASE("barrier") {
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_after_pass  == (kBufferStateFlagDsvRead | kBufferStateFlagSrv));
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].split_type == BarrierSplitType::kBegin);
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("B")));
-    CHECK(!barrier_info.barrier_after_pass.contains(StrId("B")));
+    CHECK(barrier_info.barrier_after_pass[StrId("B")].size() == 1);
+    CHECK(barrier_info.barrier_after_pass[StrId("B")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
+    CHECK(barrier_info.barrier_after_pass[StrId("B")][0].state_flag_after_pass  == (kBufferStateFlagDsvRead | kBufferStateFlagSrv));
+    CHECK(barrier_info.barrier_after_pass[StrId("B")][0].split_type == BarrierSplitType::kEnd);
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("C")));
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("C")));
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("D")));
-    CHECK(barrier_info.barrier_after_pass[StrId("D")].size() == 1);
-    CHECK(barrier_info.barrier_after_pass[StrId("D")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
-    CHECK(barrier_info.barrier_after_pass[StrId("D")][0].state_flag_after_pass  == (kBufferStateFlagDsvRead | kBufferStateFlagSrv));
-    CHECK(barrier_info.barrier_after_pass[StrId("D")][0].split_type == BarrierSplitType::kEnd);
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("D")));
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("E")));
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("E")));
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("F")));
@@ -2139,6 +2207,7 @@ TEST_CASE("barrier") {
   }
   {
     // same resource used on same batch, different queue, batch in between (with no pass in producer queue)
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
     BatchInfoList batch_info_list{memory_resource.get()};
     batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
     batch_info_list.back().push_back(StrId("A"));
@@ -2184,6 +2253,7 @@ TEST_CASE("barrier") {
   }
   {
     // swapchain
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
     BatchInfoList batch_info_list{memory_resource.get()};
     batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
     batch_info_list.back().push_back(StrId("A"));
@@ -2206,6 +2276,7 @@ TEST_CASE("barrier") {
   }
   {
     // rtv->srv->rtv(alpha blend)
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
     BatchInfoList batch_info_list{memory_resource.get()};
     batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
     batch_info_list.back().push_back(StrId("A"));
@@ -2234,6 +2305,7 @@ TEST_CASE("barrier") {
   }
   {
     // dsv w->r(dsv only)->w => no barrier (check enabling read-only depth gains performance)
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
     BatchInfoList batch_info_list{memory_resource.get()};
     batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
     batch_info_list.back().push_back(StrId("A"));
@@ -2252,6 +2324,7 @@ TEST_CASE("barrier") {
   }
   {
     // dsv w->r(dsv|srv)->w  => need barrier (if copy is preferrable, add copy pass manually)
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
     BatchInfoList batch_info_list{memory_resource.get()};
     batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
     batch_info_list.back().push_back(StrId("A"));
