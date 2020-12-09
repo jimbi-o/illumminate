@@ -1724,9 +1724,11 @@ PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const 
       auto& pass_index_end = pass_name_to_index.at(pass_name_end);
       auto& batch_index_end = pass_batch_map.at(pass_name_end);
       auto  queue_end = render_pass_id_map.contains(pass_name_end) ? render_pass_id_map.at(pass_name_end).command_queue_type : CommandQueueType::kInvalid;
-      if (pass_index_begin + 1 == pass_index_end ||
+      if (auto is_begin_pass_last_in_batch = last_pass_in_batch.contains(pass_name_begin);
+          pass_index_begin + 1 == pass_index_end ||
           pass_index_end == 0 ||
-          (last_pass_in_batch.contains(pass_name_begin) && (batch_index_begin + 1 == batch_index_end) && CountSetBitNum(buffer_state_change.queues_in_next_batch_to_access_next_buffer_state) > 1)) {
+          (is_begin_pass_last_in_batch && batch_index_begin + 1 == batch_info_list.size()) ||
+          (is_begin_pass_last_in_batch && (batch_index_begin + 1 == batch_index_end) && CountSetBitNum(buffer_state_change.queues_in_next_batch_to_access_next_buffer_state) > 1)) {
         // no split
         auto barrier_list_ptr = &barrier_after_pass;
         auto& pass_name = pass_name_begin;
