@@ -1650,6 +1650,7 @@ PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const 
     BufferStateFlags prev_buffer_state;
     BufferStateFlags next_buffer_state;
     CommandQueueTypeFlag queues_in_next_batch_to_access_next_buffer_state;
+    std::byte _pad[7]{};
   };
   std::pmr::unordered_map<BufferId, std::pmr::vector<BufferStateChangeInfo>> buffer_state_change_list{memory_resource};
   std::pmr::unordered_map<BufferId, StrId> last_pass_accessed{memory_resource};
@@ -2451,7 +2452,9 @@ TEST_CASE("barrier") {
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("C")));
   }
   {
-    // dsv w->r(dsv only)->w => no barrier (check enabling read-only depth gains performance)
+#if 0
+    // dsv w->r(dsv only)->w => no barrier 
+    // add this case if needed for performance
     auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
     BatchInfoList batch_info_list{memory_resource.get()};
     batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
@@ -2468,6 +2471,7 @@ TEST_CASE("barrier") {
     auto barrier_info = ConfigureBarrier(batch_info_list, {}, {}, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
     CHECK(barrier_info.barrier_before_pass.empty());
     CHECK(barrier_info.barrier_after_pass.empty());
+#endif
   }
   {
     // dsv w->r(dsv|srv)->w  => need barrier (if copy is preferrable, add copy pass manually)
