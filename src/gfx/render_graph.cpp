@@ -1651,21 +1651,27 @@ PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const 
     BufferStateFlags next_buffer_state;
     CommandQueueTypeFlag queues_in_next_batch_to_access_next_buffer_state;
   };
-  std::pmr::unordered_map<BufferId, std::pmr::vector<BufferStateChangeInfo>> buffer_state_change_list;
-  std::pmr::unordered_map<BufferId, StrId> last_pass_accessed;
-  std::pmr::unordered_map<StrId, uint32_t> pass_name_to_index;
+  std::pmr::unordered_map<BufferId, std::pmr::vector<BufferStateChangeInfo>> buffer_state_change_list{memory_resource};
+  std::pmr::unordered_map<BufferId, StrId> last_pass_accessed{memory_resource};
+  std::pmr::unordered_map<StrId, uint32_t> pass_name_to_index{memory_resource};
   const StrId kInvalidPass;
   pass_name_to_index.insert({kInvalidPass, ~0u});
   const uint32_t kInvalidBatch = ~0u;
-  std::unordered_set<StrId> last_pass_in_batch;
-  std::unordered_map<StrId, uint32_t> pass_batch_map;
+  std::pmr::unordered_set<StrId> last_pass_in_batch{memory_resource};
+  std::pmr::unordered_map<StrId, uint32_t> pass_batch_map{memory_resource};
   pass_batch_map.insert({kInvalidPass, kInvalidBatch});
-  std::unordered_map<uint32_t, std::pmr::unordered_map<CommandQueueType, StrId>> last_pass_per_batch;
+  std::pmr::unordered_map<uint32_t, std::pmr::unordered_map<CommandQueueType, StrId>> last_pass_per_batch{memory_resource};
+  std::pmr::unordered_map<CommandQueueType, StrId> first_pass_in_first_batch{memory_resource};
   for (uint32_t batch_index = 0, pass_index = 0; auto& batch : batch_info_list) {
     std::pmr::unordered_map<CommandQueueType, StrId> last_pass_name;
     for (auto& pass_name : batch) {
       pass_name_to_index.insert({pass_name, pass_index});
       auto& pass = render_pass_id_map.at(pass_name);
+      if (batch_index == 0) {
+        if (!first_pass_in_first_batch.contains(pass.command_queue_type)) {
+          first_pass_in_first_batch.insert({pass.command_queue_type, pass_name});
+        }
+      }
       auto& buffer_ids = buffer_id_list.at(pass_name);
       for (uint32_t buffer_index = 0; auto& buffer_config : pass.buffer_list) {
         auto& buffer_id = buffer_ids[buffer_index];
@@ -1744,10 +1750,20 @@ PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const 
         // split barrier
         {
           // begin
-          if (!barrier_after_pass.contains(pass_name_begin)) {
-            barrier_after_pass.insert({pass_name_begin, std::pmr::vector<BarrierConfig>{memory_resource}});
+          auto barrier_list_ptr = &barrier_after_pass;
+          auto& pass_name = pass_name_begin;
+          if (pass_name_begin == kInvalidPass) {
+            if (first_pass_in_first_batch.contains(queue_end)) {
+              pass_name = first_pass_in_first_batch.at(queue_end);
+            } else {
+              pass_name = batch_info_list.front().front();
+            }
+            barrier_list_ptr = &barrier_before_pass;
           }
-          barrier_after_pass.at(pass_name_begin).push_back({buffer_id, buffer_state_change.prev_buffer_state, buffer_state_change.next_buffer_state, BarrierSplitType::kBegin});
+          if (!barrier_list_ptr->contains(pass_name)) {
+            barrier_list_ptr->insert({pass_name, std::pmr::vector<BarrierConfig>{memory_resource}});
+          }
+          barrier_list_ptr->at(pass_name).push_back({buffer_id, buffer_state_change.prev_buffer_state, buffer_state_change.next_buffer_state, BarrierSplitType::kBegin});
         }
         {
           // end
