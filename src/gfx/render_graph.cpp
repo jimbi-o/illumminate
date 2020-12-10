@@ -1660,7 +1660,7 @@ PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const 
   std::pmr::unordered_set<StrId> last_pass_in_batch{memory_resource};
   std::pmr::unordered_map<StrId, uint32_t> pass_batch_map{memory_resource};
   pass_batch_map.insert({kInvalidPass, kInvalidBatch});
-  std::pmr::unordered_map<uint32_t, std::pmr::unordered_map<CommandQueueType, StrId>> last_pass_per_batch{memory_resource};
+  std::pmr::vector<std::pmr::unordered_map<CommandQueueType, StrId>> last_pass_per_batch{memory_resource};
   std::pmr::unordered_map<CommandQueueType, StrId> first_pass_in_first_batch{memory_resource};
   for (uint32_t batch_index = 0, pass_index = 0; auto& batch : batch_info_list) {
     std::pmr::unordered_map<CommandQueueType, StrId> last_pass_name;
@@ -1701,10 +1701,10 @@ PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const 
       pass_batch_map.insert({pass_name, batch_index});
       pass_index++;
     }
-    last_pass_per_batch.insert({batch_index, std::pmr::unordered_map<CommandQueueType, StrId>{memory_resource}});
+    last_pass_per_batch.push_back(std::pmr::unordered_map<CommandQueueType, StrId>{memory_resource});
     for (auto& [queue, pass_name] : last_pass_name) {
       last_pass_in_batch.insert(pass_name);
-      last_pass_per_batch.at(batch_index).insert({queue, pass_name});
+      last_pass_per_batch[batch_index].insert({queue, pass_name});
     }
     batch_index++;
   }
@@ -1770,14 +1770,22 @@ PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const 
           // end
           auto& pass_name_end_batch_considered = pass_name_end;
           auto barrier_list_ptr = &barrier_before_pass;
-          if (CountSetBitNum(buffer_state_change.queues_in_next_batch_to_access_next_buffer_state) > 1 && batch_index_begin < batch_index_end) {
-            auto& prev_batch_for_end = last_pass_per_batch.at(batch_index_end - 1);
-            if (prev_batch_for_end.contains(queue_end)) {
-              pass_name_end_batch_considered = prev_batch_for_end.at(queue_end);
-            } else if (prev_batch_for_end.contains(queue_begin)) {
-              pass_name_end_batch_considered = prev_batch_for_end.at(queue_begin);
-            } else {
-              pass_name_end_batch_considered = prev_batch_for_end.begin()->second;
+          if (auto change_after_final_pass = (pass_name_end_batch_considered == kInvalidPass), used_in_multiple_queue = (CountSetBitNum(buffer_state_change.queues_in_next_batch_to_access_next_buffer_state) > 1 && batch_index_begin < batch_index_end); change_after_final_pass || used_in_multiple_queue) {
+            if (change_after_final_pass) {
+              if (last_pass_per_batch.back().contains(queue_begin)) {
+                pass_name_end_batch_considered = last_pass_per_batch.back().at(queue_begin);
+              } else {
+                pass_name_end_batch_considered = last_pass_per_batch.back().begin()->second;
+              }
+            } else /*if (used_in_multiple_queue)*/ {
+              auto& prev_batch_for_end = last_pass_per_batch.at(batch_index_end - 1);
+              if (prev_batch_for_end.contains(queue_end)) {
+                pass_name_end_batch_considered = prev_batch_for_end.at(queue_end);
+              } else if (prev_batch_for_end.contains(queue_begin)) {
+                pass_name_end_batch_considered = prev_batch_for_end.at(queue_begin);
+              } else {
+                pass_name_end_batch_considered = prev_batch_for_end.begin()->second;
+              }
             }
             barrier_list_ptr = &barrier_after_pass;
           }
@@ -2366,8 +2374,8 @@ TEST_CASE("barrier") {
     render_pass_id_map.insert({StrId("-"), RenderPass(StrId("-"), {{BufferConfig(StrId("dmy"), BufferStateType::kRtv)}, memory_resource.get()})});
     auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
-    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagRtv});
-    buffer_state_before_render_pass_list.insert({1, kBufferStateFlagPresent});
+    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagPresent});
+    buffer_state_before_render_pass_list.insert({1, kBufferStateFlagRtv});
     BufferStateList buffer_state_after_render_pass_list{memory_resource.get()};
     buffer_state_after_render_pass_list.insert({1, kBufferStateFlagPresent});
     auto barrier_info = ConfigureBarrier(batch_info_list, {}, {}, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, buffer_state_before_render_pass_list, memory_resource.get());
@@ -2397,8 +2405,8 @@ TEST_CASE("barrier") {
     render_pass_id_map.insert({StrId("-"), RenderPass(StrId("-"), {{BufferConfig(StrId("dmy"), BufferStateType::kUav)}, memory_resource.get()}).CommandQueueTypeCompute()});
     auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
-    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagRtv});
-    buffer_state_before_render_pass_list.insert({1, kBufferStateFlagPresent});
+    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagPresent});
+    buffer_state_before_render_pass_list.insert({1, kBufferStateFlagRtv});
     BufferStateList buffer_state_after_render_pass_list{memory_resource.get()};
     buffer_state_after_render_pass_list.insert({1, kBufferStateFlagPresent});
     auto barrier_info = ConfigureBarrier(batch_info_list, {}, {}, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, buffer_state_before_render_pass_list, memory_resource.get());
