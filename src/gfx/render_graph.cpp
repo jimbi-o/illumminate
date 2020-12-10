@@ -1720,8 +1720,8 @@ PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const 
   }
   PassBarrierInfo barrier_before_pass{memory_resource};
   PassBarrierInfo barrier_after_pass{memory_resource};
-  for (auto& [buffer_id, buffer_state_change_list_per_pass] : buffer_state_change_list) {
-    for (auto& buffer_state_change : buffer_state_change_list_per_pass) {
+  for (auto& [buffer_id, buffer_state_change_list_per_buffer] : buffer_state_change_list) {
+    for (auto& buffer_state_change : buffer_state_change_list_per_buffer) {
       auto& pass_name_begin = buffer_state_change.last_pass_to_access_prev_buffer_state;
       auto& pass_index_begin = pass_name_to_index.at(pass_name_begin);
       auto& batch_index_begin = pass_batch_map.at(pass_name_begin);
@@ -1734,7 +1734,8 @@ PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const 
           pass_index_begin + 1 == pass_index_end ||
           pass_index_end == 0 ||
           (is_begin_pass_last_in_batch && batch_index_begin + 1 == batch_info_list.size()) ||
-          (is_begin_pass_last_in_batch && (batch_index_begin + 1 == batch_index_end) && CountSetBitNum(buffer_state_change.queues_in_next_batch_to_access_next_buffer_state) > 1)) {
+          (is_begin_pass_last_in_batch && (batch_index_begin + 1 == batch_index_end) && CountSetBitNum(buffer_state_change.queues_in_next_batch_to_access_next_buffer_state) > 1) ||
+          (pass_name_begin == kInvalidPass && first_pass_in_first_batch.contains(queue_end) && first_pass_in_first_batch.at(queue_end) == pass_name_end)) {
         // no split
         auto barrier_list_ptr = &barrier_after_pass;
         auto& pass_name = pass_name_begin;
@@ -2337,7 +2338,7 @@ TEST_CASE("barrier") {
     render_pass_id_map.insert({StrId("A"), RenderPass(StrId("A"), {{BufferConfig(StrId("main"), BufferStateType::kRtv)}, memory_resource.get()})});
     auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
-    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagRtv});
+    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagUav});
     buffer_state_before_render_pass_list.insert({1, kBufferStateFlagPresent});
     BufferStateList buffer_state_after_render_pass_list{memory_resource.get()};
     buffer_state_after_render_pass_list.insert({1, kBufferStateFlagPresent});
