@@ -1897,20 +1897,31 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassOrder& render_pass_order, co
     }
     pass_name_to_index_per_queue.insert({pass_name, current_pass_index_per_queue[pass.command_queue_type]++});
   }
+  // TODO
   PassBarrierInfo barrier_before_pass{memory_resource};
   PassBarrierInfo barrier_after_pass{memory_resource};
-  for (auto& [buffer_id, state_change_info_list] : buffer_state_change_list) {
-    for (auto& state_change_info : state_change_info_list) {
+  std::pmr::vector<BarrierConfig> tmp_barrier_info{memory_resource};
+  std::pmr::vector<StrId> tmp_pass_name{memory_resource};
+  std::pmr::vector<PassBarrierInfo*> tmp_barrier_dst{memory_resource};
+  for (auto&& [buffer_id, state_change_info_list] : buffer_state_change_list) {
+    for (auto&& state_change_info : state_change_info_list) {
       auto& producer_pass_index = pass_name_to_index_per_queue.at(state_change_info.last_pass_to_access_prev_buffer_state);
       auto& consumer_pass_index = pass_name_to_index_per_queue.at(state_change_info.first_pass_to_access_next_buffer_state);
       if (producer_pass_index + 1 == consumer_pass_index) {
-        if (!barrier_after_pass.contains(state_change_info.last_pass_to_access_prev_buffer_state)) {
-          barrier_after_pass.insert({state_change_info.last_pass_to_access_prev_buffer_state, std::pmr::vector<BarrierConfig>{memory_resource}});
-        }
-        barrier_after_pass.at(state_change_info.last_pass_to_access_prev_buffer_state).push_back({buffer_id, state_change_info.prev_buffer_state, state_change_info.next_buffer_state, BarrierSplitType::kNone});
+        // no split
+        tmp_barrier_info.push_back({buffer_id, state_change_info.prev_buffer_state, state_change_info.next_buffer_state, BarrierSplitType::kNone});
+        tmp_pass_name.push_back(state_change_info.last_pass_to_access_prev_buffer_state);
+        tmp_barrier_dst.push_back(&barrier_after_pass);
       } else {
-        // TODO
+        // split
       }
+      for (uint32_t i = 0; i < tmp_barrier_dst.size(); i++) {
+        auto& dst = tmp_barrier_dst[i]->contains(tmp_pass_name[i]) ? tmp_barrier_dst[i]->at(tmp_pass_name[i]) : tmp_barrier_dst[i]->insert({std::move(tmp_pass_name[i]), std::pmr::vector<BarrierConfig>{memory_resource}}).first->second;
+        dst.push_back(std::move(tmp_barrier_info[i]));
+      }
+      tmp_barrier_info.clear();
+      tmp_pass_name.clear();
+      tmp_barrier_dst.clear();
     }
   }
   return {std::move(barrier_before_pass), std::move(barrier_after_pass)};
