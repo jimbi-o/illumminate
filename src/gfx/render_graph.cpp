@@ -1914,11 +1914,21 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassOrder& render_pass_order, co
       auto& producer_pass_queue = render_pass_id_map.at(state_change_info.last_pass_to_access_prev_buffer_state).command_queue_type;
       auto& consumer_pass_index = pass_name_to_index_per_queue.at(state_change_info.first_pass_to_access_next_buffer_state);
       auto& consumer_pass_queue = render_pass_id_map.at(state_change_info.first_pass_to_access_next_buffer_state).command_queue_type;
-      if (state_change_info.pass_list_to_access_next_buffer_state.size() == 1 && producer_pass_queue == consumer_pass_queue && producer_pass_index + 1 == consumer_pass_index) {
-        // no split
-        tmp_barrier_info.push_back({buffer_id, state_change_info.prev_buffer_state, state_change_info.next_buffer_state, BarrierSplitType::kNone});
-        tmp_pass_name.push_back(state_change_info.last_pass_to_access_prev_buffer_state);
-        tmp_barrier_dst.push_back(&barrier_after_pass);
+      if (state_change_info.pass_list_to_access_next_buffer_state.size() == 1 && producer_pass_queue == consumer_pass_queue) {
+        if (producer_pass_index + 1 == consumer_pass_index) {
+          // no split
+          tmp_barrier_info.push_back({buffer_id, state_change_info.prev_buffer_state, state_change_info.next_buffer_state, BarrierSplitType::kNone});
+          tmp_pass_name.push_back(state_change_info.last_pass_to_access_prev_buffer_state);
+          tmp_barrier_dst.push_back(&barrier_after_pass);
+        } else {
+          // split
+          tmp_barrier_info.push_back({buffer_id, state_change_info.prev_buffer_state, state_change_info.next_buffer_state, BarrierSplitType::kBegin});
+          tmp_pass_name.push_back(state_change_info.last_pass_to_access_prev_buffer_state);
+          tmp_barrier_dst.push_back(&barrier_after_pass);
+          tmp_barrier_info.push_back({buffer_id, state_change_info.prev_buffer_state, state_change_info.next_buffer_state, BarrierSplitType::kEnd});
+          tmp_pass_name.push_back(state_change_info.first_pass_to_access_next_buffer_state);
+          tmp_barrier_dst.push_back(&barrier_before_pass);
+        }
       } else {
         // split
         tmp_barrier_info.push_back({buffer_id, state_change_info.prev_buffer_state, state_change_info.next_buffer_state, BarrierSplitType::kBegin});
