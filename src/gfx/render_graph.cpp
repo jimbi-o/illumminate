@@ -1914,6 +1914,12 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassOrder& render_pass_order, co
         tmp_barrier_dst.push_back(&barrier_after_pass);
       } else {
         // split
+        tmp_barrier_info.push_back({buffer_id, state_change_info.prev_buffer_state, state_change_info.next_buffer_state, BarrierSplitType::kBegin});
+        tmp_pass_name.push_back(state_change_info.last_pass_to_access_prev_buffer_state);
+        tmp_barrier_dst.push_back(&barrier_after_pass);
+        tmp_barrier_info.push_back({buffer_id, state_change_info.prev_buffer_state, state_change_info.next_buffer_state, BarrierSplitType::kEnd});
+        tmp_pass_name.push_back(state_change_info.first_pass_to_access_next_buffer_state);
+        tmp_barrier_dst.push_back(&barrier_before_pass);
       }
       for (uint32_t i = 0; i < tmp_barrier_dst.size(); i++) {
         auto& dst = tmp_barrier_dst[i]->contains(tmp_pass_name[i]) ? tmp_barrier_dst[i]->at(tmp_pass_name[i]) : tmp_barrier_dst[i]->insert({std::move(tmp_pass_name[i]), std::pmr::vector<BarrierConfig>{memory_resource}}).first->second;
