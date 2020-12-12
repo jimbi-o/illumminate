@@ -1643,6 +1643,7 @@ constexpr uint32_t CountSetBitNum(const uint32_t& val) {
   }
   return count;
 }
+// TODO remove
 PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const ProducerPassSignalList& producer_pass_signal_list, const ConsumerPassWaitingSignalList& consumer_pass_waiting_signal_list, const RenderPassIdMap& render_pass_id_map, const BufferIdList& buffer_id_list, const BufferStateList& buffer_state_before_render_pass_list, const BufferStateList& buffer_state_after_render_pass_list, std::pmr::memory_resource* memory_resource) {
   // TODO remove batch_info_list, consumer_pass_waiting_signal_list, use producer_pass_signal_list only
   struct BufferStateChangeInfo {
@@ -1849,6 +1850,23 @@ PassSignalInfo ConvertBatchToSignalInfo(const BatchInfoList& batch_info_list, co
   }
   return pass_signal_wait_info;
 }
+RenderPassOrder ConvertBatchInfoBackToRenderPassOrder(BatchInfoList&& batch_info_list, std::pmr::memory_resource* memory_resource) {
+  RenderPassOrder render_pass_order{memory_resource};
+  while (!batch_info_list.empty()) {
+    auto&& batch = std::move(*batch_info_list.begin());
+    while (!batch.empty()) {
+      render_pass_order.push_back(std::move(*batch.begin()));
+      batch.erase(batch.begin());
+    }
+    batch_info_list.erase(batch_info_list.begin());
+  }
+  return render_pass_order;
+}
+PassBarrierInfoSet ConfigureBarrier(const RenderPassOrder& render_pass_order, const RenderPassIdMap& render_pass_id_map, const PassSignalInfo& pass_signal_info, const BufferIdList& buffer_id_list, const BufferStateList& buffer_state_before_render_pass_list, const BufferStateList& buffer_state_after_render_pass_list, std::pmr::memory_resource* memory_resource) {
+  PassBarrierInfo barrier_before_pass{memory_resource};
+  PassBarrierInfo barrier_after_pass{memory_resource};
+  return {std::move(barrier_before_pass), std::move(barrier_after_pass)};
+}
 }
 TEST_CASE("CountSetBitNum") {
   using namespace illuminate;
@@ -1861,6 +1879,42 @@ TEST_CASE("CountSetBitNum") {
   CHECK(CountSetBitNum(0x8 | 0x1) == 2);
   CHECK(CountSetBitNum(0x8 | 0x2 | 0x1) == 3);
   CHECK(CountSetBitNum(0x8 | 0x4 | 0x2 | 0x1) == 4);
+}
+TEST_CASE("batch info list -> render pass order") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
+  BatchInfoList batch_info_list{memory_resource.get()};
+  batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+  batch_info_list.back().push_back(StrId("A"));
+  batch_info_list.back().push_back(StrId("B"));
+  batch_info_list.back().push_back(StrId("C"));
+  batch_info_list.back().push_back(StrId("D"));
+  batch_info_list.back().push_back(StrId("E"));
+  batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+  batch_info_list.back().push_back(StrId("F"));
+  batch_info_list.back().push_back(StrId("G"));
+  batch_info_list.back().push_back(StrId("H"));
+  batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+  batch_info_list.back().push_back(StrId("I"));
+  batch_info_list.back().push_back(StrId("J"));
+  batch_info_list.back().push_back(StrId("K"));
+  batch_info_list.back().push_back(StrId("L"));
+  batch_info_list.back().push_back(StrId("M"));
+  auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
+  CHECK(render_pass_order[0] == StrId("A"));
+  CHECK(render_pass_order[1] == StrId("B"));
+  CHECK(render_pass_order[2] == StrId("C"));
+  CHECK(render_pass_order[3] == StrId("D"));
+  CHECK(render_pass_order[4] == StrId("E"));
+  CHECK(render_pass_order[5] == StrId("F"));
+  CHECK(render_pass_order[6] == StrId("G"));
+  CHECK(render_pass_order[7] == StrId("H"));
+  CHECK(render_pass_order[8] == StrId("I"));
+  CHECK(render_pass_order[9] == StrId("J"));
+  CHECK(render_pass_order[10] == StrId("K"));
+  CHECK(render_pass_order[11] == StrId("L"));
+  CHECK(render_pass_order[12] == StrId("M"));
 }
 TEST_CASE("batch info -> signal list") {
   using namespace illuminate;
