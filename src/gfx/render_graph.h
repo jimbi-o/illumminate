@@ -93,8 +93,8 @@ class RenderPass {
         mandatory_pass(false),
         async_compute_enabled(AsyncComputeEnabled::kDisabled)
   {}
-  RenderPass(StrId&& buffer_name, BufferConfigList&& buffer_config_list)
-      : name(std::move(buffer_name)),
+  RenderPass(StrId&& pass_name, BufferConfigList&& buffer_config_list)
+      : name(std::move(pass_name)),
         buffer_list(std::move(buffer_config_list)),
         command_queue_type(CommandQueueType::kGraphics),
         mandatory_pass(false),

@@ -1644,6 +1644,7 @@ constexpr uint32_t CountSetBitNum(const uint32_t& val) {
   return count;
 }
 PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const ProducerPassSignalList& producer_pass_signal_list, const ConsumerPassWaitingSignalList& consumer_pass_waiting_signal_list, const RenderPassIdMap& render_pass_id_map, const BufferIdList& buffer_id_list, const BufferStateList& buffer_state_before_render_pass_list, const BufferStateList& buffer_state_after_render_pass_list, std::pmr::memory_resource* memory_resource) {
+  // TODO remove batch_info_list, consumer_pass_waiting_signal_list, use producer_pass_signal_list only
   struct BufferStateChangeInfo {
     StrId last_pass_to_access_prev_buffer_state;
     StrId first_pass_to_access_next_buffer_state;
@@ -1821,6 +1822,13 @@ static BufferIdList CreateBufferIdList(const BatchInfoList& batch_info_list, con
   }
   return buffer_id_list;
 }
+struct PassSignalInfo {
+  std::pmr::unordered_set<StrId> producer_pass_signal_list;
+  std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>> consumer_pass_waiting_signal_list;
+};
+PassSignalInfo ConvertBatchToSignalInfo(const BatchInfoList& batch_info_list, const RenderPassIdMap& render_pass_id_map, std::pmr::memory_resource* memory_resource) {
+  return {};
+}
 }
 TEST_CASE("CountSetBitNum") {
   using namespace illuminate;
@@ -1833,6 +1841,181 @@ TEST_CASE("CountSetBitNum") {
   CHECK(CountSetBitNum(0x8 | 0x1) == 2);
   CHECK(CountSetBitNum(0x8 | 0x2 | 0x1) == 3);
   CHECK(CountSetBitNum(0x8 | 0x4 | 0x2 | 0x1) == 4);
+}
+TEST_CASE("batch info -> signal list") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  {
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("A"));
+    batch_info_list.back().push_back(StrId("B"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("A"), RenderPass()});
+    render_pass_id_map.insert({StrId("B"), RenderPass()});
+    auto signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
+    CHECK(signal_info.producer_pass_signal_list.empty());
+    CHECK(signal_info.consumer_pass_waiting_signal_list.empty());
+  }
+  {
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("A"));
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("B"));
+    batch_info_list.back().push_back(StrId("C"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("A"), RenderPass()});
+    render_pass_id_map.insert({StrId("B"), RenderPass()});
+    render_pass_id_map.insert({StrId("C"), RenderPass()});
+    auto signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
+    CHECK(signal_info.producer_pass_signal_list.empty());
+    CHECK(signal_info.consumer_pass_waiting_signal_list.empty());
+  }
+  {
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("A"));
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("B"));
+    batch_info_list.back().push_back(StrId("C"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("A"), RenderPass()});
+    render_pass_id_map.insert({StrId("B"), RenderPass()});
+    render_pass_id_map.insert({StrId("C"), RenderPass().CommandQueueTypeCompute()});
+    auto signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
+    CHECK(signal_info.producer_pass_signal_list.size() == 1);
+    CHECK(signal_info.producer_pass_signal_list.contains(StrId("A")));
+    CHECK(signal_info.consumer_pass_waiting_signal_list.size() == 1);
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("C")].size() == 1);
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("C")].contains(StrId("A")));
+  }
+  {
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("A"));
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("B"));
+    batch_info_list.back().push_back(StrId("C"));
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("D"));
+    batch_info_list.back().push_back(StrId("E"));
+    batch_info_list.back().push_back(StrId("F"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("A"), RenderPass()});
+    render_pass_id_map.insert({StrId("B"), RenderPass().CommandQueueTypeCompute()});
+    render_pass_id_map.insert({StrId("C"), RenderPass().CommandQueueTypeCompute()});
+    render_pass_id_map.insert({StrId("D"), RenderPass()});
+    render_pass_id_map.insert({StrId("E"), RenderPass()});
+    render_pass_id_map.insert({StrId("F"), RenderPass()});
+    auto signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
+    CHECK(signal_info.producer_pass_signal_list.size() == 2);
+    CHECK(signal_info.consumer_pass_waiting_signal_list.size() == 2);
+    CHECK(signal_info.producer_pass_signal_list.contains(StrId("A")));
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("B")].size() == 1);
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("B")].contains(StrId("A")));
+    CHECK(signal_info.producer_pass_signal_list.contains(StrId("C")));
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("D")].size() == 1);
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("D")].contains(StrId("C")));
+  }
+  {
+    // command queue type graphics, compute and transfer
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("A"));
+    batch_info_list.back().push_back(StrId("B"));
+    batch_info_list.back().push_back(StrId("C"));
+    batch_info_list.back().push_back(StrId("D"));
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("E"));
+    batch_info_list.back().push_back(StrId("F"));
+    batch_info_list.back().push_back(StrId("G"));
+    batch_info_list.back().push_back(StrId("H"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("A"), RenderPass()});
+    render_pass_id_map.insert({StrId("B"), RenderPass().CommandQueueTypeCompute()});
+    render_pass_id_map.insert({StrId("C"), RenderPass().CommandQueueTypeTransfer()});
+    render_pass_id_map.insert({StrId("D"), RenderPass().CommandQueueTypeCompute()});
+    render_pass_id_map.insert({StrId("E"), RenderPass()});
+    render_pass_id_map.insert({StrId("F"), RenderPass().CommandQueueTypeTransfer()});
+    render_pass_id_map.insert({StrId("G"), RenderPass()});
+    render_pass_id_map.insert({StrId("H"), RenderPass().CommandQueueTypeTransfer()});
+    auto signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
+    CHECK(signal_info.producer_pass_signal_list.size() == 3);
+    CHECK(signal_info.consumer_pass_waiting_signal_list.size() == 3);
+    CHECK(signal_info.producer_pass_signal_list.contains(StrId("A")));
+    CHECK(signal_info.producer_pass_signal_list.contains(StrId("C")));
+    CHECK(signal_info.producer_pass_signal_list.contains(StrId("D")));
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("E")].size() == 2);
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("E")].contains(StrId("C")));
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("E")].contains(StrId("D")));
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("F")].size() == 2);
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("F")].contains(StrId("A")));
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("F")].contains(StrId("D")));
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("G")].size() == 2);
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("G")].contains(StrId("A")));
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("G")].contains(StrId("C")));
+  }
+  {
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("A"));
+    batch_info_list.back().push_back(StrId("B"));
+    batch_info_list.back().push_back(StrId("C"));
+    batch_info_list.back().push_back(StrId("D"));
+    batch_info_list.back().push_back(StrId("E"));
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("F"));
+    batch_info_list.back().push_back(StrId("G"));
+    batch_info_list.back().push_back(StrId("H"));
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("I"));
+    batch_info_list.back().push_back(StrId("J"));
+    batch_info_list.back().push_back(StrId("K"));
+    batch_info_list.back().push_back(StrId("L"));
+    batch_info_list.back().push_back(StrId("M"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("A"), RenderPass().CommandQueueTypeCompute()});
+    render_pass_id_map.insert({StrId("B"), RenderPass().CommandQueueTypeTransfer()});
+    render_pass_id_map.insert({StrId("C"), RenderPass()});
+    render_pass_id_map.insert({StrId("D"), RenderPass().CommandQueueTypeCompute()});
+    render_pass_id_map.insert({StrId("E"), RenderPass()});
+    render_pass_id_map.insert({StrId("F"), RenderPass()});
+    render_pass_id_map.insert({StrId("G"), RenderPass().CommandQueueTypeCompute()});
+    render_pass_id_map.insert({StrId("H"), RenderPass()});
+    render_pass_id_map.insert({StrId("I"), RenderPass().CommandQueueTypeTransfer()});
+    render_pass_id_map.insert({StrId("J"), RenderPass().CommandQueueTypeTransfer()});
+    render_pass_id_map.insert({StrId("K"), RenderPass().CommandQueueTypeCompute()});
+    render_pass_id_map.insert({StrId("L"), RenderPass()});
+    render_pass_id_map.insert({StrId("M"), RenderPass()});
+    auto signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
+    CHECK(signal_info.producer_pass_signal_list.size() == 5);
+    CHECK(signal_info.consumer_pass_waiting_signal_list.size() == 5);
+    CHECK(signal_info.producer_pass_signal_list.contains(StrId("B")));
+    CHECK(signal_info.producer_pass_signal_list.contains(StrId("D")));
+    CHECK(signal_info.producer_pass_signal_list.contains(StrId("E")));
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("F")].size() == 2);
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("F")].contains(StrId("B")));
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("F")].contains(StrId("D")));
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("G")].size() == 2);
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("G")].contains(StrId("B")));
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("G")].contains(StrId("E")));
+    CHECK(signal_info.producer_pass_signal_list.contains(StrId("G")));
+    CHECK(signal_info.producer_pass_signal_list.contains(StrId("H")));
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("I")].size() == 2);
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("I")].contains(StrId("G")));
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("I")].contains(StrId("H")));
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("K")].size() == 1);
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("K")].contains(StrId("H")));
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("L")].size() == 1);
+    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("L")].contains(StrId("G")));
+  }
 }
 TEST_CASE("barrier") {
   using namespace illuminate;
@@ -2506,7 +2689,34 @@ TEST_CASE("barrier") {
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("D")));
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("D")));
   }
-  // TODO add tests using producer_pass_signal_list, consumer_pass_waiting_signal_list
+  {
+    // tests using producer_pass_signal_list, consumer_pass_waiting_signal_list
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("A"));
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("B"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("A"), RenderPass(StrId("A"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("B"), RenderPass(StrId("B"), {{BufferConfig(StrId("depth"), BufferStateType::kSrv)}, memory_resource.get()}).CommandQueueTypeCompute()});
+    auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
+    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
+    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
+    ConsumerPassWaitingSignalList consumer_pass_waiting_signal_list{memory_resource.get()};
+    consumer_pass_waiting_signal_list.insert({StrId("B"), StrId("A")});
+    auto barrier_info = ConfigureBarrier(batch_info_list, {}, consumer_pass_waiting_signal_list, render_pass_id_map, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
+    CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_after_pass  == kBufferStateFlagSrv);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].split_type == BarrierSplitType::kBegin);
+    CHECK(barrier_info.barrier_before_pass[StrId("B")].size() == 1);
+    CHECK(barrier_info.barrier_before_pass[StrId("B")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
+    CHECK(barrier_info.barrier_before_pass[StrId("B")][0].state_flag_after_pass  == kBufferStateFlagSrv);
+    CHECK(barrier_info.barrier_before_pass[StrId("B")][0].split_type == BarrierSplitType::kEnd);
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("B")));
+  }
 }
 #ifdef __clang__
 #pragma clang diagnostic pop
