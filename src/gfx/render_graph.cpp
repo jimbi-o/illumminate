@@ -1645,7 +1645,6 @@ constexpr uint32_t CountSetBitNum(const uint32_t& val) {
 }
 // TODO remove
 PassBarrierInfoSet ConfigureBarrier(const BatchInfoList& batch_info_list, const ProducerPassSignalList& producer_pass_signal_list, const ConsumerPassWaitingSignalList& consumer_pass_waiting_signal_list, const RenderPassIdMap& render_pass_id_map, const BufferIdList& buffer_id_list, const BufferStateList& buffer_state_before_render_pass_list, const BufferStateList& buffer_state_after_render_pass_list, std::pmr::memory_resource* memory_resource) {
-  // TODO remove batch_info_list, consumer_pass_waiting_signal_list, use producer_pass_signal_list only
   struct BufferStateChangeInfo {
     StrId last_pass_to_access_prev_buffer_state;
     StrId first_pass_to_access_next_buffer_state;
@@ -1863,8 +1862,57 @@ RenderPassOrder ConvertBatchInfoBackToRenderPassOrder(BatchInfoList&& batch_info
   return render_pass_order;
 }
 PassBarrierInfoSet ConfigureBarrier(const RenderPassOrder& render_pass_order, const RenderPassIdMap& render_pass_id_map, const PassSignalInfo& pass_signal_info, const BufferIdList& buffer_id_list, const BufferStateList& buffer_state_before_render_pass_list, const BufferStateList& buffer_state_after_render_pass_list, std::pmr::memory_resource* memory_resource) {
+  struct BufferStateChangeInfo {
+    StrId last_pass_to_access_prev_buffer_state;
+    StrId first_pass_to_access_next_buffer_state;
+    BufferStateFlags prev_buffer_state;
+    BufferStateFlags next_buffer_state;
+  };
+  std::pmr::unordered_map<BufferId, std::pmr::vector<BufferStateChangeInfo>> buffer_state_change_list{memory_resource};
+  std::pmr::unordered_map<BufferId, StrId> last_pass_accessed{memory_resource};
+  std::pmr::unordered_map<StrId, uint32_t> pass_name_to_index_per_queue{memory_resource};
+  std::pmr::unordered_map<CommandQueueType, uint32_t> current_pass_index_per_queue{memory_resource};
+  const StrId kInvalidPass;
+  for (auto& pass_name : render_pass_order) {
+    auto& pass = render_pass_id_map.at(pass_name);
+    auto& buffer_ids = buffer_id_list.at(pass_name);
+    for (uint32_t buffer_index = 0; auto& buffer_config : pass.buffer_list) {
+      auto& buffer_id = buffer_ids[buffer_index++];
+      auto barrier_exists = buffer_state_change_list.contains(buffer_id);
+      auto flag = GetBufferStateFlag(buffer_config.state_type, buffer_config.load_op_type);
+      auto& last_flag = barrier_exists ? buffer_state_change_list.at(buffer_id).back().next_buffer_state : buffer_state_before_render_pass_list.at(buffer_id);
+      if (bool flag_in_last_flag = (flag & last_flag); flag_in_last_flag || IsBufferStateFlagMergeable(flag, last_flag)) {
+        if (barrier_exists && !flag_in_last_flag) {
+          auto& barrier = buffer_state_change_list.at(buffer_id).back();
+          barrier.next_buffer_state = static_cast<decltype(flag)>(flag | last_flag);
+        }
+      } else {
+        if (!barrier_exists) {
+          buffer_state_change_list.insert({buffer_id, std::pmr::vector<BufferStateChangeInfo>{memory_resource}});
+        }
+        auto& prev_pass = last_pass_accessed.contains(buffer_id) ? last_pass_accessed.at(buffer_id) : kInvalidPass;
+        buffer_state_change_list.at(buffer_id).push_back({prev_pass, pass_name, last_flag, flag});
+      }
+      last_pass_accessed.insert_or_assign(buffer_id, pass_name);
+    }
+    pass_name_to_index_per_queue.insert({pass_name, current_pass_index_per_queue[pass.command_queue_type]++});
+  }
   PassBarrierInfo barrier_before_pass{memory_resource};
   PassBarrierInfo barrier_after_pass{memory_resource};
+  for (auto& [buffer_id, state_change_info_list] : buffer_state_change_list) {
+    for (auto& state_change_info : state_change_info_list) {
+      auto& producer_pass_index = pass_name_to_index_per_queue.at(state_change_info.last_pass_to_access_prev_buffer_state);
+      auto& consumer_pass_index = pass_name_to_index_per_queue.at(state_change_info.first_pass_to_access_next_buffer_state);
+      if (producer_pass_index + 1 == consumer_pass_index) {
+        if (!barrier_after_pass.contains(state_change_info.last_pass_to_access_prev_buffer_state)) {
+          barrier_after_pass.insert({state_change_info.last_pass_to_access_prev_buffer_state, std::pmr::vector<BarrierConfig>{memory_resource}});
+        }
+        barrier_after_pass.at(state_change_info.last_pass_to_access_prev_buffer_state).push_back({buffer_id, state_change_info.prev_buffer_state, state_change_info.next_buffer_state, BarrierSplitType::kNone});
+      } else {
+        // TODO
+      }
+    }
+  }
   return {std::move(barrier_before_pass), std::move(barrier_after_pass)};
 }
 }
