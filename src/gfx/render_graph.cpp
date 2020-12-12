@@ -1822,12 +1822,32 @@ static BufferIdList CreateBufferIdList(const BatchInfoList& batch_info_list, con
   }
   return buffer_id_list;
 }
-struct PassSignalInfo {
-  std::pmr::unordered_set<StrId> producer_pass_signal_list;
-  std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>> consumer_pass_waiting_signal_list;
-};
+using PassSignalInfo = std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>;
 PassSignalInfo ConvertBatchToSignalInfo(const BatchInfoList& batch_info_list, const RenderPassIdMap& render_pass_id_map, std::pmr::memory_resource* memory_resource) {
-  return {};
+  PassSignalInfo pass_signal_wait_info{memory_resource};
+  std::pmr::unordered_map<CommandQueueType, StrId> last_pass_executed_per_batch{memory_resource};
+  std::pmr::unordered_set<CommandQueueType> pass_executed_queue{memory_resource};
+  for (uint32_t i = 0; i < batch_info_list.size() - 1; i++) {
+    for (auto& pass_name : batch_info_list[i]) {
+      auto& pass = render_pass_id_map.at(pass_name);
+      last_pass_executed_per_batch.insert_or_assign(pass.command_queue_type, pass_name);
+    }
+    for (auto& pass_name : batch_info_list[i + 1]) {
+      auto& pass = render_pass_id_map.at(pass_name);
+      if (pass_executed_queue.contains(pass.command_queue_type)) continue;
+      pass_executed_queue.insert(pass.command_queue_type);
+      for (auto& [signal_queue, signal_pass] : last_pass_executed_per_batch) {
+        if (signal_queue == pass.command_queue_type) continue;
+        if (!pass_signal_wait_info.contains(signal_pass)) {
+          pass_signal_wait_info.insert({signal_pass, std::pmr::unordered_set<StrId>{memory_resource}});
+        }
+        pass_signal_wait_info.at(signal_pass).insert(pass_name);
+      }
+    }
+    last_pass_executed_per_batch.clear();
+    pass_executed_queue.clear();
+  }
+  return pass_signal_wait_info;
 }
 }
 TEST_CASE("CountSetBitNum") {
@@ -1855,8 +1875,7 @@ TEST_CASE("batch info -> signal list") {
     render_pass_id_map.insert({StrId("A"), RenderPass()});
     render_pass_id_map.insert({StrId("B"), RenderPass()});
     auto signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
-    CHECK(signal_info.producer_pass_signal_list.empty());
-    CHECK(signal_info.consumer_pass_waiting_signal_list.empty());
+    CHECK(signal_info.empty());
   }
   {
     auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
@@ -1871,8 +1890,7 @@ TEST_CASE("batch info -> signal list") {
     render_pass_id_map.insert({StrId("B"), RenderPass()});
     render_pass_id_map.insert({StrId("C"), RenderPass()});
     auto signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
-    CHECK(signal_info.producer_pass_signal_list.empty());
-    CHECK(signal_info.consumer_pass_waiting_signal_list.empty());
+    CHECK(signal_info.empty());
   }
   {
     auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
@@ -1887,11 +1905,9 @@ TEST_CASE("batch info -> signal list") {
     render_pass_id_map.insert({StrId("B"), RenderPass()});
     render_pass_id_map.insert({StrId("C"), RenderPass().CommandQueueTypeCompute()});
     auto signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
-    CHECK(signal_info.producer_pass_signal_list.size() == 1);
-    CHECK(signal_info.producer_pass_signal_list.contains(StrId("A")));
-    CHECK(signal_info.consumer_pass_waiting_signal_list.size() == 1);
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("C")].size() == 1);
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("C")].contains(StrId("A")));
+    CHECK(signal_info.size() == 1);
+    CHECK(signal_info.at(StrId("A")).size() == 1);
+    CHECK(signal_info.at(StrId("A")).contains(StrId("C")));
   }
   {
     auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
@@ -1913,14 +1929,11 @@ TEST_CASE("batch info -> signal list") {
     render_pass_id_map.insert({StrId("E"), RenderPass()});
     render_pass_id_map.insert({StrId("F"), RenderPass()});
     auto signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
-    CHECK(signal_info.producer_pass_signal_list.size() == 2);
-    CHECK(signal_info.consumer_pass_waiting_signal_list.size() == 2);
-    CHECK(signal_info.producer_pass_signal_list.contains(StrId("A")));
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("B")].size() == 1);
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("B")].contains(StrId("A")));
-    CHECK(signal_info.producer_pass_signal_list.contains(StrId("C")));
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("D")].size() == 1);
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("D")].contains(StrId("C")));
+    CHECK(signal_info.size() == 2);
+    CHECK(signal_info.at(StrId("A")).size() == 1);
+    CHECK(signal_info.at(StrId("A")).contains(StrId("B")));
+    CHECK(signal_info.at(StrId("C")).size() == 1);
+    CHECK(signal_info.at(StrId("C")).contains(StrId("D")));
   }
   {
     // command queue type graphics, compute and transfer
@@ -1943,23 +1956,19 @@ TEST_CASE("batch info -> signal list") {
     render_pass_id_map.insert({StrId("D"), RenderPass().CommandQueueTypeCompute()});
     render_pass_id_map.insert({StrId("E"), RenderPass()});
     render_pass_id_map.insert({StrId("F"), RenderPass().CommandQueueTypeTransfer()});
-    render_pass_id_map.insert({StrId("G"), RenderPass()});
+    render_pass_id_map.insert({StrId("G"), RenderPass().CommandQueueTypeCompute()});
     render_pass_id_map.insert({StrId("H"), RenderPass().CommandQueueTypeTransfer()});
     auto signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
-    CHECK(signal_info.producer_pass_signal_list.size() == 3);
-    CHECK(signal_info.consumer_pass_waiting_signal_list.size() == 3);
-    CHECK(signal_info.producer_pass_signal_list.contains(StrId("A")));
-    CHECK(signal_info.producer_pass_signal_list.contains(StrId("C")));
-    CHECK(signal_info.producer_pass_signal_list.contains(StrId("D")));
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("E")].size() == 2);
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("E")].contains(StrId("C")));
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("E")].contains(StrId("D")));
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("F")].size() == 2);
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("F")].contains(StrId("A")));
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("F")].contains(StrId("D")));
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("G")].size() == 2);
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("G")].contains(StrId("A")));
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("G")].contains(StrId("C")));
+    CHECK(signal_info.size() == 3);
+    CHECK(signal_info.at(StrId("A")).size() == 2);
+    CHECK(signal_info.at(StrId("A")).contains(StrId("F")));
+    CHECK(signal_info.at(StrId("A")).contains(StrId("G")));
+    CHECK(signal_info.at(StrId("C")).size() == 2);
+    CHECK(signal_info.at(StrId("C")).contains(StrId("E")));
+    CHECK(signal_info.at(StrId("C")).contains(StrId("G")));
+    CHECK(signal_info.at(StrId("D")).size() == 2);
+    CHECK(signal_info.at(StrId("D")).contains(StrId("E")));
+    CHECK(signal_info.at(StrId("D")).contains(StrId("F")));
   }
   {
     auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
@@ -1995,26 +2004,20 @@ TEST_CASE("batch info -> signal list") {
     render_pass_id_map.insert({StrId("L"), RenderPass()});
     render_pass_id_map.insert({StrId("M"), RenderPass()});
     auto signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
-    CHECK(signal_info.producer_pass_signal_list.size() == 5);
-    CHECK(signal_info.consumer_pass_waiting_signal_list.size() == 5);
-    CHECK(signal_info.producer_pass_signal_list.contains(StrId("B")));
-    CHECK(signal_info.producer_pass_signal_list.contains(StrId("D")));
-    CHECK(signal_info.producer_pass_signal_list.contains(StrId("E")));
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("F")].size() == 2);
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("F")].contains(StrId("B")));
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("F")].contains(StrId("D")));
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("G")].size() == 2);
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("G")].contains(StrId("B")));
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("G")].contains(StrId("E")));
-    CHECK(signal_info.producer_pass_signal_list.contains(StrId("G")));
-    CHECK(signal_info.producer_pass_signal_list.contains(StrId("H")));
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("I")].size() == 2);
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("I")].contains(StrId("G")));
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("I")].contains(StrId("H")));
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("K")].size() == 1);
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("K")].contains(StrId("H")));
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("L")].size() == 1);
-    CHECK(signal_info.consumer_pass_waiting_signal_list[StrId("L")].contains(StrId("G")));
+    CHECK(signal_info.size() == 5);
+    CHECK(signal_info.at(StrId("B")).size() == 2);
+    CHECK(signal_info.at(StrId("B")).contains(StrId("F")));
+    CHECK(signal_info.at(StrId("B")).contains(StrId("G")));
+    CHECK(signal_info.at(StrId("D")).size() == 1);
+    CHECK(signal_info.at(StrId("D")).contains(StrId("F")));
+    CHECK(signal_info.at(StrId("E")).size() == 1);
+    CHECK(signal_info.at(StrId("E")).contains(StrId("G")));
+    CHECK(signal_info.at(StrId("G")).size() == 2);
+    CHECK(signal_info.at(StrId("G")).contains(StrId("I")));
+    CHECK(signal_info.at(StrId("G")).contains(StrId("L")));
+    CHECK(signal_info.at(StrId("H")).size() == 2);
+    CHECK(signal_info.at(StrId("H")).contains(StrId("I")));
+    CHECK(signal_info.at(StrId("H")).contains(StrId("K")));
   }
 }
 TEST_CASE("barrier") {
