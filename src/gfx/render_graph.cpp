@@ -1867,6 +1867,7 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassOrder& render_pass_order, co
     StrId first_pass_to_access_next_buffer_state;
     BufferStateFlags prev_buffer_state;
     BufferStateFlags next_buffer_state;
+    std::pmr::unordered_map<CommandQueueType, StrId> pass_list_to_access_next_buffer_state;
   };
   std::pmr::unordered_map<BufferId, std::pmr::vector<BufferStateChangeInfo>> buffer_state_change_list{memory_resource};
   std::pmr::unordered_map<BufferId, StrId> last_pass_accessed{memory_resource};
@@ -1888,10 +1889,14 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassOrder& render_pass_order, co
         }
       } else {
         if (!barrier_exists) {
+          barrier_exists = true;
           buffer_state_change_list.insert({buffer_id, std::pmr::vector<BufferStateChangeInfo>{memory_resource}});
         }
         auto& prev_pass = last_pass_accessed.contains(buffer_id) ? last_pass_accessed.at(buffer_id) : kInvalidPass;
-        buffer_state_change_list.at(buffer_id).push_back({prev_pass, pass_name, last_flag, flag});
+        buffer_state_change_list.at(buffer_id).push_back({prev_pass, pass_name, last_flag, flag, std::pmr::unordered_map<CommandQueueType, StrId>{memory_resource}});
+      }
+      if (barrier_exists) {
+        buffer_state_change_list.at(buffer_id).back().pass_list_to_access_next_buffer_state.insert({pass.command_queue_type, pass_name});
       }
       last_pass_accessed.insert_or_assign(buffer_id, pass_name);
     }
@@ -1906,8 +1911,10 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassOrder& render_pass_order, co
   for (auto&& [buffer_id, state_change_info_list] : buffer_state_change_list) {
     for (auto&& state_change_info : state_change_info_list) {
       auto& producer_pass_index = pass_name_to_index_per_queue.at(state_change_info.last_pass_to_access_prev_buffer_state);
+      auto& producer_pass_queue = render_pass_id_map.at(state_change_info.last_pass_to_access_prev_buffer_state).command_queue_type;
       auto& consumer_pass_index = pass_name_to_index_per_queue.at(state_change_info.first_pass_to_access_next_buffer_state);
-      if (producer_pass_index + 1 == consumer_pass_index) {
+      auto& consumer_pass_queue = render_pass_id_map.at(state_change_info.first_pass_to_access_next_buffer_state).command_queue_type;
+      if (producer_pass_queue == consumer_pass_queue && producer_pass_index + 1 == consumer_pass_index) {
         // no split
         tmp_barrier_info.push_back({buffer_id, state_change_info.prev_buffer_state, state_change_info.next_buffer_state, BarrierSplitType::kNone});
         tmp_pass_name.push_back(state_change_info.last_pass_to_access_prev_buffer_state);
