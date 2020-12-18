@@ -1808,7 +1808,7 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassOrder& render_pass_order, co
         split_barrier_end_pass = FindLeastCommonAncestor(split_barrier_end_pass, *first_pass_to_use, consumer_producer_adjacency_graph_queue_considered, state_change_info.last_pass_to_access_prev_buffer_state, memory_resource);
         first_pass_to_use++;
       }
-      if (pass_index_per_queue.at(state_change_info.last_pass_to_access_prev_buffer_state) + 1 <= pass_index_per_queue.at(split_barrier_end_pass)) {
+      if (pass_index_per_queue.at(state_change_info.last_pass_to_access_prev_buffer_state) + 1 >= pass_index_per_queue.at(split_barrier_end_pass)) {
         // no split
         barrier_pass_name.push_back(state_change_info.last_pass_to_access_prev_buffer_state);
         barrier_dst_list_ptr.push_back(&barrier_after_pass);
