@@ -1706,8 +1706,7 @@ auto FindLeastCommonAncestor(const StrId& a, const StrId& b, const std::pmr::uno
   std::pmr::unordered_set<StrId> pass_to_check2{memory_resource};
   while (!pass_to_check.empty()) {
     auto pass_name = pass_to_check.begin();
-    if (*pass_name == stop_pass) return stop_pass;
-    if (ancestors_of_a.contains(*pass_name)) return *pass_name;
+    if (*pass_name != stop_pass && ancestors_of_a.contains(*pass_name)) return *pass_name;
     if (adjacency_graph.contains(*pass_name)) {
       auto& ancestors_of_b = adjacency_graph.at(*pass_name);
       pass_to_check2.insert(ancestors_of_b.begin(), ancestors_of_b.end());
