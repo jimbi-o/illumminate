@@ -1695,8 +1695,8 @@ auto FindLeastCommonAncestor(const StrId& a, const StrId& b, const std::pmr::uno
   pass_to_check.insert(a);
   while (!pass_to_check.empty()) {
     auto pass_name = pass_to_check.begin();
-    auto& ancestors = adjacency_graph.at(*pass_name);
-    if (!ancestors.empty()) {
+    if (adjacency_graph.contains(*pass_name)) {
+      auto& ancestors = adjacency_graph.at(*pass_name);
       pass_to_check.insert(ancestors.begin(), ancestors.end());
     }
     ancestors_of_a.insert(std::move(*pass_name));
@@ -1708,8 +1708,8 @@ auto FindLeastCommonAncestor(const StrId& a, const StrId& b, const std::pmr::uno
     auto pass_name = pass_to_check.begin();
     if (*pass_name == stop_pass) return stop_pass;
     if (ancestors_of_a.contains(*pass_name)) return *pass_name;
-    auto& ancestors_of_b = adjacency_graph.at(*pass_name);
-    if (!ancestors_of_b.empty()) {
+    if (adjacency_graph.contains(*pass_name)) {
+      auto& ancestors_of_b = adjacency_graph.at(*pass_name);
       pass_to_check2.insert(ancestors_of_b.begin(), ancestors_of_b.end());
     }
     pass_to_check.erase(pass_name);
@@ -1790,6 +1790,9 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassOrder& render_pass_order, co
   }
   for (auto& [signal_pass_name, wait_pass_set] : pass_signal_info) {
     for (auto& wait_pass_name : wait_pass_set) {
+      if (!consumer_producer_adjacency_graph_queue_considered.contains(wait_pass_name)) {
+        consumer_producer_adjacency_graph_queue_considered.insert({wait_pass_name, std::pmr::unordered_set<StrId>{memory_resource}});
+      }
       consumer_producer_adjacency_graph_queue_considered.at(wait_pass_name).insert(signal_pass_name);
     }
   }
