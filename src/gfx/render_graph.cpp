@@ -1810,8 +1810,11 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassOrder& render_pass_order, co
         split_barrier_end_pass = FindLeastCommonAncestor(split_barrier_end_pass, *first_pass_to_use, consumer_producer_adjacency_graph_queue_considered, state_change_info.last_pass_to_access_prev_buffer_state, memory_resource);
         first_pass_to_use++;
       }
-      if (render_pass_id_map.at(state_change_info.last_pass_to_access_prev_buffer_state).command_queue_type == render_pass_id_map.at(split_barrier_end_pass).command_queue_type &&
-          pass_index_per_queue.at(state_change_info.last_pass_to_access_prev_buffer_state) + 1 >= pass_index_per_queue.at(split_barrier_end_pass)) {
+      auto is_same_path = state_change_info.last_pass_to_access_prev_buffer_state == split_barrier_end_pass;
+      auto is_same_queue = render_pass_id_map.at(state_change_info.last_pass_to_access_prev_buffer_state).command_queue_type == render_pass_id_map.at(split_barrier_end_pass).command_queue_type;
+      auto is_next_path = pass_index_per_queue.at(state_change_info.last_pass_to_access_prev_buffer_state) + 1 >= pass_index_per_queue.at(split_barrier_end_pass);
+      auto is_resource_needed_before_pass = state_change_info.pass_list_to_access_next_buffer_state.contains(split_barrier_end_pass);
+      if (is_same_path || (is_same_queue && is_next_path && is_resource_needed_before_pass)) {
         // no split
         barrier_pass_name.push_back(state_change_info.last_pass_to_access_prev_buffer_state);
         barrier_dst_list_ptr.push_back(&barrier_after_pass);
