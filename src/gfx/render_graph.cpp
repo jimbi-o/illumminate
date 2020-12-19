@@ -1830,7 +1830,7 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassOrder& render_pass_order, co
       auto split_barrier_end_pass = *first_pass_to_use;
       first_pass_to_use++;
       while (first_pass_to_use != state_change_info.pass_list_to_access_next_buffer_state.end() && split_barrier_end_pass != state_change_info.last_pass_to_access_prev_buffer_state) {
-        split_barrier_end_pass = FindLeastCommonAncestor(split_barrier_end_pass, *first_pass_to_use, producer_consumer_adjacency_graph_queue_considered, consumer_producer_adjacency_graph_queue_considered, state_change_info.last_pass_to_access_prev_buffer_state, memory_resource);
+        split_barrier_end_pass = FindLeastCommonAncestor(split_barrier_end_pass, *first_pass_to_use, consumer_producer_adjacency_graph_queue_considered, producer_consumer_adjacency_graph_queue_considered, state_change_info.last_pass_to_access_prev_buffer_state, memory_resource);
         first_pass_to_use++;
       }
       auto is_same_path = state_change_info.last_pass_to_access_prev_buffer_state == split_barrier_end_pass;
