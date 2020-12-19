@@ -1688,8 +1688,8 @@ RenderPassOrder ConvertBatchInfoBackToRenderPassOrder(BatchInfoList&& batch_info
   }
   return render_pass_order;
 }
-void CreateAncestorSet(const StrId& descendant_name, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>& adjacency_graph,  std::pmr::unordered_set<StrId>* dst_ancestors, std::pmr::unordered_set<StrId>* work) {
-  work->insert(descendant_name);
+void ConnectAdjacencyNodes(const StrId& node_name, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>& adjacency_graph, std::pmr::unordered_set<StrId>* dst_ancestors, std::pmr::unordered_set<StrId>* work) {
+  work->insert(node_name);
   while (!work->empty()) {
     auto pass_name = work->begin();
     if (adjacency_graph.contains(*pass_name)) {
@@ -1700,18 +1700,31 @@ void CreateAncestorSet(const StrId& descendant_name, const std::pmr::unordered_m
     work->erase(pass_name);
   }
 }
-auto FindLeastCommonAncestor(const StrId& a, const StrId& b, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>& adjacency_graph, const StrId& stop_pass, std::pmr::memory_resource* memory_resource) {
+auto FindLeastCommonAncestor(const StrId& a, const StrId& b, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>& consumer_producer_render_pass_map, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>& producer_consumer_render_pass_map, const StrId& stop_pass, std::pmr::memory_resource* memory_resource) {
   if (a == b) return a;
+  if (a == stop_pass || b == stop_pass) return stop_pass;
   std::pmr::unordered_set<StrId> ancestors_of_a{memory_resource};
   std::pmr::unordered_set<StrId> pass_to_check{memory_resource};
-  CreateAncestorSet(a, adjacency_graph, &ancestors_of_a, &pass_to_check);
+  ConnectAdjacencyNodes(a, consumer_producer_render_pass_map, &ancestors_of_a, &pass_to_check);
+  std::pmr::unordered_set<StrId> descendants_of_stop_pass{memory_resource};
+  ConnectAdjacencyNodes(stop_pass, producer_consumer_render_pass_map, &descendants_of_stop_pass, &pass_to_check);
+  descendants_of_stop_pass.erase(stop_pass);
+  std::pmr::unordered_set<StrId> valid_pass_list{memory_resource};
+  for (auto&& ancestor_of_a : ancestors_of_a) {
+    if (descendants_of_stop_pass.contains(ancestor_of_a)) {
+      valid_pass_list.insert(std::move(ancestor_of_a));
+    }
+  }
+  ancestors_of_a.clear();
   pass_to_check.insert(b);
-  std::pmr::unordered_set<StrId> pass_to_check2{memory_resource};
+  auto& pass_to_check2 = ancestors_of_a; // name alias to reuse container
   while (!pass_to_check.empty()) {
     auto pass_name = pass_to_check.begin();
-    if (*pass_name != stop_pass && ancestors_of_a.contains(*pass_name)) return *pass_name;
-    if (adjacency_graph.contains(*pass_name)) {
-      auto& ancestors_of_b = adjacency_graph.at(*pass_name);
+    if (valid_pass_list.contains(*pass_name)) {
+      return *pass_name;
+    }
+    if (consumer_producer_render_pass_map.contains(*pass_name)) {
+      auto& ancestors_of_b = consumer_producer_render_pass_map.at(*pass_name);
       pass_to_check2.insert(ancestors_of_b.begin(), ancestors_of_b.end());
     }
     pass_to_check.erase(pass_name);
@@ -1781,16 +1794,23 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassOrder& render_pass_order, co
     buffer_state_change_list.at(buffer_id).back().pass_list_to_access_next_buffer_state.insert(kInvalidPass);
   }
   // create adjacency graph with queue type considered
+  std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>> producer_consumer_adjacency_graph_queue_considered;
   std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>> consumer_producer_adjacency_graph_queue_considered;
   for (std::pmr::unordered_map<CommandQueueType, StrId> prev_pass_per_queue{memory_resource}; auto& pass_name : render_pass_order) {
     auto& pass = render_pass_id_map.at(pass_name);
     if (prev_pass_per_queue.contains(pass.command_queue_type)) {
+      producer_consumer_adjacency_graph_queue_considered.insert({prev_pass_per_queue.at(pass.command_queue_type), std::pmr::unordered_set<StrId>{memory_resource}});
+      producer_consumer_adjacency_graph_queue_considered.at(prev_pass_per_queue.at(pass.command_queue_type)).insert(pass_name);
       consumer_producer_adjacency_graph_queue_considered.insert({pass_name, std::pmr::unordered_set<StrId>{memory_resource}});
       consumer_producer_adjacency_graph_queue_considered.at(pass_name).insert(prev_pass_per_queue.at(pass.command_queue_type));
     }
     prev_pass_per_queue.insert_or_assign(pass.command_queue_type, pass_name);
   }
   for (auto& [signal_pass_name, wait_pass_set] : pass_signal_info) {
+    if (!producer_consumer_adjacency_graph_queue_considered.contains(signal_pass_name)) {
+      producer_consumer_adjacency_graph_queue_considered.insert({signal_pass_name, std::pmr::unordered_set<StrId>{memory_resource}});
+    }
+    producer_consumer_adjacency_graph_queue_considered.at(signal_pass_name).insert(wait_pass_set.begin(), wait_pass_set.end());
     for (auto& wait_pass_name : wait_pass_set) {
       if (!consumer_producer_adjacency_graph_queue_considered.contains(wait_pass_name)) {
         consumer_producer_adjacency_graph_queue_considered.insert({wait_pass_name, std::pmr::unordered_set<StrId>{memory_resource}});
@@ -1810,7 +1830,7 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassOrder& render_pass_order, co
       auto split_barrier_end_pass = *first_pass_to_use;
       first_pass_to_use++;
       while (first_pass_to_use != state_change_info.pass_list_to_access_next_buffer_state.end() && split_barrier_end_pass != state_change_info.last_pass_to_access_prev_buffer_state) {
-        split_barrier_end_pass = FindLeastCommonAncestor(split_barrier_end_pass, *first_pass_to_use, consumer_producer_adjacency_graph_queue_considered, state_change_info.last_pass_to_access_prev_buffer_state, memory_resource);
+        split_barrier_end_pass = FindLeastCommonAncestor(split_barrier_end_pass, *first_pass_to_use, producer_consumer_adjacency_graph_queue_considered, consumer_producer_adjacency_graph_queue_considered, state_change_info.last_pass_to_access_prev_buffer_state, memory_resource);
         first_pass_to_use++;
       }
       auto is_same_path = state_change_info.last_pass_to_access_prev_buffer_state == split_barrier_end_pass;
