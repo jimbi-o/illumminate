@@ -1749,7 +1749,8 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassOrder& render_pass_order, co
   std::pmr::unordered_map<StrId, uint32_t> pass_index_per_queue{memory_resource};
   pass_index_per_queue.reserve(render_pass_order.size());
   const StrId kInvalidPass;
-  for (std::pmr::unordered_map<CommandQueueType, uint32_t> next_index{memory_resource}; auto& pass_name : render_pass_order) {
+  std::pmr::unordered_map<CommandQueueType, uint32_t> next_index{memory_resource};
+  for (auto& pass_name : render_pass_order) {
     auto& pass = render_pass_id_map.at(pass_name);
     auto& buffer_ids = buffer_id_list.at(pass_name);
     for (uint32_t buffer_index = 0; auto& buffer_config : pass.buffer_list) {
@@ -1834,13 +1835,20 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassOrder& render_pass_order, co
         first_pass_to_use++;
       }
       auto is_same_path = state_change_info.last_pass_to_access_prev_buffer_state == split_barrier_end_pass;
-      auto is_same_queue = render_pass_id_map.at(state_change_info.last_pass_to_access_prev_buffer_state).command_queue_type == render_pass_id_map.at(split_barrier_end_pass).command_queue_type;
-      auto is_next_path = pass_index_per_queue.at(state_change_info.last_pass_to_access_prev_buffer_state) + 1 >= pass_index_per_queue.at(split_barrier_end_pass);
+      auto is_same_queue = (render_pass_id_map.contains(state_change_info.last_pass_to_access_prev_buffer_state) && render_pass_id_map.contains(split_barrier_end_pass)) ? (render_pass_id_map.at(state_change_info.last_pass_to_access_prev_buffer_state).command_queue_type == render_pass_id_map.at(split_barrier_end_pass).command_queue_type) : true;
+      auto is_next_path = (pass_index_per_queue.contains(state_change_info.last_pass_to_access_prev_buffer_state) && pass_index_per_queue.contains(split_barrier_end_pass) && pass_index_per_queue.at(state_change_info.last_pass_to_access_prev_buffer_state) + 1 >= pass_index_per_queue.at(split_barrier_end_pass)) ||
+          (state_change_info.last_pass_to_access_prev_buffer_state == kInvalidPass && pass_index_per_queue.at(split_barrier_end_pass) == 0) ||
+          (split_barrier_end_pass == kInvalidPass && (pass_index_per_queue.at(state_change_info.last_pass_to_access_prev_buffer_state) + 1 == next_index.at(render_pass_id_map.at(state_change_info.last_pass_to_access_prev_buffer_state).command_queue_type)));
       auto is_resource_needed_before_pass = state_change_info.pass_list_to_access_next_buffer_state.contains(split_barrier_end_pass);
       if (is_same_path || (is_same_queue && is_next_path && is_resource_needed_before_pass)) {
         // no split
-        barrier_pass_name.push_back(state_change_info.last_pass_to_access_prev_buffer_state);
-        barrier_dst_list_ptr.push_back(&barrier_after_pass);
+        if (state_change_info.last_pass_to_access_prev_buffer_state == kInvalidPass) {
+          barrier_pass_name.push_back(split_barrier_end_pass);
+          barrier_dst_list_ptr.push_back(&barrier_before_pass);
+        } else {
+          barrier_pass_name.push_back(state_change_info.last_pass_to_access_prev_buffer_state);
+          barrier_dst_list_ptr.push_back(&barrier_after_pass);
+        }
         barrier_info_list.push_back({buffer_id, state_change_info.prev_buffer_state, state_change_info.next_buffer_state, BarrierSplitType::kNone});
         continue;
       }
