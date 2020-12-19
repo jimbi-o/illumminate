@@ -1688,20 +1688,23 @@ RenderPassOrder ConvertBatchInfoBackToRenderPassOrder(BatchInfoList&& batch_info
   }
   return render_pass_order;
 }
+void CreateAncestorSet(const StrId& descendant_name, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>& adjacency_graph,  std::pmr::unordered_set<StrId>* dst_ancestors, std::pmr::unordered_set<StrId>* work) {
+  work->insert(descendant_name);
+  while (!work->empty()) {
+    auto pass_name = work->begin();
+    if (adjacency_graph.contains(*pass_name)) {
+      auto& ancestors = adjacency_graph.at(*pass_name);
+      work->insert(ancestors.begin(), ancestors.end());
+    }
+    dst_ancestors->insert(std::move(*pass_name));
+    work->erase(pass_name);
+  }
+}
 auto FindLeastCommonAncestor(const StrId& a, const StrId& b, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>& adjacency_graph, const StrId& stop_pass, std::pmr::memory_resource* memory_resource) {
   if (a == b) return a;
   std::pmr::unordered_set<StrId> ancestors_of_a{memory_resource};
   std::pmr::unordered_set<StrId> pass_to_check{memory_resource};
-  pass_to_check.insert(a);
-  while (!pass_to_check.empty()) {
-    auto pass_name = pass_to_check.begin();
-    if (adjacency_graph.contains(*pass_name)) {
-      auto& ancestors = adjacency_graph.at(*pass_name);
-      pass_to_check.insert(ancestors.begin(), ancestors.end());
-    }
-    ancestors_of_a.insert(std::move(*pass_name));
-    pass_to_check.erase(pass_name);
-  }
+  CreateAncestorSet(a, adjacency_graph, &ancestors_of_a, &pass_to_check);
   pass_to_check.insert(b);
   std::pmr::unordered_set<StrId> pass_to_check2{memory_resource};
   while (!pass_to_check.empty()) {
