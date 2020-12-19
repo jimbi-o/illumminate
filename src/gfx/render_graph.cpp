@@ -1751,6 +1751,7 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassOrder& render_pass_order, co
   const StrId kInvalidPass;
   std::pmr::unordered_map<CommandQueueType, uint32_t> next_index{memory_resource};
   std::pmr::unordered_map<CommandQueueType, StrId> first_pass_per_queue{memory_resource};
+  std::pmr::unordered_map<CommandQueueType, StrId> last_pass_per_queue{memory_resource};
   for (auto& pass_name : render_pass_order) {
     auto& pass = render_pass_id_map.at(pass_name);
     auto& buffer_ids = buffer_id_list.at(pass_name);
@@ -1785,6 +1786,7 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassOrder& render_pass_order, co
       first_pass_per_queue.insert({pass.command_queue_type, pass_name});
     }
     pass_index_per_queue.insert({pass_name, next_index[pass.command_queue_type]++});
+    last_pass_per_queue.insert_or_assign(pass.command_queue_type, pass_name);
   }
   // add state change info after all render pass is done
   for (auto& [buffer_id, flag] : buffer_state_after_render_pass_list) {
@@ -1865,11 +1867,16 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassOrder& render_pass_order, co
         barrier_dst_list_ptr.push_back(&barrier_after_pass);
       }
       barrier_info_list.push_back({buffer_id, state_change_info.prev_buffer_state, state_change_info.next_buffer_state, BarrierSplitType::kBegin});
-      barrier_pass_name.push_back(split_barrier_end_pass);
-      if (state_change_info.pass_list_to_access_next_buffer_state.contains(split_barrier_end_pass)) {
-        barrier_dst_list_ptr.push_back(&barrier_before_pass);
-      } else {
+      if (split_barrier_end_pass == kInvalidPass) {
+        barrier_pass_name.push_back(last_pass_per_queue.at(render_pass_id_map.at(state_change_info.last_pass_to_access_prev_buffer_state).command_queue_type));
         barrier_dst_list_ptr.push_back(&barrier_after_pass);
+      } else {
+        barrier_pass_name.push_back(split_barrier_end_pass);
+        if (state_change_info.pass_list_to_access_next_buffer_state.contains(split_barrier_end_pass)) {
+          barrier_dst_list_ptr.push_back(&barrier_before_pass);
+        } else {
+          barrier_dst_list_ptr.push_back(&barrier_after_pass);
+        }
       }
       barrier_info_list.push_back({buffer_id, state_change_info.prev_buffer_state, state_change_info.next_buffer_state, BarrierSplitType::kEnd});
     }
