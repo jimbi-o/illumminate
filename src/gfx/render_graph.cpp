@@ -1713,7 +1713,7 @@ auto FindGreatestCommonDescendent(const StrId& a, const StrId& b, const std::pmr
   }
   std::pmr::unordered_set<StrId> valid_pass_list{memory_resource};
   for (auto&& descendent : descendents_of_a) {
-    if (stop_pass.contains(descendent) || !descendents_of_stop_pass.contains(descendent)) {
+    if (!descendents_of_stop_pass.contains(descendent)) {
       valid_pass_list.insert(std::move(descendent));
     }
   }
@@ -1918,9 +1918,10 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassOrder& render_pass_order, co
       auto is_buffer_needed_before_end_pass = state_change_info.pass_list_to_access_next_buffer_state.contains(split_barrier_end_pass);
       auto is_state_change_needed_right_before_initial_pass = is_buffer_needed_before_end_pass && split_barrier_begin_pass == kValidPassNotFound && pass_index_per_queue.at(split_barrier_end_pass) == 0;
       auto is_state_change_needed_right_after_final_pass = split_barrier_end_pass == kValidPassNotFound && pass_index_per_queue.at(split_barrier_begin_pass) + 1 == next_index.at(render_pass_id_map.at(split_barrier_begin_pass).command_queue_type);
-      if (is_same_path || (is_next_path && is_buffer_needed_before_end_pass) || is_state_change_needed_right_before_initial_pass || is_state_change_needed_right_after_final_pass) {
+      auto is_split_begin_pass_not_found = split_barrier_begin_pass == kValidPassNotFound && !state_change_info.pass_list_to_access_prev_buffer_state.empty();
+      if (is_same_path || (is_next_path && is_buffer_needed_before_end_pass) || is_state_change_needed_right_before_initial_pass || is_state_change_needed_right_after_final_pass || is_split_begin_pass_not_found) {
         // no split
-        if (is_state_change_needed_right_before_initial_pass) {
+        if (is_state_change_needed_right_before_initial_pass || is_split_begin_pass_not_found) {
           barrier_pass_name.push_back(split_barrier_end_pass);
           barrier_dst_list_ptr.push_back(&barrier_before_pass);
         } else {
