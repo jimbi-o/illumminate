@@ -93,8 +93,8 @@ class RenderPass {
         mandatory_pass(false),
         async_compute_enabled(AsyncComputeEnabled::kDisabled)
   {}
-  RenderPass(StrId&& buffer_name, BufferConfigList&& buffer_config_list)
-      : name(std::move(buffer_name)),
+  RenderPass(StrId&& pass_name, BufferConfigList&& buffer_config_list)
+      : name(std::move(pass_name)),
         buffer_list(std::move(buffer_config_list)),
         command_queue_type(CommandQueueType::kGraphics),
         mandatory_pass(false),
@@ -173,9 +173,8 @@ constexpr bool IsWritableState(const BufferStateFlags state) {
   return false;
 }
 constexpr bool IsBufferStateFlagMergeable(const BufferStateFlags a, const BufferStateFlags b) {
-  if (a == kBufferStateFlagDsvWrite && b == kBufferStateFlagDsvRead) return true;
-  if (b == kBufferStateFlagDsvWrite && a == kBufferStateFlagDsvRead) return true;
-  if (IsWritableState(a) && IsWritableState(b)) return false;
+  if (IsWritableState(a)) return false;
+  if (IsWritableState(b)) return false;
   return true;
 }
 class BufferCreationDesc {
@@ -218,8 +217,7 @@ enum class AsyncComputeBatchPairType : uint8_t { kCurrentFrame = 0, kPairCompute
 using AsyncComputePairInfo = std::pmr::unordered_map<StrId, AsyncComputeBatchPairType>;
 std::tuple<BatchInfoList, RenderPassOrder> ConfigureAsyncComputeBatching(const RenderPassIdMap& render_pass_id_map, RenderPassOrder&& current_render_pass_order, RenderPassOrder&& prev_render_pass_order, const AsyncComputePairInfo& async_group_info, std::pmr::memory_resource* memory_resource);
 using ProducerPassSignalList = std::pmr::unordered_map<StrId, uint32_t>;
-using ConsumerPassWaitingSignalList = ProducerPassSignalList;
+using ConsumerPassWaitingSignalList = std::pmr::unordered_map<StrId, StrId>;
 std::tuple<ProducerPassSignalList, ConsumerPassWaitingSignalList> ConfigureBufferResourceDependency(const RenderPassIdMap& render_pass_id_map, const BatchInfoList& src_batch, const ConsumerProducerRenderPassMap& consumer_producer_render_pass_map, std::pmr::memory_resource* memory_resource);
-BatchInfoList ApplyResourceDependencyToBatch(const RenderPassIdMap& render_pass_id_map, BatchInfoList&& src_batch, const ProducerPassSignalList& producer_pass_signal_list, const ConsumerPassWaitingSignalList& consumer_pass_waiting_signal_list, std::pmr::memory_resource* memory_resource);
 }
 #endif
