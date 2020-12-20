@@ -2958,6 +2958,48 @@ TEST_CASE("barrier") {
     CHECK(barrier_info.barrier_before_pass[StrId("D")][0].split_type == BarrierSplitType::kNone);
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("D")));
   }
+  {
+    // multiple read -> unassociated path -> write test
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("A"));
+    batch_info_list.back().push_back(StrId("B"));
+    batch_info_list.back().push_back(StrId("C"));
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("-"));
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("D"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("A"), RenderPass(StrId("A"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv).LoadOpType(BufferLoadOpType::kLoadReadOnly)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("B"), RenderPass(StrId("B"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv).LoadOpType(BufferLoadOpType::kLoadReadOnly)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("C"), RenderPass(StrId("C"), {{BufferConfig(StrId("depth"), BufferStateType::kSrv)}, memory_resource.get()}).CommandQueueTypeCompute()});
+    render_pass_id_map.insert({StrId("-"), RenderPass(StrId("-"), {{BufferConfig(StrId("other"), BufferStateType::kUav)}, memory_resource.get()}).CommandQueueTypeCompute()});
+    render_pass_id_map.insert({StrId("D"), RenderPass(StrId("D"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv).LoadOpType(BufferLoadOpType::kLoadWrite)}, memory_resource.get()})});
+    auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
+    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
+    buffer_state_before_render_pass_list.insert({0, static_cast<decltype(kBufferStateFlagDsvRead)>(kBufferStateFlagDsvRead | kBufferStateFlagSrv)});
+    buffer_state_before_render_pass_list.insert({1, kBufferStateFlagUav});
+    auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
+    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_order, render_pass_id_map, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("A")));
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("B")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("B")));
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("C")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("C")));
+    CHECK(barrier_info.barrier_before_pass[StrId("-")].size() == 1);
+    CHECK(barrier_info.barrier_before_pass[StrId("-")][0].state_flag_before_pass == (kBufferStateFlagDsvRead | kBufferStateFlagSrv));
+    CHECK(barrier_info.barrier_before_pass[StrId("-")][0].state_flag_after_pass  == kBufferStateFlagDsvWrite);
+    CHECK(barrier_info.barrier_before_pass[StrId("-")][0].split_type == BarrierSplitType::kBegin);
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("-")));
+    CHECK(barrier_info.barrier_before_pass[StrId("D")].size() == 1);
+    CHECK(barrier_info.barrier_before_pass[StrId("D")][0].state_flag_before_pass == (kBufferStateFlagDsvRead | kBufferStateFlagSrv));
+    CHECK(barrier_info.barrier_before_pass[StrId("D")][0].state_flag_after_pass  == kBufferStateFlagDsvWrite);
+    CHECK(barrier_info.barrier_before_pass[StrId("D")][0].split_type == BarrierSplitType::kEnd);
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("D")));
+  }
 }
 #ifdef __clang__
 #pragma clang diagnostic pop
