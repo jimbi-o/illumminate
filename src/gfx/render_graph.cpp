@@ -1940,7 +1940,11 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassOrder& render_pass_order, co
           barrier_dst_list_ptr.push_back(&barrier_before_pass);
         } else {
           barrier_pass_name.push_back(split_barrier_begin_pass);
-          barrier_dst_list_ptr.push_back(&barrier_after_pass);
+          if (state_change_info.pass_list_to_access_prev_buffer_state.contains(split_barrier_begin_pass)) {
+            barrier_dst_list_ptr.push_back(&barrier_after_pass);
+          } else {
+            barrier_dst_list_ptr.push_back(&barrier_before_pass);
+          }
         }
         barrier_info_list.push_back({buffer_id, state_change_info.prev_buffer_state, state_change_info.next_buffer_state, BarrierSplitType::kBegin});
         if (split_barrier_end_pass == kValidPassNotFound) {
