@@ -1700,23 +1700,74 @@ void ConnectAdjacencyNodes(const StrId& node_name, const std::pmr::unordered_map
     work->erase(pass_name);
   }
 }
+auto FindGreatestCommonDescendent(const StrId& a, const StrId& b, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>& producer_consumer_render_pass_map, const std::pmr::unordered_set<StrId>& stop_pass, const StrId& pass_not_found, std::pmr::memory_resource* memory_resource) {
+  if (a == b) return a;
+  if (stop_pass.contains(a)) return a;
+  if (stop_pass.contains(b)) return b;
+  std::pmr::unordered_set<StrId> descendents_of_a{memory_resource};
+  std::pmr::unordered_set<StrId> pass_to_check{memory_resource};
+  ConnectAdjacencyNodes(a, producer_consumer_render_pass_map, &descendents_of_a, &pass_to_check);
+  std::pmr::unordered_set<StrId> descendents_of_stop_pass{memory_resource};
+  descendents_of_stop_pass = stop_pass;
+  for (auto& stop_pass_name : stop_pass) {
+    ConnectAdjacencyNodes(stop_pass_name, producer_consumer_render_pass_map, &descendents_of_stop_pass, &pass_to_check);
+  }
+  std::pmr::unordered_set<StrId> valid_pass_list{memory_resource};
+  for (auto&& descendent : descendents_of_a) {
+    if (descendents_of_stop_pass.contains(descendent)) {
+      valid_pass_list.insert(std::move(descendent));
+    }
+  }
+  pass_to_check.insert(b);
+  descendents_of_a.clear();
+  auto& pass_to_check2 = descendents_of_a; // name alias to reuse container
+  while (!pass_to_check.empty()) {
+    auto pass_it = pass_to_check.begin();
+    if (valid_pass_list.contains(*pass_it)) {
+      return *pass_it;
+    }
+    if (producer_consumer_render_pass_map.contains(*pass_it)) {
+      auto& consumers = producer_consumer_render_pass_map.at(*pass_it);
+      pass_to_check2.insert(consumers.begin(), consumers.end());
+    }
+    pass_to_check.erase(pass_it);
+    if (pass_to_check.empty()) {
+      pass_to_check = std::move(pass_to_check2);
+      pass_to_check2.clear();
+    }
+  }
+  return pass_not_found;
+}
+StrId FindGreatestCommonDescendent(const std::pmr::unordered_set<StrId>& pass_name_list, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>& producer_consumer_render_pass_map, const std::pmr::unordered_set<StrId>& stop_pass, const StrId& pass_not_found, std::pmr::memory_resource* memory_resource) {
+  if (pass_name_list.empty()) return pass_not_found;
+  if (pass_name_list.size() == 1) return *pass_name_list.begin();
+  auto pass_iterator = pass_name_list.begin();
+  auto pass_to_return = *pass_iterator;
+  for (;;) {
+    pass_iterator++;
+    if (pass_iterator == pass_name_list.end()) break;
+    pass_to_return = FindGreatestCommonDescendent(*pass_iterator, pass_to_return, producer_consumer_render_pass_map, stop_pass, pass_not_found, memory_resource);
+    if (pass_to_return == pass_not_found) break;
+  }
+  return pass_to_return;
+}
 auto FindLeastCommonAncestor(const StrId& a, const StrId& b, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>& consumer_producer_render_pass_map, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>& producer_consumer_render_pass_map, const StrId& stop_pass, std::pmr::memory_resource* memory_resource) {
   if (a == b) return a;
   if (a == stop_pass || b == stop_pass) return stop_pass;
   std::pmr::unordered_set<StrId> ancestors_of_a{memory_resource};
   std::pmr::unordered_set<StrId> pass_to_check{memory_resource};
   ConnectAdjacencyNodes(a, consumer_producer_render_pass_map, &ancestors_of_a, &pass_to_check);
-  std::pmr::unordered_set<StrId> descendants_of_stop_pass{memory_resource};
-  ConnectAdjacencyNodes(stop_pass, producer_consumer_render_pass_map, &descendants_of_stop_pass, &pass_to_check);
-  descendants_of_stop_pass.erase(stop_pass);
+  std::pmr::unordered_set<StrId> descendents_of_stop_pass{memory_resource};
+  ConnectAdjacencyNodes(stop_pass, producer_consumer_render_pass_map, &descendents_of_stop_pass, &pass_to_check);
+  descendents_of_stop_pass.erase(stop_pass);
   std::pmr::unordered_set<StrId> valid_pass_list{memory_resource};
   for (auto&& ancestor_of_a : ancestors_of_a) {
-    if (descendants_of_stop_pass.contains(ancestor_of_a)) {
+    if (descendents_of_stop_pass.contains(ancestor_of_a)) {
       valid_pass_list.insert(std::move(ancestor_of_a));
     }
   }
-  ancestors_of_a.clear();
   pass_to_check.insert(b);
+  ancestors_of_a.clear();
   auto& pass_to_check2 = ancestors_of_a; // name alias to reuse container
   while (!pass_to_check.empty()) {
     auto pass_name = pass_to_check.begin();
@@ -1733,12 +1784,6 @@ auto FindLeastCommonAncestor(const StrId& a, const StrId& b, const std::pmr::uno
       pass_to_check2.clear();
     }
   }
-  return stop_pass;
-}
-StrId FindGreatestCommonDescendent(const std::pmr::unordered_set<StrId>& pass_name_list, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>& consumer_producer_render_pass_map, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>& producer_consumer_render_pass_map, const StrId& stop_pass, std::pmr::memory_resource* memory_resource) {
-  if (pass_name_list.empty()) return stop_pass;
-  if (pass_name_list.size() == 1) return *pass_name_list.begin();
-  // TODO
   return stop_pass;
 }
 StrId FindLeastCommonAncestor(const std::pmr::unordered_set<StrId>& pass_name_list, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>& consumer_producer_render_pass_map, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>& producer_consumer_render_pass_map, const StrId& stop_pass, std::pmr::memory_resource* memory_resource) {
@@ -1865,7 +1910,7 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassOrder& render_pass_order, co
   const StrId kValidPassNotFound;
   for (auto&& [buffer_id, state_change_info_list] : buffer_state_change_list) {
     for (auto&& state_change_info : state_change_info_list) {
-      auto split_barrier_begin_pass = FindGreatestCommonDescendent(state_change_info.pass_list_to_access_prev_buffer_state, consumer_producer_adjacency_graph_queue_considered, producer_consumer_adjacency_graph_queue_considered, kValidPassNotFound, memory_resource);
+      auto split_barrier_begin_pass = FindGreatestCommonDescendent(state_change_info.pass_list_to_access_prev_buffer_state, producer_consumer_adjacency_graph_queue_considered, state_change_info.pass_list_to_access_next_buffer_state, kValidPassNotFound, memory_resource);
       auto split_barrier_end_pass = state_change_info.pass_list_to_access_next_buffer_state.empty() ? kValidPassNotFound : FindLeastCommonAncestor(state_change_info.pass_list_to_access_next_buffer_state, consumer_producer_adjacency_graph_queue_considered, producer_consumer_adjacency_graph_queue_considered, split_barrier_begin_pass, memory_resource);
       auto both_pass_exists = split_barrier_begin_pass != kValidPassNotFound && split_barrier_end_pass != kValidPassNotFound;
       auto is_same_path = both_pass_exists && split_barrier_begin_pass == split_barrier_end_pass;
