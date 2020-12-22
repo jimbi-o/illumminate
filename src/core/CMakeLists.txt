@@ -58,4 +58,5 @@ target_include_directories(illuminatecore
 target_sources(illuminatecore PRIVATE
   "strid.cpp"
   "memory.cpp"
+  "util.cpp"
 )

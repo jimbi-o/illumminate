@@ -219,5 +219,24 @@ std::tuple<BatchInfoList, RenderPassOrder> ConfigureAsyncComputeBatching(const R
 using ProducerPassSignalList = std::pmr::unordered_map<StrId, uint32_t>;
 using ConsumerPassWaitingSignalList = std::pmr::unordered_map<StrId, StrId>;
 std::tuple<ProducerPassSignalList, ConsumerPassWaitingSignalList> ConfigureBufferResourceDependency(const RenderPassIdMap& render_pass_id_map, const BatchInfoList& src_batch, const ConsumerProducerRenderPassMap& consumer_producer_render_pass_map, std::pmr::memory_resource* memory_resource);
+// barrier
+using BufferStateList = std::pmr::unordered_map<uint32_t, BufferStateFlags>;
+enum class BarrierSplitType : uint8_t { kNone = 0, kBegin, kEnd, };
+struct BarrierConfig {
+  BufferId buffer_id;
+  BufferStateFlags state_flag_before_pass;
+  BufferStateFlags state_flag_after_pass;
+  BarrierSplitType split_type;
+  std::byte _pad[3]{};
+};
+using PassBarrierInfo = std::pmr::unordered_map<StrId, std::pmr::vector<BarrierConfig>>;
+struct PassBarrierInfoSet {
+  PassBarrierInfo barrier_before_pass;
+  PassBarrierInfo barrier_after_pass;
+};
+using PassSignalInfo = std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>;
+PassSignalInfo ConvertBatchToSignalInfo(const BatchInfoList& batch_info_list, const RenderPassIdMap& render_pass_id_map, std::pmr::memory_resource* memory_resource);
+RenderPassOrder ConvertBatchInfoBackToRenderPassOrder(BatchInfoList&& batch_info_list, std::pmr::memory_resource* memory_resource);
+PassBarrierInfoSet ConfigureBarrier(const RenderPassOrder& render_pass_order, const RenderPassIdMap& render_pass_id_map, const PassSignalInfo& pass_signal_info, const BufferIdList& buffer_id_list, const BufferStateList& buffer_state_before_render_pass_list, const BufferStateList& buffer_state_after_render_pass_list, std::pmr::memory_resource* memory_resource);
 }
 #endif

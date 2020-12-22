@@ -2,6 +2,7 @@
 #define ILLUMINATE_CORE_UTIL_H
 #include <cstdint>
 #include <iterator>
+#include <unordered_set>
 namespace illuminate {
 enum class EnableDisable : uint8_t { kEnabled = 0, kDisabled };
 constexpr bool IsEnabled(const EnableDisable e) { return e == EnableDisable::kEnabled; }
@@ -18,5 +19,17 @@ constexpr void AppendVector(T&& src, U&& dst) {
   dst.reserve(dst.size() + src.size());
   std::move(std::begin(src), std::end(src), std::back_inserter(dst));
 }
+constexpr uint32_t CountSetBitNum(const uint32_t& val) {
+  uint32_t v = val;
+  uint32_t count = 0;
+  while (v != 0) {
+    if (v & 1) {
+      count++;
+    }
+    v = (v >> 1);
+  }
+  return count;
+}
+void ConnectAdjacencyNodes(const StrId& node_name, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>& adjacency_graph, std::pmr::unordered_set<StrId>* dst, std::pmr::unordered_set<StrId>* work);
 }
 #endif
