@@ -2971,4 +2971,3 @@ TEST_CASE("barrier") {
 #pragma clang diagnostic pop
 #endif
 #endif
-// TODO fence (present swapchain, cbv frame buffering)

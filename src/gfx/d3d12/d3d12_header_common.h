@@ -24,18 +24,12 @@ constexpr inline D3D12_COMMAND_LIST_TYPE ConvertToD3d12CommandQueueType(const Co
 }
 constexpr inline DXGI_FORMAT GetDxgiFormat(const BufferFormat format) {
   switch(format) {
-    case BufferFormat::kUseSwapchainFormat:
-      [[fallthrough]];
-    case BufferFormat::kR8G8B8A8_Unorm:
+    case BufferFormat::kR8G8B8A8Unorm:
       return DXGI_FORMAT_R8G8B8A8_UNORM;
     case BufferFormat::kD24S8:
       return DXGI_FORMAT_D24_UNORM_S8_UINT;
   }
   return DXGI_FORMAT_UNKNOWN;
-}
-constexpr inline DXGI_FORMAT GetDxgiFormat(const BufferFormat format, const DXGI_FORMAT swapchain_format) {
-  if (format == BufferFormat::kUseSwapchainFormat) return swapchain_format;
-  return GetDxgiFormat(format);
 }
 }
 #endif

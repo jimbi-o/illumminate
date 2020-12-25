@@ -64,5 +64,4 @@ target_include_directories(illuminategfx
 
 target_sources(illuminategfx PRIVATE
   "render_graph.cpp"
-#  "renderer.cpp" # TODO remove file
 )
