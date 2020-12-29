@@ -1,9 +1,10 @@
 #ifdef ASSERTIONS_ENABLED
-#define ASSERT(expr, ...)                                               \
-  if (expr) {} else {                                                   \
-    logfatal("{} {} L{} {}", #expr, __FILE__, __LINE__, __VA_ARGS__);   \
-    abort();                                                            \
-  }
+#define ASSERT(expr)                                      \
+  if (expr) {} else {                                     \
+    logfatal("{} {} L{} {}", #expr, __FILE__, __LINE__);  \
+    abort();                                              \
+  }                                                       \
+  ((void)0)
 #else
-#define ASSERT(expr, ...)
+#define ASSERT(expr) ((void)0)
 #endif

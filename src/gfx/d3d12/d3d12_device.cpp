@@ -25,7 +25,7 @@ bool Device::Init(DxgiAdapter* const adapter) {
   }
 #endif
   auto hr = CALL(D3D12CreateDevice)(adapter, D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(&device_));
-  ASSERT(SUCCEEDED(hr) && device_ && "D3D12CreateDevice failed.", hr);
+  ASSERT(SUCCEEDED(hr) && device_ && "D3D12CreateDevice failed.");
 #ifndef SHIP_BUILD
   if (IsDebuggerPresent()) {
     ID3D12InfoQueue* info_queue = nullptr;

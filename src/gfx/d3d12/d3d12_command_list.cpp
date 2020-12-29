@@ -6,8 +6,8 @@ bool CommandList::Init(D3d12Device* const device) {
   return true;
 }
 void CommandList::Term() {
-  for (auto& list : pool_) {
-    for (auto& list : list.second) {
+  for (auto& lists : pool_) {
+    for (auto& list : lists.second) {
       list->Release();
     }
   }
@@ -31,13 +31,13 @@ D3d12CommandList** CommandList::RetainCommandList(const CommandQueueType command
       auto hr = device_->CreateCommandList1(0/*multi-GPU*/, d3d12_command_list_type, D3D12_COMMAND_LIST_FLAG_NONE, IID_PPV_ARGS(&list));
       if (FAILED(hr)) {
         logerror("failed to create command list {} {} {} {}", hr, d3d12_command_list_type, num * 2, pool_[command_list_type].size());
-        ASSERT(false && "CreateCommandList1 failed.", hr);
+        ASSERT(false && "CreateCommandList1 failed.");
       }
 #else
       auto hr = device_->CreateCommandList(0/*multi-GPU*/, d3d12_command_list_type, allocators[0], nullptr, IID_PPV_ARGS(&list));
       if (FAILED(hr)) {
         logerror("failed to create command list {} {} {} {}", hr, d3d12_command_list_type, num * 2, pool_[command_list_type].size());
-        ASSERT(false && "CreateCommandList failed.", hr);
+        ASSERT(false && "CreateCommandList failed.");
       }
       list->Close();
 #endif

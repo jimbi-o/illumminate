@@ -29,7 +29,7 @@ ID3D12CommandAllocator** CommandAllocator::RetainCommandAllocator(const CommandQ
       auto hr = device_->CreateCommandAllocator(d3d12_command_list_type, IID_PPV_ARGS(&allocator));
       if (FAILED(hr)) {
         logerror("failed to create command allocator {} {} {} {}", hr, d3d12_command_list_type, num * 2, pool_[command_list_type].size());
-        ASSERT(false && "CreateCommandAllocator failed.", hr);
+        ASSERT(false && "CreateCommandAllocator failed.");
       }
       SET_NAME(allocator, "commandallocator", d3d12_command_list_type * 1000 + pool_[command_list_type].size());
       pool_[command_list_type].push_back(allocator);

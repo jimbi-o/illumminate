@@ -37,9 +37,9 @@ bool Swapchain::Init(DxgiFactory* factory, ID3D12CommandQueue* command_queue_gra
     desc.Flags = (tearing_support_ ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0) | DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
     IDXGISwapChain1* swapchain = nullptr;
     auto hr = factory->CreateSwapChainForHwnd(command_queue_graphics, hwnd, &desc, nullptr, nullptr, &swapchain);
-    ASSERT(SUCCEEDED(hr) && "CreateSwapChainForHwnd failed. {}", hr);
+    ASSERT(SUCCEEDED(hr) && "CreateSwapChainForHwnd failed. {}");
     hr = swapchain->QueryInterface(IID_PPV_ARGS(&swapchain_));
-    ASSERT(SUCCEEDED(hr) && "swapchain->QueryInterface failed. {}", hr);
+    ASSERT(SUCCEEDED(hr) && "swapchain->QueryInterface failed. {}");
     swapchain->Release();
   }
   // set max frame latency

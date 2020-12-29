@@ -8,4 +8,5 @@
     std::wostringstream stream;                 \
     stream << name << " " << n;                 \
     obj->SetName(stream.str().c_str());         \
-  }
+  }                                             \
+  (void(0))

@@ -1,7 +1,7 @@
 #include "d3d12_dxgi_core.h"
 #include "d3d12_minimal_for_cpp.h"
 #ifndef SHIP_BUILD
-#include "DXGIDebug.h"
+#include "dxgidebug.h"
 #endif
 namespace illuminate::gfx::d3d12 {
 bool DxgiCore::Init() {
@@ -9,9 +9,9 @@ bool DxgiCore::Init() {
   library_ = LoadLibrary("Dxgi.dll");
   ASSERT(library_ && "failed to load Dxgi.dll");
   auto hr = CALL(CreateDXGIFactory2)(0, IID_PPV_ARGS(&factory_));
-  ASSERT(SUCCEEDED(hr) && factory_ && "CreateDXGIFactory2 failed", hr);
+  ASSERT(SUCCEEDED(hr) && factory_ && "CreateDXGIFactory2 failed");
   hr = factory_->EnumAdapterByGpuPreference(0, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&adapter_));
-  ASSERT(SUCCEEDED(hr) && adapter_ && "EnumAdapterByGpuPreference failed", hr);
+  ASSERT(SUCCEEDED(hr) && adapter_ && "EnumAdapterByGpuPreference failed");
   {
     DXGI_ADAPTER_DESC1 desc;
     adapter_->GetDesc1(&desc);

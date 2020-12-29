@@ -20,6 +20,7 @@ constexpr inline D3D12_COMMAND_LIST_TYPE ConvertToD3d12CommandQueueType(const Co
     case CommandQueueType::kGraphics: return D3D12_COMMAND_LIST_TYPE_DIRECT;
     case CommandQueueType::kCompute:  return D3D12_COMMAND_LIST_TYPE_COMPUTE;
     case CommandQueueType::kTransfer: return D3D12_COMMAND_LIST_TYPE_COPY;
+    case CommandQueueType::kNum:      return D3D12_COMMAND_LIST_TYPE_DIRECT;
   }
 }
 constexpr inline DXGI_FORMAT GetDxgiFormat(const BufferFormat format) {
@@ -28,8 +29,11 @@ constexpr inline DXGI_FORMAT GetDxgiFormat(const BufferFormat format) {
       return DXGI_FORMAT_R8G8B8A8_UNORM;
     case BufferFormat::kD24S8:
       return DXGI_FORMAT_D24_UNORM_S8_UINT;
+    case BufferFormat::kD32Float:
+      return DXGI_FORMAT_D32_FLOAT;
+    case BufferFormat::kUnknown:
+      return DXGI_FORMAT_UNKNOWN;
   }
-  return DXGI_FORMAT_UNKNOWN;
 }
 }
 #endif

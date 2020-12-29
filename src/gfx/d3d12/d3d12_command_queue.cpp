@@ -13,12 +13,12 @@ bool CommandQueue::Init(D3d12Device* const device) {
     desc.Type = ConvertToD3d12CommandQueueType(type);
     ID3D12CommandQueue* command_queue = nullptr;
     auto hr = device_->CreateCommandQueue(&desc, IID_PPV_ARGS(&command_queue));
-    ASSERT(SUCCEEDED(hr) && "CreateCommandQueue failed", hr);
+    ASSERT(SUCCEEDED(hr) && "CreateCommandQueue failed");
     command_queue_[type] = command_queue;
     SET_NAME(command_queue_[type], "commandqueue", desc.Type);
     ID3D12Fence* fence = nullptr;
     hr = device_->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
-    ASSERT(SUCCEEDED(hr) && "CreateCommandQueue failed", hr);
+    ASSERT(SUCCEEDED(hr) && "CreateCommandQueue failed");
     fence_[type] = fence;
     SET_NAME(fence_[type], "fence", desc.Type);
   }
@@ -40,7 +40,7 @@ void CommandQueue::RegisterSignal(const CommandQueueType command_queue_type, con
   if (FAILED(hr)) {
     logerror("command queue signal failed. {} {} {}", hr, command_queue_type, val);
   }
-  ASSERT(SUCCEEDED(hr) && "command queue signal failed.", hr, command_queue_type, val);
+  ASSERT(SUCCEEDED(hr) && "command queue signal failed.");
 }
 void CommandQueue::RegisterWaitOnQueue(const CommandQueueType signal_queue, const uint64_t val, const CommandQueueType waiting_queue) {
   ASSERT(signal_queue != waiting_queue);
@@ -48,7 +48,7 @@ void CommandQueue::RegisterWaitOnQueue(const CommandQueueType signal_queue, cons
   if (FAILED(hr)) {
     logerror("command queue wait failed. {} {} {} {}", hr, waiting_queue, val, signal_queue);
   }
-  ASSERT(SUCCEEDED(hr) && "command queue wait failed.", hr, waiting_queue, val, signal_queue);
+  ASSERT(SUCCEEDED(hr) && "command queue wait failed.");
 }
 void CommandQueue::WaitOnCpu(std::unordered_map<CommandQueueType, uint64_t>&& signals) {
   for (auto& queue_type : kCommandQueueTypeSet) {
@@ -72,15 +72,15 @@ void CommandQueue::WaitOnCpu(std::unordered_map<CommandQueueType, uint64_t>&& si
       sig.push_back(it->second);
       signals.erase(it);
     }
-    auto hr = device_->SetEventOnMultipleFenceCompletion(fences.data(), sig.data(), sig.size(), D3D12_MULTIPLE_FENCE_WAIT_FLAG_ALL, handle_);
-    ASSERT(SUCCEEDED(hr) && "SetEventOnMultipleFenceCompletion failed", hr);
+    auto hr = device_->SetEventOnMultipleFenceCompletion(fences.data(), sig.data(), static_cast<uint32_t>(sig.size()), D3D12_MULTIPLE_FENCE_WAIT_FLAG_ALL, handle_);
+    ASSERT(SUCCEEDED(hr) && "SetEventOnMultipleFenceCompletion failed");
   } else {
     auto it = signals.begin();
     auto hr = fence_[it->first]->SetEventOnCompletion(it->second, handle_);
-    ASSERT(SUCCEEDED(hr) && "SetEventOnCompletion failed", hr);
+    ASSERT(SUCCEEDED(hr) && "SetEventOnCompletion failed");
   }
   auto hr = WaitForSingleObject(handle_, INFINITE);
-  ASSERT(SUCCEEDED(hr) && "WaitForSingleObject failed", hr);
+  ASSERT(SUCCEEDED(hr) && "WaitForSingleObject failed");
 }
 void CommandQueue::WaitAll() {
   auto signal_val = std::numeric_limits<uint64_t>::max();
