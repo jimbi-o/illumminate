@@ -19,16 +19,35 @@ TEST_CASE("d3d12/render") {
   CommandQueue command_queue;
   CHECK(command_queue.Init(device.Get()));
   illuminate::gfx::win32::Window window;
-  CHECK(window.Init("swapchain test", 160, 90));
+  CHECK(window.Init("swapchain test", 1600, 900));
   Swapchain swapchain;
   CHECK(swapchain.Init(dxgi_core.GetFactory(), command_queue.Get(CommandQueueType::kGraphics), device.Get(), window.GetHwnd(), swapchain_buffer_num, buffer_num));
   CommandAllocator command_allocator;
   CHECK(command_allocator.Init(device.Get()));
-  CommandList command_list;
-  CHECK(command_list.Init(device.Get()));
+  CommandList command_list_pool;
+  CHECK(command_list_pool.Init(device.Get()));
   std::vector<std::vector<ID3D12CommandAllocator**>> allocators(buffer_num);
   SUBCASE("clear swapchain rtv@graphics queue") {
-    // TODO
+    auto queue_type = CommandQueueType::kGraphics;
+    uint64_t signal_val = 0;
+    command_queue.WaitOnCpu({{queue_type, signal_val}});
+    for (auto a : allocators.front()) {
+      command_allocator.ReturnCommandAllocator(a);
+    }
+    allocators.front().clear();
+    std::rotate(allocators.begin(), allocators.begin() + 1, allocators.end());
+    swapchain.UpdateBackBufferIndex();
+    D3d12CommandList** command_list = nullptr;
+    {
+      auto command_allocators = command_allocator.RetainCommandAllocator(queue_type, 1);
+      command_list = command_list_pool.RetainCommandList(queue_type, 1, command_allocators);
+      allocators.back().push_back(std::move(command_allocators));
+    }
+    const FLOAT clear_color[4] = {0.0f,1.0f,1.0f,1.0f};
+    command_list[0]->ClearRenderTargetView(swapchain.GetRtvHandle(), clear_color, 0, nullptr);
+    command_list[0]->Close();
+    command_list_pool.ReturnCommandList(command_list);
+    swapchain.Present();
   }
   SUBCASE("clear swapchain uav@compute queue") {
     // TODO
@@ -36,10 +55,16 @@ TEST_CASE("d3d12/render") {
   SUBCASE("fill swapchain uav with shader@compute queue") {
     // TODO
   }
-  SUBCASE("clear + draw triangle to swapchain uav@compute queue") {
+  SUBCASE("clear + draw triangle to swapchain w/dsv") {
     // TODO
   }
-  SUBCASE("clear + draw moving triangle to swapchain uav") {
+  SUBCASE("clear + draw moving triangle to swapchain w/dsv") {
+    // TODO
+  }
+  SUBCASE("clear + draw moving triangle to rtv w/dsv, copy to uav@compute queue") {
+    // TODO
+  }
+  SUBCASE("transfer texture from cpu and use@graphics queue") {
     // TODO
   }
   while (!allocators.empty()) {
@@ -49,7 +74,7 @@ TEST_CASE("d3d12/render") {
     allocators.pop_back();
   }
   command_queue.WaitAll();
-  command_list.Term();
+  command_list_pool.Term();
   command_allocator.Term();
   swapchain.Term();
   window.Term();
