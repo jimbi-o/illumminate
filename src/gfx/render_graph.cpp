@@ -83,7 +83,7 @@ MandatoryOutputBufferIdList IdentifyMandatoryOutputBufferId(const RenderPassIdMa
       auto& pass = render_pass_id_map.at(pass_name);
       for (uint32_t buffer_index = 0; auto& buffer : pass.buffer_list) {
         if (buffer.name == buffer_name && IsOutputBuffer(buffer.state_type, buffer.load_op_type)) {
-          mandatory_buffer_id_list.insert(buffer_id_list.at(pass_name)[buffer_index]);
+          mandatory_buffer_id_list.insert({buffer.name, buffer_id_list.at(pass_name)[buffer_index]});
           buffer_found = true;
           break;
         }
@@ -1219,8 +1219,8 @@ TEST_CASE("CreateRenderPassListSimple") {
   CHECK(render_pass_adjacency_graph.consumer_pass_input_buffer[StrId("postprocess")][0] == 5);
   auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("mainbuffer")}, memory_resource.get());
   CHECK(mandatory_buffer_id_list.size() == 1);
-  CHECK(mandatory_buffer_id_list.contains(6));
-  auto used_render_pass_list = GetBufferProducerPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
+  CHECK(mandatory_buffer_id_list[StrId("mainbuffer")] == 6);
+  auto used_render_pass_list = GetBufferProducerPassList(render_pass_adjacency_graph, CreateValueSetFromMap(mandatory_buffer_id_list, memory_resource.get()), memory_resource.get());
   CHECK(used_render_pass_list.size() == 1);
   CHECK(used_render_pass_list.contains(StrId("postprocess")));
   auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
@@ -1307,7 +1307,7 @@ TEST_CASE("CreateRenderPassListShadow") {
     CHECK(buffer_id_list_alias_applied[StrId("postprocess")][1] == 9);
     auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, memory_resource.get());
     auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, {StrId("mainbuffer")}, memory_resource.get());
-    auto used_render_pass_list = GetBufferProducerPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
+    auto used_render_pass_list = GetBufferProducerPassList(render_pass_adjacency_graph, CreateValueSetFromMap(mandatory_buffer_id_list, memory_resource.get()), memory_resource.get());
     auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
     used_render_pass_list = GetUsedRenderPassList(std::move(used_render_pass_list), consumer_producer_render_pass_map);
     CHECK(used_render_pass_list.size() == 6);
@@ -1357,7 +1357,7 @@ TEST_CASE("CreateRenderPassListShadow") {
     CHECK(buffer_id_list_alias_applied[StrId("postprocess")][1] == 9);
     auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, memory_resource.get());
     auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, {StrId("mainbuffer")}, memory_resource.get());
-    auto used_render_pass_list = GetBufferProducerPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
+    auto used_render_pass_list = GetBufferProducerPassList(render_pass_adjacency_graph, CreateValueSetFromMap(mandatory_buffer_id_list, memory_resource.get()), memory_resource.get());
     auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
     used_render_pass_list = GetUsedRenderPassList(std::move(used_render_pass_list), consumer_producer_render_pass_map);
     CHECK(used_render_pass_list.size() == 6);
@@ -1386,7 +1386,7 @@ TEST_CASE("CreateRenderPassListDebug") {
   auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
   auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, memory_resource.get());
   auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("mainbuffer")}, memory_resource.get());
-  auto used_render_pass_list = GetBufferProducerPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
+  auto used_render_pass_list = GetBufferProducerPassList(render_pass_adjacency_graph, CreateValueSetFromMap(mandatory_buffer_id_list, memory_resource.get()), memory_resource.get());
   auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
   used_render_pass_list = GetUsedRenderPassList(std::move(used_render_pass_list), consumer_producer_render_pass_map);
   CHECK(used_render_pass_list.size() == 3);
@@ -1408,7 +1408,7 @@ TEST_CASE("CreateRenderPassListWithSkyboxCreation") {
   auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
   auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, memory_resource.get());
   auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("mainbuffer"), StrId("skybox")}, memory_resource.get());
-  auto used_render_pass_list = GetBufferProducerPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
+  auto used_render_pass_list = GetBufferProducerPassList(render_pass_adjacency_graph, CreateValueSetFromMap(mandatory_buffer_id_list, memory_resource.get()), memory_resource.get());
   auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
   used_render_pass_list = GetUsedRenderPassList(std::move(used_render_pass_list), consumer_producer_render_pass_map);
   CHECK(used_render_pass_list.size() == 5);
@@ -1434,7 +1434,7 @@ TEST_CASE("CreateRenderPassListTransferTexture") {
   auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
   auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, memory_resource.get());
   auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("mainbuffer"), StrId("skybox")}, memory_resource.get());
-  auto used_render_pass_list = GetBufferProducerPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
+  auto used_render_pass_list = GetBufferProducerPassList(render_pass_adjacency_graph, CreateValueSetFromMap(mandatory_buffer_id_list, memory_resource.get()), memory_resource.get());
   auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
   used_render_pass_list = GetUsedRenderPassList(std::move(used_render_pass_list), consumer_producer_render_pass_map);
   auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
@@ -1455,7 +1455,7 @@ TEST_CASE("CreateRenderPassListTransparent") {
   CHECK(buffer_id_list[StrId("transparent")][0] == buffer_id_list[StrId("lighting")][5]);
   auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, memory_resource.get());
   auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("mainbuffer")}, memory_resource.get());
-  auto used_render_pass_list = GetBufferProducerPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
+  auto used_render_pass_list = GetBufferProducerPassList(render_pass_adjacency_graph, CreateValueSetFromMap(mandatory_buffer_id_list, memory_resource.get()), memory_resource.get());
   auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
   used_render_pass_list = GetUsedRenderPassList(std::move(used_render_pass_list), consumer_producer_render_pass_map);
   auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
@@ -1493,7 +1493,7 @@ TEST_CASE("CreateRenderPassListCombined") {
     CHECK(buffer_id_list_alias_applied[StrId("deferredshadow-hard")][1] == buffer_id_list_alias_applied[StrId("lighting")][4]);
     auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, memory_resource.get());
     auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, {StrId("mainbuffer"), StrId("skybox")}, memory_resource.get());
-    auto used_render_pass_list = GetBufferProducerPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
+    auto used_render_pass_list = GetBufferProducerPassList(render_pass_adjacency_graph, CreateValueSetFromMap(mandatory_buffer_id_list, memory_resource.get()), memory_resource.get());
     auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
     used_render_pass_list = GetUsedRenderPassList(std::move(used_render_pass_list), consumer_producer_render_pass_map);
     CHECK(!used_render_pass_list.contains(StrId("deferredshadow-pcss")));
@@ -1516,7 +1516,7 @@ TEST_CASE("CreateRenderPassListCombined") {
     CHECK(buffer_id_list_alias_applied[StrId("deferredshadow-pcss")][1] == buffer_id_list_alias_applied[StrId("lighting")][4]);
     auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, memory_resource.get());
     auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, {StrId("mainbuffer"), StrId("skybox")}, memory_resource.get());
-    auto used_render_pass_list = GetBufferProducerPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
+    auto used_render_pass_list = GetBufferProducerPassList(render_pass_adjacency_graph, CreateValueSetFromMap(mandatory_buffer_id_list, memory_resource.get()), memory_resource.get());
     auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
     used_render_pass_list = GetUsedRenderPassList(std::move(used_render_pass_list), consumer_producer_render_pass_map);
     CHECK(!used_render_pass_list.contains(StrId("deferredshadow-hard")));
@@ -1539,7 +1539,7 @@ TEST_CASE("CreateRenderPassListCombined") {
     CHECK(buffer_id_list_alias_applied[StrId("deferredshadow-hard")][1] == buffer_id_list_alias_applied[StrId("lighting")][4]);
     auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, memory_resource.get());
     auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list_alias_applied, {StrId("mainbuffer")}, memory_resource.get());
-    auto used_render_pass_list = GetBufferProducerPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
+    auto used_render_pass_list = GetBufferProducerPassList(render_pass_adjacency_graph, CreateValueSetFromMap(mandatory_buffer_id_list, memory_resource.get()), memory_resource.get());
     auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
     used_render_pass_list = GetUsedRenderPassList(std::move(used_render_pass_list), consumer_producer_render_pass_map);
     CHECK(!used_render_pass_list.contains(StrId("deferredshadow-pcss")));
@@ -1687,7 +1687,7 @@ TEST_CASE("buffer creation desc and allocation") {
   auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
   auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, memory_resource.get());
   auto mandatory_buffer_id_list = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, {StrId("4")}, memory_resource.get());
-  auto used_render_pass_list = GetBufferProducerPassList(render_pass_adjacency_graph, std::move(mandatory_buffer_id_list), memory_resource.get());
+  auto used_render_pass_list = GetBufferProducerPassList(render_pass_adjacency_graph, CreateValueSetFromMap(mandatory_buffer_id_list, memory_resource.get()), memory_resource.get());
   auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
   used_render_pass_list = GetUsedRenderPassList(std::move(used_render_pass_list), consumer_producer_render_pass_map);
   auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);

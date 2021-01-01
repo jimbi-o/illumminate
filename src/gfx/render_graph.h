@@ -132,7 +132,7 @@ class RenderPassAdjacencyGraph {
 };
 RenderPassAdjacencyGraph CreateRenderPassAdjacencyGraph(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, std::pmr::memory_resource* memory_resource);
 using MandatoryOutputBufferNameList = std::pmr::vector<StrId>;
-using MandatoryOutputBufferIdList = std::pmr::unordered_set<BufferId>;
+using MandatoryOutputBufferIdList = std::pmr::unordered_map<StrId, BufferId>;
 MandatoryOutputBufferIdList IdentifyMandatoryOutputBufferId(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, const MandatoryOutputBufferNameList& mandatory_buffer_name_list, std::pmr::memory_resource* memory_resource);
 std::pmr::unordered_set<StrId> GetBufferProducerPassList(const RenderPassAdjacencyGraph& adjacency_graph, std::pmr::unordered_set<BufferId>&& buffer_id_list, std::pmr::memory_resource* memory_resource);
 using ConsumerProducerRenderPassMap = std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>;

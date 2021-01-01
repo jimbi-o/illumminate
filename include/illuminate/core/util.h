@@ -32,4 +32,13 @@ constexpr uint32_t CountSetBitNum(const uint32_t& val) {
 }
 void ConnectAdjacencyNodes(const StrId& node_name, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>& adjacency_graph, std::pmr::unordered_set<StrId>* dst, std::pmr::unordered_set<StrId>* work);
 }
+template <typename K, typename V>
+constexpr auto CreateValueSetFromMap(const std::pmr::unordered_map<K,V>& map, std::pmr::memory_resource* memory_resource) {
+  std::pmr::unordered_set<V> ret{memory_resource};
+  ret.reserve(map.size());
+  for (auto& [k,v] : map) {
+    ret.insert(v);
+  }
+  return ret;
+}
 #endif
