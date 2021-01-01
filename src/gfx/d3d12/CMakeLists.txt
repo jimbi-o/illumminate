@@ -29,6 +29,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(d3dx12)
 
 add_subdirectory("../win32" "${CMAKE_CURRENT_BINARY_DIR}/gfx/win32")
+add_subdirectory(".." "${CMAKE_CURRENT_BINARY_DIR}/gfx")
 
 if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
   if (NOT DEFINED BUILD_WITH_TEST)
@@ -58,7 +59,7 @@ else()
   target_compile_definitions(illuminategfxd3d12 PRIVATE DOCTEST_CONFIG_DISABLE)
 endif()
 
-target_link_libraries(illuminategfxd3d12 PRIVATE dxguid.lib illuminategfxwin32)
+target_link_libraries(illuminategfxd3d12 PRIVATE dxguid.lib illuminategfx illuminategfxwin32)
 
 target_include_directories(illuminategfxd3d12
   PUBLIC

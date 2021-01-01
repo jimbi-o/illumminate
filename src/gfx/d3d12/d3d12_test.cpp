@@ -5,13 +5,80 @@
 #include "d3d12_dxgi_core.h"
 #include "d3d12_swapchain.h"
 #include "gfx/win32/win32_window.h"
+#include "gfx/render_graph.h"
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
+#ifdef BUILD_WITH_TEST
+namespace {
+const uint32_t buffer_size_in_bytes = 32 * 1024;
+std::byte buffer[buffer_size_in_bytes]{};
+using namespace illuminate::gfx;
+using namespace illuminate::gfx::d3d12;
+constexpr D3D12_RESOURCE_BARRIER_FLAGS ConvertToD3d12BarrierSplitFlag(const BarrierSplitType& split_type) {
+  switch (split_type) {
+    case BarrierSplitType::kBegin: return D3D12_RESOURCE_BARRIER_FLAG_BEGIN_ONLY;
+    case BarrierSplitType::kEnd:   return D3D12_RESOURCE_BARRIER_FLAG_END_ONLY;
+    case BarrierSplitType::kNone:  return D3D12_RESOURCE_BARRIER_FLAG_NONE;
+  }
+}
+constexpr D3D12_RESOURCE_STATES ConvertToD3d12ResourceState(const BufferStateFlags& flags) {
+  D3D12_RESOURCE_STATES state{};
+  if (flags & kBufferStateFlagCbv) {
+    state |= D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
+  }
+  if (flags & kBufferStateFlagSrvPsOnly) {
+    state |= D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+  }
+  if (flags & kBufferStateFlagSrvNonPs) {
+    state |= D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+  }
+  if (flags & kBufferStateFlagUav) {
+    state |= D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+  }
+  if (flags & kBufferStateFlagRtv) {
+    state |= D3D12_RESOURCE_STATE_RENDER_TARGET;
+  }
+  if (flags & kBufferStateFlagDsvWrite) {
+    state |= D3D12_RESOURCE_STATE_DEPTH_WRITE;
+  }
+  if (flags & kBufferStateFlagDsvRead) {
+    state |= D3D12_RESOURCE_STATE_DEPTH_READ;
+  }
+  if (flags & kBufferStateFlagCopySrc) {
+    state |= D3D12_RESOURCE_STATE_COPY_SOURCE;
+  }
+  if (flags & kBufferStateFlagCopyDst) {
+    state |= D3D12_RESOURCE_STATE_COPY_DEST;
+  }
+  if (flags & kBufferStateFlagPresent) {
+    state |= D3D12_RESOURCE_STATE_PRESENT;
+  }
+  return state;
+}
+void ExecuteBarrier(const std::pmr::vector<BarrierConfig>& barrier_info_list, const std::pmr::unordered_map<BufferId, ID3D12Resource*>& physical_buffer, D3d12CommandList* const command_list, std::pmr::memory_resource* memory_resource) {
+  const auto barrier_num = static_cast<uint32_t>(barrier_info_list.size());
+  std::pmr::vector<D3D12_RESOURCE_BARRIER> barriers{memory_resource};
+  barriers.reserve(barrier_num);
+  for (auto& barrier_info : barrier_info_list) {
+    barriers.push_back({});
+    auto& barrier = barriers.back();
+    barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Flags = ConvertToD3d12BarrierSplitFlag(barrier_info.split_type);
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barrier.Transition.pResource   = physical_buffer.at(barrier_info.buffer_id);
+    barrier.Transition.StateBefore = ConvertToD3d12ResourceState(barrier_info.state_flag_before_pass);
+    barrier.Transition.StateAfter  = ConvertToD3d12ResourceState(barrier_info.state_flag_after_pass);
+  }
+  command_list->ResourceBarrier(barrier_num, barriers.data());
+}
+}
+#endif
 TEST_CASE("d3d12/render") {
   const uint32_t buffer_num = 2;
   const uint32_t swapchain_buffer_num = buffer_num + 1;
   using namespace illuminate::gfx;
   using namespace illuminate::gfx::d3d12;
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
   DxgiCore dxgi_core;
   CHECK(dxgi_core.Init());
   Device device;
@@ -28,6 +95,31 @@ TEST_CASE("d3d12/render") {
   CHECK(command_list_pool.Init(device.Get()));
   std::vector<std::vector<ID3D12CommandAllocator**>> allocators(buffer_num);
   SUBCASE("clear swapchain rtv@graphics queue") {
+    RenderPassList render_pass_list{memory_resource.get()};
+    render_pass_list.push_back(RenderPass(
+        StrId("mainpass"),
+        {
+          {
+            BufferConfig(StrId("swapchain"), BufferStateType::kRtv),
+          },
+          memory_resource.get()
+        }
+    ));
+    using RenderFunction = std::function<void(D3d12CommandList* const, const D3D12_CPU_DESCRIPTOR_HANDLE)>;
+    std::pmr::unordered_map<StrId, RenderFunction> render_functions{memory_resource.get()};
+    render_functions.insert({StrId("mainpass"), [](D3d12CommandList* const command_list, const D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle){
+      const FLOAT clear_color[4] = {0.0f,1.0f,1.0f,1.0f};
+      command_list->ClearRenderTargetView(rtv_handle, clear_color, 0, nullptr);
+    }});
+    auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
+    auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
+    MandatoryOutputBufferNameList named_buffer_list{memory_resource.get()};
+    named_buffer_list.insert({StrId("swapchain")});
+    auto named_buffers = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, named_buffer_list, memory_resource.get());
+    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()}, buffer_state_after_render_pass_list{memory_resource.get()};
+    buffer_state_before_render_pass_list.insert({named_buffers.at(StrId("swapchain")), kBufferStateFlagPresent});
+    buffer_state_after_render_pass_list.insert({named_buffers.at(StrId("swapchain")), kBufferStateFlagPresent});
+    auto barrier = ConfigureBarrier(render_pass_id_map, render_pass_order, {}, buffer_id_list, buffer_state_before_render_pass_list, buffer_state_after_render_pass_list, memory_resource.get());
     auto queue_type = CommandQueueType::kGraphics;
     uint64_t signal_val = 0;
     command_queue.WaitOnCpu({{queue_type, signal_val}});
@@ -37,16 +129,26 @@ TEST_CASE("d3d12/render") {
     allocators.front().clear();
     std::rotate(allocators.begin(), allocators.begin() + 1, allocators.end());
     swapchain.UpdateBackBufferIndex();
-    D3d12CommandList** command_list = nullptr;
+    std::pmr::unordered_map<BufferId, ID3D12Resource*> physical_buffer{memory_resource.get()};
+    physical_buffer.insert({named_buffers.at(StrId("swapchain")), swapchain.GetResource()});
+    D3d12CommandList** command_lists = nullptr;
     {
       auto command_allocators = command_allocator.RetainCommandAllocator(queue_type, 1);
-      command_list = command_list_pool.RetainCommandList(queue_type, 1, command_allocators);
+      command_lists = command_list_pool.RetainCommandList(queue_type, 1, command_allocators);
       allocators.back().push_back(std::move(command_allocators));
     }
-    const FLOAT clear_color[4] = {0.0f,1.0f,1.0f,1.0f};
-    command_list[0]->ClearRenderTargetView(swapchain.GetRtvHandle(), clear_color, 0, nullptr);
-    command_list[0]->Close();
-    command_list_pool.ReturnCommandList(command_list);
+    for (auto& pass_name : render_pass_order) {
+      if (barrier.barrier_before_pass.contains(pass_name)) {
+        ExecuteBarrier(barrier.barrier_before_pass.at(pass_name), physical_buffer, command_lists[0], memory_resource.get());
+      }
+      render_functions.at(pass_name)(command_lists[0], swapchain.GetRtvHandle());
+      if (barrier.barrier_after_pass.contains(pass_name)) {
+        ExecuteBarrier(barrier.barrier_after_pass.at(pass_name), physical_buffer, command_lists[0], memory_resource.get());
+      }
+    }
+    command_lists[0]->Close();
+    command_list_pool.ReturnCommandList(command_lists);
+    command_queue.Get(queue_type)->ExecuteCommandLists(1, reinterpret_cast<ID3D12CommandList**>(command_lists));
     swapchain.Present();
   }
   SUBCASE("clear swapchain uav@compute queue") {
