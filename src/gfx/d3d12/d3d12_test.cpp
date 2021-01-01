@@ -96,21 +96,37 @@ TEST_CASE("d3d12/render") {
   std::vector<std::vector<ID3D12CommandAllocator**>> allocators(buffer_num);
   SUBCASE("clear swapchain rtv@graphics queue") {
     RenderPassList render_pass_list{memory_resource.get()};
-    render_pass_list.push_back(RenderPass(
-        StrId("mainpass"),
-        {
+    {
+      render_pass_list.push_back(RenderPass(
+          StrId("mainpass"),
           {
-            BufferConfig(StrId("swapchain"), BufferStateType::kRtv),
-          },
-          memory_resource.get()
-        }
-    ));
+            {
+              BufferConfig(StrId("swapchain"), BufferStateType::kRtv),
+            },
+            memory_resource.get()
+          }
+      ));
+      render_pass_list.push_back(RenderPass(
+          StrId("present"),
+          {
+            {
+              BufferConfig(StrId("swapchain"), BufferStateType::kPresent),
+            },
+            memory_resource.get()
+          }
+      ));
+    }
     using RenderFunction = std::function<void(D3d12CommandList* const, const D3D12_CPU_DESCRIPTOR_HANDLE)>;
     std::pmr::unordered_map<StrId, RenderFunction> render_functions{memory_resource.get()};
-    render_functions.insert({StrId("mainpass"), [](D3d12CommandList* const command_list, const D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle){
-      const FLOAT clear_color[4] = {0.0f,1.0f,1.0f,1.0f};
-      command_list->ClearRenderTargetView(rtv_handle, clear_color, 0, nullptr);
-    }});
+    {
+      render_functions.insert({StrId("mainpass"), [](D3d12CommandList* const command_list, const D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle){
+        const FLOAT clear_color[4] = {0.0f,1.0f,1.0f,1.0f};
+        command_list->ClearRenderTargetView(rtv_handle, clear_color, 0, nullptr);
+      }});
+      render_functions.insert({StrId("present"), [&swapchain]([[maybe_unused]]D3d12CommandList* const command_list, [[maybe_unused]]const D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle){
+        swapchain.Present();
+      }});
+    }
     auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
     auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
     MandatoryOutputBufferNameList named_buffer_list{memory_resource.get()};
@@ -118,7 +134,6 @@ TEST_CASE("d3d12/render") {
     auto named_buffers = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, named_buffer_list, memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()}, buffer_state_after_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({named_buffers.at(StrId("swapchain")), kBufferStateFlagPresent});
-    buffer_state_after_render_pass_list.insert({named_buffers.at(StrId("swapchain")), kBufferStateFlagPresent});
     auto barrier = ConfigureBarrier(render_pass_id_map, render_pass_order, {}, buffer_id_list, buffer_state_before_render_pass_list, buffer_state_after_render_pass_list, memory_resource.get());
     auto queue_type = CommandQueueType::kGraphics;
     uint64_t signal_val = 0;
@@ -141,15 +156,16 @@ TEST_CASE("d3d12/render") {
       if (barrier.barrier_before_pass.contains(pass_name)) {
         ExecuteBarrier(barrier.barrier_before_pass.at(pass_name), physical_buffer, command_lists[0], memory_resource.get());
       }
+      if (pass_name == StrId("present")) {
+        command_lists[0]->Close();
+        command_queue.Get(queue_type)->ExecuteCommandLists(1, reinterpret_cast<ID3D12CommandList**>(command_lists));
+        command_list_pool.ReturnCommandList(command_lists);
+      }
       render_functions.at(pass_name)(command_lists[0], swapchain.GetRtvHandle());
       if (barrier.barrier_after_pass.contains(pass_name)) {
         ExecuteBarrier(barrier.barrier_after_pass.at(pass_name), physical_buffer, command_lists[0], memory_resource.get());
       }
     }
-    command_lists[0]->Close();
-    command_list_pool.ReturnCommandList(command_lists);
-    command_queue.Get(queue_type)->ExecuteCommandLists(1, reinterpret_cast<ID3D12CommandList**>(command_lists));
-    swapchain.Present();
   }
   SUBCASE("clear swapchain uav@compute queue") {
     // TODO
