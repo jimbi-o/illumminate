@@ -153,13 +153,13 @@ TEST_CASE("d3d12/render") {
       allocators.back().push_back(std::move(command_allocators));
     }
     for (auto& pass_name : render_pass_order) {
-      if (barrier.barrier_before_pass.contains(pass_name)) {
-        ExecuteBarrier(barrier.barrier_before_pass.at(pass_name), physical_buffer, command_lists[0], memory_resource.get());
-      }
       if (pass_name == StrId("present")) {
         command_lists[0]->Close();
         command_queue.Get(queue_type)->ExecuteCommandLists(1, reinterpret_cast<ID3D12CommandList**>(command_lists));
         command_list_pool.ReturnCommandList(command_lists);
+      }
+      if (barrier.barrier_before_pass.contains(pass_name)) {
+        ExecuteBarrier(barrier.barrier_before_pass.at(pass_name), physical_buffer, command_lists[0], memory_resource.get());
       }
       render_functions.at(pass_name)(command_lists[0], swapchain.GetRtvHandle());
       if (barrier.barrier_after_pass.contains(pass_name)) {
