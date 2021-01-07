@@ -185,6 +185,9 @@ TEST_CASE("d3d12/render") {
   SUBCASE("transfer texture from cpu and use@graphics queue") {
     // TODO
   }
+  SUBCASE("exec frame multiple times") {
+    // TODO
+  }
   while (!allocators.empty()) {
     for (auto a : allocators.back()) {
       command_allocator.ReturnCommandAllocator(a);
