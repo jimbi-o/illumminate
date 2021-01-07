@@ -132,9 +132,9 @@ TEST_CASE("d3d12/render") {
     MandatoryOutputBufferNameList named_buffer_list{memory_resource.get()};
     named_buffer_list.insert({StrId("swapchain")});
     auto named_buffers = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, named_buffer_list, memory_resource.get());
-    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()}, buffer_state_after_render_pass_list{memory_resource.get()};
+    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({named_buffers.at(StrId("swapchain")), kBufferStateFlagPresent});
-    auto barrier = ConfigureBarrier(render_pass_id_map, render_pass_order, {}, buffer_id_list, buffer_state_before_render_pass_list, buffer_state_after_render_pass_list, memory_resource.get());
+    auto barrier = ConfigureBarrier(render_pass_id_map, render_pass_order, {}, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
     auto queue_type = CommandQueueType::kGraphics;
     uint64_t signal_val = 0;
     command_queue.WaitOnCpu({{queue_type, signal_val}});
