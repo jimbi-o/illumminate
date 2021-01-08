@@ -318,48 +318,41 @@ std::tuple<BatchInfoList, RenderPassOrder> ConfigureAsyncComputeBatching(const R
   }
   return {batch_info, render_pass_unprocessed};
 }
-std::tuple<ProducerPassSignalList, ConsumerPassWaitingSignalList> ConfigureBufferResourceDependency(const RenderPassIdMap& render_pass_id_map, const BatchInfoList& src_batch, const ConsumerProducerRenderPassMap& consumer_producer_render_pass_map, std::pmr::memory_resource* memory_resource) {
-  ProducerPassSignalList producer_pass_signal_list{memory_resource};
-  ConsumerPassWaitingSignalList consumer_pass_waiting_signal_list{memory_resource};
+PassSignalInfo ConfigureBufferResourceDependency(const RenderPassIdMap& render_pass_id_map, const BatchInfoList& src_batch, const ConsumerProducerRenderPassMap& consumer_producer_render_pass_map, std::pmr::memory_resource* memory_resource) {
+  PassSignalInfo pass_signal_info{memory_resource};
+  std::pmr::unordered_map<StrId, uint32_t> producer_pass_signal_list{memory_resource};
   std::pmr::unordered_set<StrId> signal_consumed_producers{memory_resource};
-  {
-    std::pmr::unordered_map<CommandQueueType, uint64_t> next_signal_val{memory_resource};
-    std::pmr::unordered_map<CommandQueueType, std::pmr::unordered_map<CommandQueueType, uint64_t>> max_waiting_signal_val{memory_resource};
-    for (auto& batch : src_batch) {
-      for (auto& consumer_pass_name : batch) {
-        auto consumer_command_queue_type = render_pass_id_map.at(consumer_pass_name).command_queue_type;
-        if (!next_signal_val.contains(consumer_command_queue_type)) {
-          next_signal_val.insert({consumer_command_queue_type, 1});
+  std::pmr::unordered_map<CommandQueueType, uint64_t> next_signal_val{memory_resource};
+  std::pmr::unordered_map<CommandQueueType, std::pmr::unordered_map<CommandQueueType, uint64_t>> max_waiting_signal_val{memory_resource};
+  for (auto& batch : src_batch) {
+    for (auto& consumer_pass_name : batch) {
+      auto consumer_command_queue_type = render_pass_id_map.at(consumer_pass_name).command_queue_type;
+      if (!next_signal_val.contains(consumer_command_queue_type)) {
+        next_signal_val.insert({consumer_command_queue_type, 1});
+      }
+      producer_pass_signal_list.insert({consumer_pass_name, next_signal_val.at(consumer_command_queue_type)});
+      next_signal_val[consumer_command_queue_type]++;
+      if (!consumer_producer_render_pass_map.contains(consumer_pass_name)) continue;
+      for (auto& producer_pass_name : consumer_producer_render_pass_map.at(consumer_pass_name)) {
+        if (!producer_pass_signal_list.contains(producer_pass_name)) continue;
+        auto producer_command_queue_type = render_pass_id_map.at(producer_pass_name).command_queue_type;
+        if (producer_command_queue_type == consumer_command_queue_type) continue;
+        if (max_waiting_signal_val.contains(consumer_command_queue_type)
+            && max_waiting_signal_val.at(consumer_command_queue_type).contains(producer_command_queue_type)
+            && producer_pass_signal_list.at(producer_pass_name) <= max_waiting_signal_val.at(consumer_command_queue_type).at(producer_command_queue_type)) continue;
+        if (!max_waiting_signal_val.contains(consumer_command_queue_type)) {
+          max_waiting_signal_val.insert({consumer_command_queue_type, std::pmr::unordered_map<CommandQueueType, uint64_t>{memory_resource}});
         }
-        producer_pass_signal_list.insert({consumer_pass_name, next_signal_val.at(consumer_command_queue_type)});
-        next_signal_val[consumer_command_queue_type]++;
-        if (!consumer_producer_render_pass_map.contains(consumer_pass_name)) continue;
-        for (auto& producer_pass_name : consumer_producer_render_pass_map.at(consumer_pass_name)) {
-          if (!producer_pass_signal_list.contains(producer_pass_name)) continue;
-          auto producer_command_queue_type = render_pass_id_map.at(producer_pass_name).command_queue_type;
-          if (producer_command_queue_type == consumer_command_queue_type) continue;
-          if (max_waiting_signal_val.contains(consumer_command_queue_type)
-              && max_waiting_signal_val.at(consumer_command_queue_type).contains(producer_command_queue_type)
-              && producer_pass_signal_list.at(producer_pass_name) <= max_waiting_signal_val.at(consumer_command_queue_type).at(producer_command_queue_type)) continue;
-          if (!max_waiting_signal_val.contains(consumer_command_queue_type)) {
-            max_waiting_signal_val.insert({consumer_command_queue_type, std::pmr::unordered_map<CommandQueueType, uint64_t>{memory_resource}});
-          }
-          max_waiting_signal_val.at(consumer_command_queue_type)[producer_command_queue_type] = producer_pass_signal_list.at(producer_pass_name);
-          signal_consumed_producers.insert(producer_pass_name);
-          consumer_pass_waiting_signal_list.insert({consumer_pass_name, producer_pass_name});
+        max_waiting_signal_val.at(consumer_command_queue_type)[producer_command_queue_type] = producer_pass_signal_list.at(producer_pass_name);
+        signal_consumed_producers.insert(producer_pass_name);
+        if (!pass_signal_info.contains(producer_pass_name)) {
+          pass_signal_info.insert({producer_pass_name, std::pmr::unordered_set<StrId>{memory_resource}});
         }
+        pass_signal_info.at(producer_pass_name).insert(consumer_pass_name);
       }
     }
   }
-  auto it = producer_pass_signal_list.begin();
-  while (it != producer_pass_signal_list.end()) {
-    if (signal_consumed_producers.contains(it->first)) {
-      it++;
-      continue;
-    }
-    it = producer_pass_signal_list.erase(it);
-  }
-  return {producer_pass_signal_list, consumer_pass_waiting_signal_list};
+  return pass_signal_info;
 }
 PassSignalInfo ConvertBatchToSignalInfo(const BatchInfoList& batch_info_list, const RenderPassIdMap& render_pass_id_map, std::pmr::memory_resource* memory_resource) {
   PassSignalInfo pass_signal_wait_info{memory_resource};
@@ -1691,7 +1684,7 @@ TEST_CASE("buffer creation desc and allocation") {
   auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
   used_render_pass_list = GetUsedRenderPassList(std::move(used_render_pass_list), consumer_producer_render_pass_map);
   auto culled_render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
-  auto buffer_creation_descs = ConfigureBufferCreationDescs(culled_render_pass_id_map, render_pass_order, buffer_id_list, {12, 34}, {56, 78}, memory_resource.get());
+  auto buffer_creation_descs = ConfigureBufferCreationDescs(render_pass_id_map, culled_render_pass_order, buffer_id_list, {12, 34}, {56, 78}, memory_resource.get());
   CHECK(buffer_creation_descs.size() == 5);
   CHECK(buffer_creation_descs[0].initial_state_flag == kBufferStateFlagRtv);
   CHECK(buffer_creation_descs[0].state_flags == kBufferStateFlagRtv);
@@ -1831,13 +1824,14 @@ TEST_CASE("ConfigureResourceDependencyBatching") {
   consumer_producer_render_pass_map.at(StrId("F")).insert(StrId("C"));
   consumer_producer_render_pass_map.insert({StrId("G"), std::pmr::unordered_set<StrId>{}});
   consumer_producer_render_pass_map.at(StrId("G")).insert(StrId("C"));
-  auto [producer_pass_signal_list, consumer_pass_waiting_signal_list] = ConfigureBufferResourceDependency(render_pass_id_map, async_compute_batching, consumer_producer_render_pass_map, memory_resource.get());
-  CHECK(producer_pass_signal_list.size() == 2);
-  CHECK(producer_pass_signal_list.contains(StrId("A")));
-  CHECK(producer_pass_signal_list.contains(StrId("D")));
-  CHECK(consumer_pass_waiting_signal_list.size() == 2);
-  CHECK(consumer_pass_waiting_signal_list[StrId("C")] == StrId("A"));
-  CHECK(consumer_pass_waiting_signal_list[StrId("E")] == StrId("D"));
+  auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, async_compute_batching, consumer_producer_render_pass_map, memory_resource.get());
+  CHECK(pass_signal_info.size() == 2);
+  CHECK(pass_signal_info.contains(StrId("A")));
+  CHECK(pass_signal_info.at(StrId("A")).size() == 1);
+  CHECK(pass_signal_info.at(StrId("A")).contains(StrId("C")));
+  CHECK(pass_signal_info.contains(StrId("D")));
+  CHECK(pass_signal_info.at(StrId("D")).size() == 1);
+  CHECK(pass_signal_info.at(StrId("D")).contains(StrId("E")));
 }
 TEST_CASE("AsyncComputeIntraFrame") {
   using namespace illuminate;
@@ -1900,7 +1894,7 @@ TEST_CASE("AsyncComputeInterFrame") {
   CHECK(render_pass_unprocessed[1] == StrId("deferredshadow-pcss"));
   CHECK(render_pass_unprocessed[2] == StrId("lighting"));
   CHECK(render_pass_unprocessed[3] == StrId("postprocess"));
-  auto [producer_pass_signal_list, consumer_pass_waiting_signal_list] = ConfigureBufferResourceDependency(render_pass_id_map, async_compute_batching, consumer_producer_render_pass_map, memory_resource.get());
+  auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, async_compute_batching, consumer_producer_render_pass_map, memory_resource.get());
   render_pass_list = CreateRenderPassListAsyncComputeInterFrame(memory_resource.get());
   std::tie(render_pass_id_map, render_pass_order) = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
   std::tie(async_compute_batching, render_pass_unprocessed) = ConfigureAsyncComputeBatching(render_pass_id_map, std::move(render_pass_order), std::move(render_pass_unprocessed), async_group_info, memory_resource.get());
@@ -1918,7 +1912,7 @@ TEST_CASE("AsyncComputeInterFrame") {
   CHECK(render_pass_unprocessed[1] == StrId("deferredshadow-pcss"));
   CHECK(render_pass_unprocessed[2] == StrId("lighting"));
   CHECK(render_pass_unprocessed[3] == StrId("postprocess"));
-  std::tie(producer_pass_signal_list, consumer_pass_waiting_signal_list) = ConfigureBufferResourceDependency(render_pass_id_map, async_compute_batching, consumer_producer_render_pass_map, memory_resource.get());
+  pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, async_compute_batching, consumer_producer_render_pass_map, memory_resource.get());
   std::tie(async_compute_batching, render_pass_unprocessed) = ConfigureAsyncComputeBatching(render_pass_id_map, {}, std::move(render_pass_unprocessed), async_group_info, memory_resource.get());
   CHECK(async_compute_batching.size() == 1);
   CHECK(async_compute_batching[0].size() == 4);
@@ -1927,7 +1921,7 @@ TEST_CASE("AsyncComputeInterFrame") {
   CHECK(async_compute_batching[0][2] == StrId("lighting"));
   CHECK(async_compute_batching[0][3] == StrId("postprocess"));
   CHECK(render_pass_unprocessed.empty());
-  std::tie(producer_pass_signal_list, consumer_pass_waiting_signal_list) = ConfigureBufferResourceDependency(render_pass_id_map, async_compute_batching, consumer_producer_render_pass_map, memory_resource.get());
+  pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, async_compute_batching, consumer_producer_render_pass_map, memory_resource.get());
 }
 TEST_CASE("CountSetBitNum") {
   using namespace illuminate;

@@ -219,9 +219,8 @@ using BatchInfoList = std::pmr::vector<std::pmr::vector<StrId>>;
 enum class AsyncComputeBatchPairType : uint8_t { kCurrentFrame = 0, kPairComputeWithNextFrameGraphics, };
 using AsyncComputePairInfo = std::pmr::unordered_map<StrId, AsyncComputeBatchPairType>;
 std::tuple<BatchInfoList, RenderPassOrder> ConfigureAsyncComputeBatching(const RenderPassIdMap& render_pass_id_map, RenderPassOrder&& current_render_pass_order, RenderPassOrder&& prev_render_pass_order, const AsyncComputePairInfo& async_group_info, std::pmr::memory_resource* memory_resource);
-using ProducerPassSignalList = std::pmr::unordered_map<StrId, uint32_t>;
-using ConsumerPassWaitingSignalList = std::pmr::unordered_map<StrId, StrId>;
-std::tuple<ProducerPassSignalList, ConsumerPassWaitingSignalList> ConfigureBufferResourceDependency(const RenderPassIdMap& render_pass_id_map, const BatchInfoList& src_batch, const ConsumerProducerRenderPassMap& consumer_producer_render_pass_map, std::pmr::memory_resource* memory_resource);
+using PassSignalInfo = std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>;
+PassSignalInfo ConfigureBufferResourceDependency(const RenderPassIdMap& render_pass_id_map, const BatchInfoList& src_batch, const ConsumerProducerRenderPassMap& consumer_producer_render_pass_map, std::pmr::memory_resource* memory_resource);
 // barrier
 using BufferStateList = std::pmr::unordered_map<uint32_t, BufferStateFlags>;
 enum class BarrierSplitType : uint8_t { kNone = 0, kBegin, kEnd, };
@@ -237,7 +236,6 @@ struct PassBarrierInfoSet {
   PassBarrierInfo barrier_before_pass;
   PassBarrierInfo barrier_after_pass;
 };
-using PassSignalInfo = std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>;
 PassSignalInfo ConvertBatchToSignalInfo(const BatchInfoList& batch_info_list, const RenderPassIdMap& render_pass_id_map, std::pmr::memory_resource* memory_resource);
 RenderPassOrder ConvertBatchInfoBackToRenderPassOrder(BatchInfoList&& batch_info_list, std::pmr::memory_resource* memory_resource);
 PassBarrierInfoSet ConfigureBarrier(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const PassSignalInfo& pass_signal_info, const BufferIdList& buffer_id_list, const BufferStateList& buffer_state_before_render_pass_list, const BufferStateList& buffer_state_after_render_pass_list, std::pmr::memory_resource* memory_resource);
