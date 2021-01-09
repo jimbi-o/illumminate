@@ -380,6 +380,14 @@ PassSignalInfo ConvertBatchToSignalInfo(const BatchInfoList& batch_info_list, co
   }
   return pass_signal_wait_info;
 }
+PassSignalInfo MergePassSignalInfo(PassSignalInfo&& a, PassSignalInfo&& b) {
+  auto&& dst = std::move(a);
+  while (!b.empty()) {
+    dst[b.begin()->first].insert(std::make_move_iterator(b.begin()->second.begin()), std::make_move_iterator(b.begin()->second.end()));
+    b.erase(b.begin());
+  }
+  return std::move(dst);
+}
 RenderPassOrder ConvertBatchInfoBackToRenderPassOrder(BatchInfoList&& batch_info_list, std::pmr::memory_resource* memory_resource) {
   RenderPassOrder render_pass_order{memory_resource};
   while (!batch_info_list.empty()) {
@@ -2960,6 +2968,35 @@ TEST_CASE("barrier") {
     CHECK(barrier_info.barrier_before_pass[StrId("D")][0].split_type == BarrierSplitType::kEnd);
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("D")));
   }
+}
+TEST_CASE("MergePassSignalInfo") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
+  PassSignalInfo a{memory_resource.get()}, b{memory_resource.get()};
+  a.insert({StrId("a"), std::pmr::unordered_set<StrId>{memory_resource.get()}});
+  a.at(StrId("a")).insert(StrId("a"));
+  a.insert({StrId("c"), std::pmr::unordered_set<StrId>{memory_resource.get()}});
+  a.at(StrId("c")).insert(StrId("1"));
+  a.at(StrId("c")).insert(StrId("2"));
+  b.insert({StrId("b"), std::pmr::unordered_set<StrId>{memory_resource.get()}});
+  b.at(StrId("b")).insert(StrId("b"));
+  b.insert({StrId("c"), std::pmr::unordered_set<StrId>{memory_resource.get()}});
+  b.at(StrId("c")).insert(StrId("3"));
+  b.at(StrId("c")).insert(StrId("4"));
+  a = MergePassSignalInfo(std::move(a), std::move(b));
+  CHECK(a.contains(StrId("a")));
+  CHECK(a.contains(StrId("b")));
+  CHECK(a.contains(StrId("c")));
+  CHECK(a.at(StrId("a")).size() == 1);
+  CHECK(a.at(StrId("a")).contains(StrId("a")));
+  CHECK(a.at(StrId("b")).size() == 1);
+  CHECK(a.at(StrId("b")).contains(StrId("b")));
+  CHECK(a.at(StrId("c")).size() == 4);
+  CHECK(a.at(StrId("c")).contains(StrId("1")));
+  CHECK(a.at(StrId("c")).contains(StrId("2")));
+  CHECK(a.at(StrId("c")).contains(StrId("3")));
+  CHECK(a.at(StrId("c")).contains(StrId("4")));
 }
 #ifdef __clang__
 #pragma clang diagnostic pop

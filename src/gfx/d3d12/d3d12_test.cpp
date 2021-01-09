@@ -168,7 +168,102 @@ TEST_CASE("d3d12/render") {
     }
   }
   SUBCASE("clear swapchain uav@compute queue") {
-    // TODO
+    RenderPassList render_pass_list{memory_resource.get()};
+    {
+      render_pass_list.push_back(RenderPass(
+          StrId("mainpass"),
+          {
+            {
+              BufferConfig(StrId("swapchain"), BufferStateType::kUav),
+            },
+            memory_resource.get()
+          }
+      ).CommandQueueTypeCompute());
+      render_pass_list.push_back(RenderPass(
+          StrId("present"),
+          {
+            {
+              BufferConfig(StrId("swapchain"), BufferStateType::kPresent),
+            },
+            memory_resource.get()
+          }
+      ));
+    }
+    std::pmr::unordered_set<StrId> command_list_not_used_pass{memory_resource.get()};
+    command_list_not_used_pass.insert(StrId("present"));
+    using RenderFunction = std::function<void(D3d12CommandList* const, const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE cpu_handle, ID3D12Resource* resource)>;
+    std::pmr::unordered_map<StrId, RenderFunction> render_functions{memory_resource.get()};
+    {
+      render_functions.insert({StrId("mainpass"), [](D3d12CommandList* const command_list, const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE cpu_handle, ID3D12Resource* resource){
+        const UINT clear_color[4]{255,255,0,255};
+        command_list->ClearUnorderedAccessViewUint(gpu_handle, cpu_handle, resource, clear_color, 0, nullptr);
+      }});
+      render_functions.insert({StrId("present"), [&swapchain]([[maybe_unused]]D3d12CommandList* const command_list, [[maybe_unused]]const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, [[maybe_unused]]const D3D12_CPU_DESCRIPTOR_HANDLE cpu_handle, [[maybe_unused]]ID3D12Resource* resource){
+        swapchain.Present();
+      }});
+    }
+    auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
+    auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
+    MandatoryOutputBufferNameList named_buffer_list{memory_resource.get()};
+    named_buffer_list.insert({StrId("swapchain")});
+    auto named_buffers = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, named_buffer_list, memory_resource.get());
+    auto adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, memory_resource.get());
+    auto consumer_producer_render_pass_map = CreateConsumerProducerMap(adjacency_graph, memory_resource.get());
+    auto [async_compute_batching, render_pass_unprocessed] = ConfigureAsyncComputeBatching(render_pass_id_map, std::move(render_pass_order), {}, {}, memory_resource.get());
+    auto pass_signal_info_resource = ConfigureBufferResourceDependency(render_pass_id_map, async_compute_batching, consumer_producer_render_pass_map, memory_resource.get());
+    auto pass_signal_info_batch = ConvertBatchToSignalInfo(async_compute_batching, render_pass_id_map, memory_resource.get());
+    auto pass_signal_info = MergePassSignalInfo(std::move(pass_signal_info_resource), std::move(pass_signal_info_batch));
+    render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(async_compute_batching), memory_resource.get());
+    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
+    buffer_state_before_render_pass_list.insert({named_buffers.at(StrId("swapchain")), kBufferStateFlagPresent});
+    auto barrier = ConfigureBarrier(render_pass_id_map, render_pass_order, {}, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto queue_type = CommandQueueType::kGraphics;
+    uint64_t signal_val = 0;
+    command_queue.WaitOnCpu({{queue_type, signal_val}});
+    for (auto a : allocators.front()) {
+      command_allocator.ReturnCommandAllocator(a);
+    }
+    allocators.front().clear();
+    std::rotate(allocators.begin(), allocators.begin() + 1, allocators.end());
+    swapchain.UpdateBackBufferIndex();
+    std::pmr::unordered_map<BufferId, ID3D12Resource*> physical_buffer{memory_resource.get()};
+    physical_buffer.insert({named_buffers.at(StrId("swapchain")), swapchain.GetResource()});
+    std::pmr::unordered_map<CommandQueueType, uint64_t> pass_signal_val;
+    std::pmr::unordered_map<StrId, std::pmr::unordered_map<CommandQueueType, uint64_t>> waiting_pass;
+    D3d12CommandList** command_lists = nullptr;
+    for (auto& pass_name : render_pass_order) {
+      auto pass_queue_type = render_pass_id_map.at(pass_name).command_queue_type;
+      if (waiting_pass.contains(pass_name)) {
+        for (auto& [signal_queue, signal_val] : waiting_pass.at(pass_name)) {
+          command_queue.RegisterWaitOnQueue(signal_queue, signal_val, pass_queue_type);
+        }
+      }
+      if (!command_list_not_used_pass.contains(pass_name) && command_lists == nullptr) {
+        auto command_allocators = command_allocator.RetainCommandAllocator(pass_queue_type, 1);
+        command_lists = command_list_pool.RetainCommandList(pass_queue_type, 1, command_allocators);
+        allocators.back().push_back(std::move(command_allocators));
+      }
+      if (barrier.barrier_before_pass.contains(pass_name)) {
+        ExecuteBarrier(barrier.barrier_before_pass.at(pass_name), physical_buffer, command_lists[0], memory_resource.get());
+      }
+      render_functions.at(pass_name)(command_lists[0], {}/*TODO*/, swapchain.GetRtvHandle(), swapchain.GetResource());
+      if (barrier.barrier_after_pass.contains(pass_name)) {
+        ExecuteBarrier(barrier.barrier_after_pass.at(pass_name), physical_buffer, command_lists[0], memory_resource.get());
+      }
+      if (pass_signal_info.contains(pass_name)) {
+        command_lists[0]->Close();
+        command_queue.Get(pass_queue_type)->ExecuteCommandLists(1, reinterpret_cast<ID3D12CommandList**>(command_lists));
+        command_list_pool.ReturnCommandList(command_lists);
+        command_lists = nullptr;
+        command_queue.RegisterSignal(pass_queue_type, ++pass_signal_val[pass_queue_type]);
+        for (auto& waiting_pass_name : pass_signal_info.at(pass_name)) {
+          if (!waiting_pass.contains(waiting_pass_name)) {
+            waiting_pass.insert({waiting_pass_name, std::pmr::unordered_map<CommandQueueType, uint64_t>{memory_resource.get()}});
+          }
+          waiting_pass.at(waiting_pass_name).insert({pass_queue_type, pass_signal_val[pass_queue_type]});
+        }
+      }
+    }
   }
   SUBCASE("fill swapchain uav with shader@compute queue") {
     // TODO
