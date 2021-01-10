@@ -498,6 +498,13 @@ static StrId FindLeastCommonAncestor(const std::pmr::unordered_set<StrId>& pass_
   }
   return pass_to_return;
 }
+BufferStateList CreateBufferCreationStateList(const BufferCreationDescList& buffer_creation_descs, std::pmr::memory_resource* memory_resource) {
+  BufferStateList buffer_creation_state_list{memory_resource};
+  for (auto& [buffer_id, desc] : buffer_creation_descs) {
+    buffer_creation_state_list.insert({buffer_id, desc.initial_state_flag});
+  }
+  return buffer_creation_state_list;
+}
 PassBarrierInfoSet ConfigureBarrier(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const PassSignalInfo& pass_signal_info, const BufferIdList& buffer_id_list, const BufferStateList& buffer_state_before_render_pass_list, const BufferStateList& buffer_state_after_render_pass_list, std::pmr::memory_resource* memory_resource) {
   // gather state change info per buffer
   struct BufferStateChangeInfo {
