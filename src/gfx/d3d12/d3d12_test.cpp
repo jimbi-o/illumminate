@@ -3,6 +3,7 @@
 #include "d3d12_command_queue.h"
 #include "d3d12_device.h"
 #include "d3d12_dxgi_core.h"
+#include "d3d12_minimal_for_cpp.h"
 #include "d3d12_swapchain.h"
 #include "gfx/win32/win32_window.h"
 #include "gfx/render_graph.h"
@@ -124,6 +125,36 @@ std::tuple<std::pmr::unordered_map<BufferId, uint32_t>, std::pmr::unordered_map<
     physical_buffer_alignment.insert({id, alloc_info.Alignment});
   }
   return {physical_buffer_size_in_byte, physical_buffer_alignment};
+}
+constexpr D3D12_CLEAR_VALUE GetClearValue(const BufferCreationDesc& desc) {
+  D3D12_CLEAR_VALUE clear_value{};
+  clear_value.Format = GetDxgiFormat(desc.format);
+  if (std::holds_alternative<ClearValueDepthStencil>(desc.clear_value)) {
+    auto& depth_stencil = std::get<ClearValueDepthStencil>(desc.clear_value);
+    clear_value.DepthStencil.Depth = depth_stencil.depth;
+    clear_value.DepthStencil.Stencil = depth_stencil.stencil;
+  } else {
+    auto& color = std::get<std::array<float, 4>>(desc.clear_value);
+    clear_value.Color[0] = color[0];
+    clear_value.Color[1] = color[1];
+    clear_value.Color[2] = color[2];
+    clear_value.Color[3] = color[3];
+  }
+  return clear_value;
+}
+std::pair<D3D12MA::Allocation*, ID3D12Resource*> CreatePhysicalBufferOnHeap(const D3D12_HEAP_TYPE heap_type, const BufferCreationDesc& desc, D3D12MA::Allocator* const allocator) {
+  D3D12MA::ALLOCATION_DESC allocation_desc{};
+  allocation_desc.HeapType = heap_type;
+  auto resource_desc = GetD3d12ResourceDesc(desc);
+  auto clear_value = GetClearValue(desc);
+  D3D12MA::Allocation* allocation = nullptr;
+  ID3D12Resource* resource = nullptr;
+  auto hr = allocator->CreateResource(&allocation_desc, &resource_desc, ConvertToD3d12ResourceState(desc.initial_state_flag), &clear_value, &allocation, IID_PPV_ARGS(&resource));
+  if (SUCCEEDED(hr)) {
+    return {allocation, resource};
+  }
+  logerror("CreateResource failed. {} {}", hr, heap_type);
+  return {nullptr, nullptr};
 }
 using PhysicalBufferList = std::pmr::unordered_map<BufferId, ID3D12Resource*>;
 PhysicalBufferList CreatePhysicalBuffers(const BufferCreationDescList& buffer_creation_descs, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_size_in_byte, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_address_offset, PhysicalBufferList&& physical_buffer) {
