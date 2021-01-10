@@ -78,6 +78,52 @@ void ExecuteCommandList(D3d12CommandList** command_lists, const uint32_t command
   command_queue->ExecuteCommandLists(command_list_num, reinterpret_cast<ID3D12CommandList**>(command_lists));
   pool->ReturnCommandList(command_lists);
 }
+constexpr D3D12_RESOURCE_DIMENSION Dimension(const BufferDimensionType type) {
+  switch (type) {
+    case BufferDimensionType::kBuffer: return D3D12_RESOURCE_DIMENSION_BUFFER;
+    case BufferDimensionType::k1d: return D3D12_RESOURCE_DIMENSION_TEXTURE1D;
+    case BufferDimensionType::k1dArray: return D3D12_RESOURCE_DIMENSION_TEXTURE1D;
+    case BufferDimensionType::k2d: return D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    case BufferDimensionType::k2dArray: return D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    case BufferDimensionType::k3d: return D3D12_RESOURCE_DIMENSION_TEXTURE3D;
+    case BufferDimensionType::k3dArray: return D3D12_RESOURCE_DIMENSION_TEXTURE3D;
+    case BufferDimensionType::kCube: return D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    case BufferDimensionType::kCubeArray: return D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+  }
+}
+constexpr D3D12_RESOURCE_FLAGS ResourceFlags(const BufferStateFlags state_flags) {
+  D3D12_RESOURCE_FLAGS flags{};
+  if (!(state_flags & kBufferStateFlagCbv) && !(state_flags & kBufferStateFlagSrv)) flags = D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
+  if (state_flags & kBufferStateFlagUav) flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+  if (state_flags & kBufferStateFlagRtv) flags |= D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+  if ((state_flags & kBufferStateFlagDsvWrite) || (state_flags & kBufferStateFlagDsvRead)) flags |= D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+  return flags;
+}
+constexpr D3D12_RESOURCE_DESC GetD3d12ResourceDesc(const BufferCreationDesc& desc) {
+  D3D12_RESOURCE_DESC resource_desc{};
+  resource_desc.Dimension = Dimension(desc.dimension_type);
+  resource_desc.Alignment = 0;
+  resource_desc.Width = desc.width;
+  resource_desc.Height = desc.height;
+  resource_desc.DepthOrArraySize = desc.depth;
+  resource_desc.MipLevels = 1; // TODO?
+  resource_desc.Format = GetDxgiFormat(desc.format);
+  resource_desc.SampleDesc = {1, 0};
+  resource_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+  resource_desc.Flags = ResourceFlags(desc.state_flags);
+  return resource_desc;
+}
+std::tuple<std::pmr::unordered_map<BufferId, uint32_t>, std::pmr::unordered_map<BufferId, uint32_t>> GetPhysicalBufferSizes(const BufferCreationDescList& buffer_creation_descs, Device* const device, std::pmr::memory_resource* memory_resource) {
+  std::pmr::unordered_map<BufferId, uint32_t> physical_buffer_size_in_byte{memory_resource};
+  std::pmr::unordered_map<BufferId, uint32_t> physical_buffer_alignment{memory_resource};
+  for (auto& [id, desc] : buffer_creation_descs) {
+    auto resource_desc = GetD3d12ResourceDesc(desc);
+    auto alloc_info = device->Get()->GetResourceAllocationInfo(0, 1, &resource_desc);
+    physical_buffer_size_in_byte.insert({id, alloc_info.SizeInBytes});
+    physical_buffer_alignment.insert({id, alloc_info.Alignment});
+  }
+  return {physical_buffer_size_in_byte, physical_buffer_alignment};
+}
 using PhysicalBufferList = std::pmr::unordered_map<BufferId, ID3D12Resource*>;
 PhysicalBufferList CreatePhysicalBuffers(const BufferCreationDescList& buffer_creation_descs, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_size_in_byte, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_address_offset, PhysicalBufferList&& physical_buffer) {
   // TODO
@@ -271,7 +317,11 @@ TEST_CASE("d3d12/render") {
       physical_buffer.insert({named_buffers.at(StrId("swapchain")), swapchain.GetResource()});
       auto buffer_creation_descs = ConfigureBufferCreationDescs(render_pass_id_map, render_pass_order, buffer_id_list, mainbuffer_size, swapchain_size, memory_resource.get());
       buffer_state_before_render_pass_list = CreateBufferCreationStateList(buffer_creation_descs, memory_resource.get());
-      auto [physical_buffer_size_in_byte, physical_buffer_alignment] = GetPhysicalBufferSizes(buffer_creation_descs, [](const BufferCreationDesc& desc) { return std::make_tuple<uint32_t, uint32_t>(sizeof(uint32_t), 4); }, memory_resource.get()); // TODO fix lambda function
+      auto [physical_buffer_size_in_byte, physical_buffer_alignment] = GetPhysicalBufferSizes(buffer_creation_descs, &device, memory_resource.get());
+      CHECK(physical_buffer_size_in_byte.size() == 2);
+      CHECK(physical_buffer_size_in_byte.begin()->second > 0);
+      CHECK(physical_buffer_alignment.size() == 2);
+      CHECK(physical_buffer_alignment.begin()->second > 0);
       // TODO aliasing barrier
       auto [physical_buffer_lifetime_begin_pass, physical_buffer_lifetime_end_pass] = CalculatePhysicalBufferLiftime(render_pass_order, buffer_id_list, memory_resource.get());
       auto physical_buffer_address_offset = GetPhysicalBufferAddressOffset(render_pass_order, physical_buffer_lifetime_begin_pass, physical_buffer_lifetime_end_pass, physical_buffer_size_in_byte, physical_buffer_alignment, memory_resource.get());

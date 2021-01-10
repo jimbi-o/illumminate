@@ -209,6 +209,7 @@ class BufferCreationDesc {
   BufferStateFlags state_flags;
   uint32_t width, height, depth;
   ClearValue clear_value;
+  // TODO need mip level?
 };
 using BufferCreationDescList = std::pmr::unordered_map<BufferId, BufferCreationDesc>;
 BufferCreationDescList ConfigureBufferCreationDescs(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, const BufferSize2d& mainbuffer_size, const BufferSize2d& swapchain_size, std::pmr::memory_resource* memory_resource);
