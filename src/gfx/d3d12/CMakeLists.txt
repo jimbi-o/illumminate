@@ -81,7 +81,7 @@ target_include_directories(illuminategfxd3d12
   "${doctest_SOURCE_DIR}"
   "${spdlog_SOURCE_DIR}/include"
   "${d3dx12_SOURCE_DIR}/Libraries/D3DX12"
-  "${d3d12memoryallocator_SOURCE_DIR}/src/D3D12MemAlloc.h"
+  "${d3d12memoryallocator_SOURCE_DIR}/src"
 )
 
 target_sources(illuminategfxd3d12 PRIVATE

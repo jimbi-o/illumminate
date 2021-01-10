@@ -6,6 +6,7 @@
 #include "d3d12_swapchain.h"
 #include "gfx/win32/win32_window.h"
 #include "gfx/render_graph.h"
+#include "D3D12MemAlloc.h"
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 #ifdef BUILD_WITH_TEST
@@ -128,6 +129,15 @@ using PhysicalBufferList = std::pmr::unordered_map<BufferId, ID3D12Resource*>;
 PhysicalBufferList CreatePhysicalBuffers(const BufferCreationDescList& buffer_creation_descs, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_size_in_byte, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_address_offset, PhysicalBufferList&& physical_buffer) {
   // TODO
   return physical_buffer;
+}
+D3D12MA::Allocator* CreateMemoryHeapAllocator(D3d12Device* const device, DxgiAdapter* const adapter) {
+  D3D12MA::Allocator* allocator = nullptr;
+  D3D12MA::ALLOCATOR_DESC desc = {};
+  desc.Flags = D3D12MA::ALLOCATOR_FLAG_NONE;
+  desc.pDevice = device;
+  desc.pAdapter = adapter;
+  D3D12MA::CreateAllocator(&desc, &allocator);
+  return allocator;
 }
 }
 #endif
