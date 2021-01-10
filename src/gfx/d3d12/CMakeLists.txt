@@ -27,6 +27,13 @@ FetchContent_Declare(
   GIT_SHALLOW    OFF
 )
 FetchContent_MakeAvailable(d3dx12)
+FetchContent_Declare(
+  d3d12memoryallocator
+  GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/D3D12MemoryAllocator.git
+  GIT_TAG        e56c26d8105a679f22860b865f4c074d19006e88
+  GIT_SHALLOW    OFF
+)
+FetchContent_MakeAvailable(d3d12memoryallocator)
 
 add_subdirectory("../win32" "${CMAKE_CURRENT_BINARY_DIR}/gfx/win32")
 add_subdirectory(".." "${CMAKE_CURRENT_BINARY_DIR}/gfx")
@@ -74,6 +81,7 @@ target_include_directories(illuminategfxd3d12
   "${doctest_SOURCE_DIR}"
   "${spdlog_SOURCE_DIR}/include"
   "${d3dx12_SOURCE_DIR}/Libraries/D3DX12"
+  "${d3d12memoryallocator_SOURCE_DIR}/src/D3D12MemAlloc.h"
 )
 
 target_sources(illuminategfxd3d12 PRIVATE
@@ -84,4 +92,5 @@ target_sources(illuminategfxd3d12 PRIVATE
   "d3d12_command_list.cpp"
   "d3d12_command_queue.cpp"
   "d3d12_swapchain.cpp"
+  "${d3d12memoryallocator_SOURCE_DIR}/src/D3D12MemAlloc.cpp"
 )
