@@ -317,20 +317,20 @@ TEST_CASE("d3d12/render") {
           }
       ));
     }
-    using RenderFunction = std::function<void(D3d12CommandList* const, const D3D12_GPU_DESCRIPTOR_HANDLE* gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, ID3D12Resource** resource)>;
+    using RenderFunction = std::function<void(D3d12CommandList* const, const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, ID3D12Resource** resource)>;
     std::pmr::unordered_map<StrId, RenderFunction> render_functions{memory_resource.get()};
     {
-      render_functions.insert({StrId("mainpass"), [](D3d12CommandList* const command_list, const D3D12_GPU_DESCRIPTOR_HANDLE* gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, ID3D12Resource** resource){
+      render_functions.insert({StrId("mainpass"), [](D3d12CommandList* const command_list, const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, ID3D12Resource** resource){
         // TODO
         const UINT clear_color[4]{255,255,0,255};
-        command_list->ClearUnorderedAccessViewUint(*gpu_handle, *cpu_handle, *resource, clear_color, 0, nullptr);
+        command_list->ClearUnorderedAccessViewUint(gpu_handle, *cpu_handle, *resource, clear_color, 0, nullptr);
       }});
-      render_functions.insert({StrId("copy"), [](D3d12CommandList* const command_list, const D3D12_GPU_DESCRIPTOR_HANDLE* gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, ID3D12Resource** resource){
+      render_functions.insert({StrId("copy"), [](D3d12CommandList* const command_list, const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, ID3D12Resource** resource){
         // TODO
         const FLOAT clear_color[4] = {0.0f,1.0f,1.0f,1.0f};
         command_list->ClearRenderTargetView(*cpu_handle, clear_color, 0, nullptr);
       }});
-      render_functions.insert({StrId("present"), [&swapchain]([[maybe_unused]]D3d12CommandList* const command_list, [[maybe_unused]]const D3D12_GPU_DESCRIPTOR_HANDLE* gpu_handle, [[maybe_unused]]const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, [[maybe_unused]]ID3D12Resource** resource){
+      render_functions.insert({StrId("present"), [&swapchain]([[maybe_unused]]D3d12CommandList* const command_list, [[maybe_unused]]const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, [[maybe_unused]]const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, [[maybe_unused]]ID3D12Resource** resource){
         swapchain.Present();
       }});
     }
@@ -387,6 +387,62 @@ TEST_CASE("d3d12/render") {
       PhysicalAllocationList physical_allocation;
       std::tie(physical_allocation, physical_buffer) = CreatePhysicalBuffers(buffer_creation_descs, physical_buffer_size_in_byte, physical_buffer_alignment, physical_buffer_address_offset, std::move(physical_buffer), physical_buffer_allocator, memory_resource.get());
     }
+    // prepare pass buffer handles and resources
+    std::pmr::unordered_map<StrId, D3D12_GPU_DESCRIPTOR_HANDLE> gpu_descriptor_handles{memory_resource.get()};
+    std::pmr::unordered_map<StrId, std::pmr::vector<D3D12_CPU_DESCRIPTOR_HANDLE>> cpu_descriptor_handles{memory_resource.get()};
+    std::pmr::unordered_map<StrId, std::pmr::vector<ID3D12Resource*>> pass_resources{memory_resource.get()};
+    {
+      std::pmr::unordered_map<BufferId, std::pmr::unordered_map<BufferStateType, D3D12_CPU_DESCRIPTOR_HANDLE>> cpu_descriptor_handles_per_buffer{memory_resource.get()};
+      for (auto& [pass_name, buffer_ids] : buffer_id_list) {
+        auto& pass = render_pass_id_map.at(pass_name);
+        uint32_t handle_num_to_copy_to_gpu = 0;
+        D3D12_CPU_DESCRIPTOR_HANDLE start_handle_to_copy_to_gpu{};
+        for (uint32_t i = 0; i < buffer_ids.size(); i++) {
+          if (buffer_ids[i] == named_buffers.at(StrId("swapchain"))) {
+            if (pass.buffer_list[i].state_type == BufferStateType::kRtv) {
+              cpu_descriptor_handles[pass_name].push_back(swapchain.GetRtvHandle());
+            }
+          } else {
+            // TODO
+            switch (pass.buffer_list[i].state_type) {
+              case BufferStateType::kCbv:
+              case BufferStateType::kSrv:
+              case BufferStateType::kUav: {
+                // make handle in cpu region (always)
+                // push back to cpu_descriptor_handles
+                if (handle_num_to_copy_to_gpu == 0) {
+                  // start_handle_to_copy_to_gpu = cpu_handle;
+                }
+                handle_num_to_copy_to_gpu++;
+                break;
+              }
+              case BufferStateType::kRtv: {
+                // make handle in cpu region if not created yet
+                // push back to cpu_descriptor_handles (always)
+                break;
+              }
+              case BufferStateType::kDsv: {
+                // make handle in cpu region if not created yet
+                // push back to cpu_descriptor_handles (always)
+                break;
+              }
+              case BufferStateType::kCopySrc:
+              case BufferStateType::kCopyDst: {
+                // push back to pass_resources (always)
+                break;
+              }
+              case BufferStateType::kPresent: {
+                break;
+              }
+            }
+          }
+        }
+        if (handle_num_to_copy_to_gpu > 0) {
+          auto gpu_handle = shader_visible_descriptor_heap.CopyToBufferDescriptorHeap(start_handle_to_copy_to_gpu, handle_num_to_copy_to_gpu);
+          gpu_descriptor_handles.insert({pass_name, gpu_handle});
+        }
+      }
+    }
     // barrier configuration
     buffer_state_before_render_pass_list.insert({named_buffers.at(StrId("swapchain")), kBufferStateFlagPresent});
     auto barrier = ConfigureBarrier(render_pass_id_map, render_pass_order, {}, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
@@ -422,12 +478,7 @@ TEST_CASE("d3d12/render") {
         }
       }
       {
-        // TODO
-        std::pmr::unordered_map<StrId, std::pmr::vector<D3D12_GPU_DESCRIPTOR_HANDLE>> gpu_descriptor_handles{memory_resource.get()};
-        std::pmr::unordered_map<StrId, std::pmr::vector<D3D12_CPU_DESCRIPTOR_HANDLE>> cpu_descriptor_handles{memory_resource.get()};
-        std::pmr::unordered_map<StrId, std::pmr::vector<ID3D12Resource*>> pass_resources{memory_resource.get()};
-        // cpu_descriptor_handles.insert(swapchain.GetRtvHandle());
-        auto gpu_handle_ptr = gpu_descriptor_handles.contains(pass_name) ? gpu_descriptor_handles.at(pass_name).data() : nullptr;
+        auto gpu_handle_ptr = gpu_descriptor_handles.contains(pass_name) ? gpu_descriptor_handles.at(pass_name) : D3D12_GPU_DESCRIPTOR_HANDLE{};
         auto cpu_handle_ptr = cpu_descriptor_handles.contains(pass_name) ? cpu_descriptor_handles.at(pass_name).data() : nullptr;
         auto resource_ptr   = pass_resources.contains(pass_name) ? pass_resources.at(pass_name).data() : nullptr;
         render_functions.at(pass_name)(command_lists.at(pass_queue_type)[0], gpu_handle_ptr, cpu_handle_ptr, resource_ptr);

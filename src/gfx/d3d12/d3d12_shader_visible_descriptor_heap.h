@@ -11,8 +11,8 @@ class ShaderVisibleDescriptorHeap {
  public:
   bool Init(D3d12Device* const device);
   void Term();
-  void CopyToBufferDescriptorHeap(const D3D12_CPU_DESCRIPTOR_HANDLE start, const uint32_t num);
-  void CopyToSamplerDescriptorHeap(const D3D12_CPU_DESCRIPTOR_HANDLE start, const uint32_t num);
+  D3D12_GPU_DESCRIPTOR_HANDLE CopyToBufferDescriptorHeap(const D3D12_CPU_DESCRIPTOR_HANDLE start, const uint32_t num);
+  D3D12_GPU_DESCRIPTOR_HANDLE CopyToSamplerDescriptorHeap(const D3D12_CPU_DESCRIPTOR_HANDLE start, const uint32_t num);
   void SetDescriptorHeapsToCommandList(D3d12CommandList* command_list);
  private:
   static const uint32_t kMaxBufferNum = 1024;
@@ -20,8 +20,10 @@ class ShaderVisibleDescriptorHeap {
   D3d12Device* device_ = nullptr;
   ID3D12DescriptorHeap* descriptor_heap_buffers_ = nullptr;
   ID3D12DescriptorHeap* descriptor_heap_samplers_ = nullptr;
-  uint64_t heap_start_buffers_ = 0;
-  uint64_t heap_start_samplers_ = 0;
+  uint64_t heap_start_cpu_buffers_ = 0;
+  uint64_t heap_start_cpu_samplers_ = 0;
+  uint64_t heap_start_gpu_buffers_ = 0;
+  uint64_t heap_start_gpu_samplers_ = 0;
   uint32_t used_buffer_num_ = 0;
   uint32_t used_sampler_num_ = 0;
   uint32_t buffer_handle_increment_size_ = 0;

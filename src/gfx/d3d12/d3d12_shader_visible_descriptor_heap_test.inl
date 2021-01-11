@@ -9,8 +9,10 @@ TEST_CASE_CLASS("descriptor heap") {
   CHECK(descriptor_heap.Init(device.Get()));
   CHECK(descriptor_heap.descriptor_heap_buffers_);
   CHECK(descriptor_heap.descriptor_heap_samplers_);
-  CHECK(descriptor_heap.heap_start_buffers_ == descriptor_heap.descriptor_heap_buffers_->GetCPUDescriptorHandleForHeapStart().ptr);
-  CHECK(descriptor_heap.heap_start_samplers_ == descriptor_heap.descriptor_heap_samplers_->GetCPUDescriptorHandleForHeapStart().ptr);
+  CHECK(descriptor_heap.heap_start_cpu_buffers_ == descriptor_heap.descriptor_heap_buffers_->GetCPUDescriptorHandleForHeapStart().ptr);
+  CHECK(descriptor_heap.heap_start_cpu_samplers_ == descriptor_heap.descriptor_heap_samplers_->GetCPUDescriptorHandleForHeapStart().ptr);
+  CHECK(descriptor_heap.heap_start_gpu_buffers_ == descriptor_heap.descriptor_heap_buffers_->GetGPUDescriptorHandleForHeapStart().ptr);
+  CHECK(descriptor_heap.heap_start_gpu_samplers_ == descriptor_heap.descriptor_heap_samplers_->GetGPUDescriptorHandleForHeapStart().ptr);
   {
     auto desc = descriptor_heap.descriptor_heap_buffers_->GetDesc();
     CHECK(desc.Type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
