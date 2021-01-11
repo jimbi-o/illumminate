@@ -95,10 +95,10 @@ constexpr D3D12_RESOURCE_DIMENSION Dimension(const BufferDimensionType type) {
 }
 constexpr D3D12_RESOURCE_FLAGS ResourceFlags(const BufferStateFlags state_flags) {
   D3D12_RESOURCE_FLAGS flags{};
-  if (!(state_flags & kBufferStateFlagCbv) && !(state_flags & kBufferStateFlagSrv)) flags = D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
   if (state_flags & kBufferStateFlagUav) flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
   if (state_flags & kBufferStateFlagRtv) flags |= D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
   if ((state_flags & kBufferStateFlagDsvWrite) || (state_flags & kBufferStateFlagDsvRead)) flags |= D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+  if ((flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL) && !(state_flags & kBufferStateFlagCbv) && !(state_flags & kBufferStateFlagSrv)) flags = D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
   return flags;
 }
 constexpr D3D12_RESOURCE_DESC GetD3d12ResourceDesc(const BufferCreationDesc& desc) {
@@ -142,6 +142,13 @@ constexpr D3D12_CLEAR_VALUE GetClearValue(const BufferCreationDesc& desc) {
   }
   return clear_value;
 }
+constexpr bool IsOptimizedClearValueNeeded(const BufferCreationDesc& desc) {
+  if (desc.dimension_type == BufferDimensionType::kBuffer) return false;
+  if (desc.state_flags & kBufferStateFlagRtv) return true;
+  if (desc.state_flags & kBufferStateFlagDsvWrite) return true;
+  if (desc.state_flags & kBufferStateFlagDsvRead) return true;
+  return false;
+}
 std::pair<D3D12MA::Allocation*, ID3D12Resource*> CreatePhysicalBufferOnHeap(const D3D12_HEAP_TYPE heap_type, const BufferCreationDesc& desc, D3D12MA::Allocator* const allocator) {
   D3D12MA::ALLOCATION_DESC allocation_desc{};
   allocation_desc.HeapType = heap_type;
@@ -149,7 +156,7 @@ std::pair<D3D12MA::Allocation*, ID3D12Resource*> CreatePhysicalBufferOnHeap(cons
   auto clear_value = GetClearValue(desc);
   D3D12MA::Allocation* allocation = nullptr;
   ID3D12Resource* resource = nullptr;
-  auto hr = allocator->CreateResource(&allocation_desc, &resource_desc, ConvertToD3d12ResourceState(desc.initial_state_flag), &clear_value, &allocation, IID_PPV_ARGS(&resource));
+  auto hr = allocator->CreateResource(&allocation_desc, &resource_desc, ConvertToD3d12ResourceState(desc.initial_state_flag), IsOptimizedClearValueNeeded(desc) ? &clear_value : nullptr, &allocation, IID_PPV_ARGS(&resource));
   if (SUCCEEDED(hr)) {
     return {allocation, resource};
   }
@@ -157,9 +164,17 @@ std::pair<D3D12MA::Allocation*, ID3D12Resource*> CreatePhysicalBufferOnHeap(cons
   return {nullptr, nullptr};
 }
 using PhysicalBufferList = std::pmr::unordered_map<BufferId, ID3D12Resource*>;
-PhysicalBufferList CreatePhysicalBuffers(const BufferCreationDescList& buffer_creation_descs, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_size_in_byte, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_address_offset, PhysicalBufferList&& physical_buffer) {
-  // TODO
-  return physical_buffer;
+using PhysicalAllocationList = std::pmr::unordered_map<BufferId, D3D12MA::Allocation*>;
+std::pair<PhysicalAllocationList, PhysicalBufferList> CreatePhysicalBuffers(const BufferCreationDescList& buffer_creation_descs, [[maybe_unused]]const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_size_in_byte, [[maybe_unused]]const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, [[maybe_unused]]const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_address_offset, [[maybe_unused]]PhysicalBufferList&& physical_buffer, D3D12MA::Allocator* const allocator, std::pmr::memory_resource* memory_resource) {
+  // TODO resource aliasing (available in library?)
+  PhysicalAllocationList physical_allocation{memory_resource};
+  for (auto& [id, desc] : buffer_creation_descs) {
+    if (physical_buffer.contains(id)) continue;
+    auto pair = CreatePhysicalBufferOnHeap(D3D12_HEAP_TYPE_DEFAULT, desc, allocator);
+    physical_allocation.insert({id, pair.first});
+    physical_buffer.insert({id, pair.second});
+  }
+  return {physical_allocation, std::move(physical_buffer)};
 }
 D3D12MA::Allocator* CreateMemoryHeapAllocator(D3d12Device* const device, DxgiAdapter* const adapter) {
   D3D12MA::Allocator* allocator = nullptr;
@@ -330,6 +345,7 @@ TEST_CASE("d3d12/render") {
       auto used_render_pass_list = GetBufferProducerPassList(adjacency_graph, CreateValueSetFromMap(named_buffers, memory_resource.get()), memory_resource.get());
       used_render_pass_list = GetUsedRenderPassList(std::move(used_render_pass_list), consumer_producer_render_pass_map);
       render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
+      // TODO update buffer_id_list to used buffers only
     }
     PassSignalInfo pass_signal_info;
     {
@@ -366,7 +382,9 @@ TEST_CASE("d3d12/render") {
       // TODO aliasing barrier
       auto [physical_buffer_lifetime_begin_pass, physical_buffer_lifetime_end_pass] = CalculatePhysicalBufferLiftime(render_pass_order, buffer_id_list, memory_resource.get());
       auto physical_buffer_address_offset = GetPhysicalBufferAddressOffset(render_pass_order, physical_buffer_lifetime_begin_pass, physical_buffer_lifetime_end_pass, physical_buffer_size_in_byte, physical_buffer_alignment, memory_resource.get());
-      physical_buffer = CreatePhysicalBuffers(buffer_creation_descs, physical_buffer_size_in_byte, physical_buffer_alignment, physical_buffer_address_offset, std::move(physical_buffer));
+      auto physical_buffer_allocator = CreateMemoryHeapAllocator(device.Get(), dxgi_core.GetAdapter());
+      PhysicalAllocationList physical_allocation;
+      std::tie(physical_allocation, physical_buffer) = CreatePhysicalBuffers(buffer_creation_descs, physical_buffer_size_in_byte, physical_buffer_alignment, physical_buffer_address_offset, std::move(physical_buffer), physical_buffer_allocator, memory_resource.get());
     }
     // barrier configuration
     buffer_state_before_render_pass_list.insert({named_buffers.at(StrId("swapchain")), kBufferStateFlagPresent});
