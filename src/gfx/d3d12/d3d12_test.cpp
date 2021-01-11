@@ -192,6 +192,7 @@ TEST_CASE("d3d12/render") {
   const uint32_t swapchain_buffer_num = buffer_num + 1;
   const BufferSize2d swapchain_size{1600, 900};
   const auto mainbuffer_size = swapchain_size;
+  using namespace illuminate;
   using namespace illuminate::gfx;
   using namespace illuminate::gfx::d3d12;
   auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
@@ -345,7 +346,7 @@ TEST_CASE("d3d12/render") {
       auto used_render_pass_list = GetBufferProducerPassList(adjacency_graph, CreateValueSetFromMap(named_buffers, memory_resource.get()), memory_resource.get());
       used_render_pass_list = GetUsedRenderPassList(std::move(used_render_pass_list), consumer_producer_render_pass_map);
       render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
-      // TODO update buffer_id_list to used buffers only
+      buffer_id_list = RemoveUnusedBuffers(render_pass_order, std::move(buffer_id_list));
     }
     PassSignalInfo pass_signal_info;
     {

@@ -141,6 +141,7 @@ using ConsumerProducerRenderPassMap = std::pmr::unordered_map<StrId, std::pmr::u
 ConsumerProducerRenderPassMap CreateConsumerProducerMap(const RenderPassAdjacencyGraph& adjacency_graph, std::pmr::memory_resource* memory_resource);
 std::pmr::unordered_set<StrId> GetUsedRenderPassList(std::pmr::unordered_set<StrId>&& used_pass, const ConsumerProducerRenderPassMap& consumer_producer_render_pass_map);
 RenderPassOrder CullUnusedRenderPass(RenderPassOrder&& render_pass_order, const std::pmr::unordered_set<StrId>& used_render_pass_list, const RenderPassIdMap& render_pass_id_map);
+BufferIdList RemoveUnusedBuffers(const RenderPassOrder& render_pass_order, BufferIdList&& buffer_id_list);
 bool IsDuplicateRenderPassNameExists(const RenderPassList& list, std::pmr::memory_resource* memory_resource);
 enum BufferStateFlags : uint32_t {
   kBufferStateFlagNone      = 0x0000,

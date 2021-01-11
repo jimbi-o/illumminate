@@ -136,6 +136,17 @@ RenderPassOrder CullUnusedRenderPass(RenderPassOrder&& render_pass_order, const 
   std::erase_if(render_pass_order, [&used_render_pass_list, &render_pass_id_map](const StrId& pass_name) { return !render_pass_id_map.at(pass_name).mandatory_pass && !used_render_pass_list.contains(pass_name); });
   return std::move(render_pass_order);
 }
+BufferIdList RemoveUnusedBuffers(const RenderPassOrder& render_pass_order, BufferIdList&& buffer_id_list) {
+  auto it = buffer_id_list.begin();
+  while (it != buffer_id_list.end()) {
+    if (IsContaining(render_pass_order, it->first)) {
+      it = buffer_id_list.erase(it);
+    } else {
+      it++;
+    }
+  }
+  return std::move(buffer_id_list);
+}
 bool IsDuplicateRenderPassNameExists(const RenderPassList& list, std::pmr::memory_resource* memory_resource) {
   std::pmr::unordered_set<StrId> names(memory_resource);
   for (auto& pass : list) {
