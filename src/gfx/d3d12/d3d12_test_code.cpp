@@ -1,6 +1,7 @@
 #include "d3d12_command_allocator.h"
 #include "d3d12_command_list.h"
 #include "d3d12_command_queue.h"
+#include "d3d12_descriptor_heap.h"
 #include "d3d12_device.h"
 #include "d3d12_dxgi_core.h"
 #include "d3d12_minimal_for_cpp.h"
@@ -8,7 +9,14 @@
 #include "d3d12_swapchain.h"
 #include "gfx/win32/win32_window.h"
 #include "gfx/render_graph.h"
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Weverything"
+#endif
 #include "D3D12MemAlloc.h"
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 #include "doctest/doctest.h"
 namespace {
 const uint32_t buffer_size_in_bytes = 32 * 1024;
@@ -81,15 +89,15 @@ void ExecuteCommandList(D3d12CommandList** command_lists, const uint32_t command
 }
 constexpr D3D12_RESOURCE_DIMENSION Dimension(const BufferDimensionType type) {
   switch (type) {
-    case BufferDimensionType::kBuffer: return D3D12_RESOURCE_DIMENSION_BUFFER;
-    case BufferDimensionType::k1d: return D3D12_RESOURCE_DIMENSION_TEXTURE1D;
-    case BufferDimensionType::k1dArray: return D3D12_RESOURCE_DIMENSION_TEXTURE1D;
-    case BufferDimensionType::k2d: return D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    case BufferDimensionType::k2dArray: return D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    case BufferDimensionType::k3d: return D3D12_RESOURCE_DIMENSION_TEXTURE3D;
-    case BufferDimensionType::k3dArray: return D3D12_RESOURCE_DIMENSION_TEXTURE3D;
-    case BufferDimensionType::kCube: return D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    case BufferDimensionType::kBuffer:    return D3D12_RESOURCE_DIMENSION_BUFFER;
+    case BufferDimensionType::k1d:        return D3D12_RESOURCE_DIMENSION_TEXTURE1D;
+    case BufferDimensionType::k1dArray:   return D3D12_RESOURCE_DIMENSION_TEXTURE1D;
+    case BufferDimensionType::k2d:        return D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    case BufferDimensionType::k2dArray:   return D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    case BufferDimensionType::k3d:        return D3D12_RESOURCE_DIMENSION_TEXTURE3D;
+    case BufferDimensionType::kCube:      return D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     case BufferDimensionType::kCubeArray: return D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    case BufferDimensionType::kAS:        return D3D12_RESOURCE_DIMENSION_BUFFER; // TODO check
   }
 }
 constexpr D3D12_RESOURCE_FLAGS ResourceFlags(const BufferStateFlags state_flags) {
@@ -106,7 +114,7 @@ constexpr D3D12_RESOURCE_DESC GetD3d12ResourceDesc(const BufferCreationDesc& des
   resource_desc.Alignment = 0;
   resource_desc.Width = desc.width;
   resource_desc.Height = desc.height;
-  resource_desc.DepthOrArraySize = desc.depth;
+  resource_desc.DepthOrArraySize = static_cast<uint16_t>(desc.depth);
   resource_desc.MipLevels = 1; // TODO?
   resource_desc.Format = GetDxgiFormat(desc.format);
   resource_desc.SampleDesc = {1, 0};
@@ -114,12 +122,12 @@ constexpr D3D12_RESOURCE_DESC GetD3d12ResourceDesc(const BufferCreationDesc& des
   resource_desc.Flags = ResourceFlags(desc.state_flags);
   return resource_desc;
 }
-std::tuple<std::pmr::unordered_map<BufferId, uint32_t>, std::pmr::unordered_map<BufferId, uint32_t>> GetPhysicalBufferSizes(const BufferCreationDescList& buffer_creation_descs, Device* const device, std::pmr::memory_resource* memory_resource) {
+std::tuple<std::pmr::unordered_map<BufferId, uint32_t>, std::pmr::unordered_map<BufferId, uint32_t>> GetPhysicalBufferSizes(const BufferCreationDescList& buffer_creation_descs, D3d12Device* const device, std::pmr::memory_resource* memory_resource) {
   std::pmr::unordered_map<BufferId, uint32_t> physical_buffer_size_in_byte{memory_resource};
   std::pmr::unordered_map<BufferId, uint32_t> physical_buffer_alignment{memory_resource};
   for (auto& [id, desc] : buffer_creation_descs) {
     auto resource_desc = GetD3d12ResourceDesc(desc);
-    auto alloc_info = device->Get()->GetResourceAllocationInfo(0, 1, &resource_desc);
+    auto alloc_info = device->GetResourceAllocationInfo(0, 1, &resource_desc);
     physical_buffer_size_in_byte.insert({id, alloc_info.SizeInBytes});
     physical_buffer_alignment.insert({id, alloc_info.Alignment});
   }
@@ -183,6 +191,141 @@ D3D12MA::Allocator* CreateMemoryHeapAllocator(D3d12Device* const device, DxgiAda
   desc.pAdapter = adapter;
   D3D12MA::CreateAllocator(&desc, &allocator);
   return allocator;
+}
+constexpr D3D12_SHADER_RESOURCE_VIEW_DESC GetD3d12ShaderResourceViewDesc(const BufferConfig& desc, ID3D12Resource* resource) {
+  // not checked yet.
+  D3D12_SHADER_RESOURCE_VIEW_DESC view_desc{};
+  view_desc.Format = GetDxgiFormat(desc.format);
+  view_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  switch (desc.dimension_type) {
+    case BufferDimensionType::kBuffer: {
+      view_desc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+      view_desc.Buffer.FirstElement = 0;
+      view_desc.Buffer.NumElements = 1;
+      view_desc.Buffer.StructureByteStride = 8;
+      view_desc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+      break;
+    }
+    case BufferDimensionType::k1d: {
+      view_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE1D;
+      view_desc.Texture1D.MostDetailedMip = 0;
+      view_desc.Texture1D.MipLevels = 1;
+      view_desc.Texture1D.ResourceMinLODClamp = 0.0f;
+      break;
+    }
+    case BufferDimensionType::k1dArray: {
+      view_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE1DARRAY;
+      view_desc.Texture1DArray.MostDetailedMip = 0;
+      view_desc.Texture1DArray.MipLevels = 1;
+      view_desc.Texture1DArray.FirstArraySlice = desc.index_to_render;
+      view_desc.Texture1DArray.ArraySize = desc.buffer_num_to_render;
+      view_desc.Texture1DArray.ResourceMinLODClamp = 0.0f;
+      break;
+    }
+    case BufferDimensionType::k2d: {
+      view_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+      view_desc.Texture2D.MostDetailedMip = 0;
+      view_desc.Texture2D.MipLevels = 1;
+      view_desc.Texture2D.PlaneSlice = desc.index_to_render;
+      view_desc.Texture2D.ResourceMinLODClamp = 0.0f;
+      break;
+    }
+    case BufferDimensionType::k2dArray: {
+      view_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+      view_desc.Texture2DArray.MostDetailedMip = 0;
+      view_desc.Texture2DArray.MipLevels = 1;
+      view_desc.Texture2DArray.FirstArraySlice = 0;
+      view_desc.Texture2DArray.ArraySize = desc.buffer_num_to_render;
+      view_desc.Texture2DArray.PlaneSlice = desc.index_to_render; // not sure w/FirstArraySlice
+      view_desc.Texture2DArray.ResourceMinLODClamp = 0.0f;
+      break;
+    }
+    case BufferDimensionType::k3d: {
+      view_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
+      view_desc.Texture3D.MostDetailedMip = 0;
+      view_desc.Texture3D.MipLevels = 1;
+      view_desc.Texture3D.ResourceMinLODClamp = 0.0f;
+      break;
+    }
+    case BufferDimensionType::kCube: {
+      view_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
+      view_desc.TextureCube.MostDetailedMip = 0;
+      view_desc.TextureCube.MipLevels = 1;
+      view_desc.TextureCube.ResourceMinLODClamp = 0.0f;
+      break;
+    }
+    case BufferDimensionType::kCubeArray: {
+      view_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBEARRAY;
+      view_desc.TextureCubeArray.MostDetailedMip = 0;
+      view_desc.TextureCubeArray.MipLevels = 1;
+      view_desc.TextureCubeArray.First2DArrayFace = desc.index_to_render;
+      view_desc.TextureCubeArray.NumCubes = desc.buffer_num_to_render;
+      view_desc.TextureCubeArray.ResourceMinLODClamp = 0.0f;
+      break;
+    }
+    case BufferDimensionType::kAS: {
+      view_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBEARRAY;
+      view_desc.RaytracingAccelerationStructure.Location = resource->GetGPUVirtualAddress();
+      break;
+    }
+  }
+  return view_desc;
+}
+constexpr D3D12_UNORDERED_ACCESS_VIEW_DESC GetD3d12UnorderedAccessViewDesc(const BufferConfig& desc) {
+  D3D12_UNORDERED_ACCESS_VIEW_DESC view_desc{};
+  // TODO
+  view_desc.Format = GetDxgiFormat(desc.format);
+  switch (desc.dimension_type) {
+    case BufferDimensionType::kBuffer: {
+      view_desc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+      view_desc.Buffer.FirstElement = 0;
+      view_desc.Buffer.NumElements = 1;
+      view_desc.Buffer.StructureByteStride = 8;
+      view_desc.Buffer.CounterOffsetInBytes = 0;
+      view_desc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
+      break;
+    }
+    case BufferDimensionType::k1d: {
+      view_desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE1D;
+      view_desc.Texture1D.MipSlice = 0;
+      break;
+    }
+    case BufferDimensionType::k1dArray: {
+      view_desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE1DARRAY;
+      view_desc.Texture1DArray.MipSlice = 0;
+      view_desc.Texture1DArray.FirstArraySlice = desc.index_to_render;
+      view_desc.Texture1DArray.ArraySize = desc.buffer_num_to_render;
+      break;
+    }
+    case BufferDimensionType::k2d: {
+      view_desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+      view_desc.Texture2D.MipSlice = 0;
+      view_desc.Texture2D.PlaneSlice = desc.index_to_render;
+      break;
+    }
+    case BufferDimensionType::k2dArray: {
+      view_desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2DARRAY;
+      view_desc.Texture2DArray.MipSlice = 0;
+      view_desc.Texture2DArray.FirstArraySlice = 0;
+      view_desc.Texture2DArray.ArraySize = desc.buffer_num_to_render;
+      view_desc.Texture2DArray.PlaneSlice = desc.index_to_render; // not sure w/FirstArraySlice
+      break;
+    }
+    case BufferDimensionType::k3d: {
+      view_desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE3D;
+      view_desc.Texture3D.MipSlice = 0;
+      view_desc.Texture3D.FirstWSlice = desc.index_to_render;
+      view_desc.Texture3D.WSize = desc.buffer_num_to_render;
+      break;
+    }
+    case BufferDimensionType::kCube:
+    case BufferDimensionType::kCubeArray:
+    case BufferDimensionType::kAS: {
+      // not supported.
+      break;
+    }
+  }
+  return view_desc;
 }
 }
 TEST_CASE("d3d12/render") {
@@ -325,7 +468,7 @@ TEST_CASE("d3d12/render") {
         const UINT clear_color[4]{255,255,0,255};
         command_list->ClearUnorderedAccessViewUint(gpu_handle, *cpu_handle, *resource, clear_color, 0, nullptr);
       }});
-      render_functions.insert({StrId("copy"), [](D3d12CommandList* const command_list, const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, ID3D12Resource** resource){
+      render_functions.insert({StrId("copy"), [](D3d12CommandList* const command_list, [[maybe_unused]]const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, [[maybe_unused]]ID3D12Resource** resource){
         // TODO
         const FLOAT clear_color[4] = {0.0f,1.0f,1.0f,1.0f};
         command_list->ClearRenderTargetView(*cpu_handle, clear_color, 0, nullptr);
@@ -369,13 +512,16 @@ TEST_CASE("d3d12/render") {
     std::rotate(allocators.begin(), allocators.begin() + 1, allocators.end());
     swapchain.UpdateBackBufferIndex();
     PhysicalBufferList physical_buffer{memory_resource.get()};
-    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
+    std::pmr::unordered_map<StrId, D3D12_GPU_DESCRIPTOR_HANDLE> gpu_descriptor_handles{memory_resource.get()};
+    std::pmr::unordered_map<StrId, std::pmr::vector<D3D12_CPU_DESCRIPTOR_HANDLE>> cpu_descriptor_handles{memory_resource.get()};
+    std::pmr::unordered_map<StrId, std::pmr::vector<ID3D12Resource*>> pass_resources{memory_resource.get()};
+    PassBarrierInfoSet barrier;
     {
       // prepare physical buffers
       physical_buffer.insert({named_buffers.at(StrId("swapchain")), swapchain.GetResource()});
       auto buffer_creation_descs = ConfigureBufferCreationDescs(render_pass_id_map, render_pass_order, buffer_id_list, mainbuffer_size, swapchain_size, memory_resource.get());
-      buffer_state_before_render_pass_list = CreateBufferCreationStateList(buffer_creation_descs, memory_resource.get());
-      auto [physical_buffer_size_in_byte, physical_buffer_alignment] = GetPhysicalBufferSizes(buffer_creation_descs, &device, memory_resource.get());
+      auto buffer_state_before_render_pass_list = CreateBufferCreationStateList(buffer_creation_descs, memory_resource.get());
+      auto [physical_buffer_size_in_byte, physical_buffer_alignment] = GetPhysicalBufferSizes(buffer_creation_descs, device.Get(), memory_resource.get());
       CHECK(physical_buffer_size_in_byte.size() == 2);
       CHECK(physical_buffer_size_in_byte.begin()->second > 0);
       CHECK(physical_buffer_alignment.size() == 2);
@@ -386,43 +532,74 @@ TEST_CASE("d3d12/render") {
       auto physical_buffer_allocator = CreateMemoryHeapAllocator(device.Get(), dxgi_core.GetAdapter());
       PhysicalAllocationList physical_allocation;
       std::tie(physical_allocation, physical_buffer) = CreatePhysicalBuffers(buffer_creation_descs, physical_buffer_size_in_byte, physical_buffer_alignment, physical_buffer_address_offset, std::move(physical_buffer), physical_buffer_allocator, memory_resource.get());
-    }
-    // prepare pass buffer handles and resources
-    std::pmr::unordered_map<StrId, D3D12_GPU_DESCRIPTOR_HANDLE> gpu_descriptor_handles{memory_resource.get()};
-    std::pmr::unordered_map<StrId, std::pmr::vector<D3D12_CPU_DESCRIPTOR_HANDLE>> cpu_descriptor_handles{memory_resource.get()};
-    std::pmr::unordered_map<StrId, std::pmr::vector<ID3D12Resource*>> pass_resources{memory_resource.get()};
-    {
+      // prepare pass buffer handles and resources
       std::pmr::unordered_map<BufferId, std::pmr::unordered_map<BufferStateType, D3D12_CPU_DESCRIPTOR_HANDLE>> cpu_descriptor_handles_per_buffer{memory_resource.get()};
+      const uint32_t descriptor_handle_num = 8;
+      DescriptorHeap descriptor_heap_buffers, descriptor_heap_rtv, descriptor_heap_dsv;
+      CHECK(descriptor_heap_buffers.Init(device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, descriptor_handle_num));
+      CHECK(descriptor_heap_rtv.Init(device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, descriptor_handle_num));
+      CHECK(descriptor_heap_dsv.Init(device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_DSV, descriptor_handle_num));
       for (auto& [pass_name, buffer_ids] : buffer_id_list) {
         auto& pass = render_pass_id_map.at(pass_name);
-        uint32_t handle_num_to_copy_to_gpu = 0;
-        D3D12_CPU_DESCRIPTOR_HANDLE start_handle_to_copy_to_gpu{};
+        std::pmr::vector<D3D12_CPU_DESCRIPTOR_HANDLE> handles_to_copy_to_gpu{memory_resource.get()};
         for (uint32_t i = 0; i < buffer_ids.size(); i++) {
-          if (buffer_ids[i] == named_buffers.at(StrId("swapchain"))) {
+          auto& buffer_id = buffer_ids[i];
+          if (buffer_id == named_buffers.at(StrId("swapchain"))) {
             if (pass.buffer_list[i].state_type == BufferStateType::kRtv) {
               cpu_descriptor_handles[pass_name].push_back(swapchain.GetRtvHandle());
             }
           } else {
             // TODO
+            auto& resource = physical_buffer.at(buffer_id);
+            auto& buffer_config = pass.buffer_list[i];
             switch (pass.buffer_list[i].state_type) {
               case BufferStateType::kCbv:
               case BufferStateType::kSrv:
               case BufferStateType::kUav: {
-                // make handle in cpu region (always)
-                // push back to cpu_descriptor_handles
-                if (handle_num_to_copy_to_gpu == 0) {
-                  // start_handle_to_copy_to_gpu = cpu_handle;
+                if (!cpu_descriptor_handles_per_buffer.contains(buffer_id)) {
+                  cpu_descriptor_handles_per_buffer.insert({buffer_id, std::pmr::unordered_map<BufferStateType, D3D12_CPU_DESCRIPTOR_HANDLE>{memory_resource.get()}});
                 }
-                handle_num_to_copy_to_gpu++;
+                auto state_type = pass.buffer_list[i].state_type;
+                if (!cpu_descriptor_handles_per_buffer.at(buffer_id).contains(state_type)) {
+                  auto handle = descriptor_heap_buffers.RetainHandle();
+                  cpu_descriptor_handles_per_buffer.at(buffer_id).insert({state_type, handle});
+                  switch (state_type) {
+                    case BufferStateType::kCbv: {
+                      D3D12_CONSTANT_BUFFER_VIEW_DESC desc{resource->GetGPUVirtualAddress(), physical_buffer_size_in_byte.at(buffer_id)};
+                      device.Get()->CreateConstantBufferView(&desc, handle);
+                      break;
+                    }
+                    case BufferStateType::kSrv: {
+                      auto desc = GetD3d12ShaderResourceViewDesc(buffer_config, resource);
+                      device.Get()->CreateShaderResourceView(resource, &desc, handle);
+                      break;
+                    }
+                    case BufferStateType::kUav: {
+                      auto desc = GetD3d12UnorderedAccessViewDesc(buffer_config);
+                      device.Get()->CreateUnorderedAccessView(resource, nullptr, &desc, handle);
+                      break;
+                    }
+                    case BufferStateType::kRtv:
+                    case BufferStateType::kDsv:
+                    case BufferStateType::kCopySrc:
+                    case BufferStateType::kCopyDst:
+                    case BufferStateType::kPresent:
+                      // unreachable
+                      break;
+                  }
+                }
+                handles_to_copy_to_gpu.push_back(cpu_descriptor_handles_per_buffer.at(buffer_id).at(state_type));
                 break;
               }
               case BufferStateType::kRtv: {
                 // make handle in cpu region if not created yet
+                // create view
                 // push back to cpu_descriptor_handles (always)
                 break;
               }
               case BufferStateType::kDsv: {
                 // make handle in cpu region if not created yet
+                // create view
                 // push back to cpu_descriptor_handles (always)
                 break;
               }
@@ -437,15 +614,18 @@ TEST_CASE("d3d12/render") {
             }
           }
         }
-        if (handle_num_to_copy_to_gpu > 0) {
-          auto gpu_handle = shader_visible_descriptor_heap.CopyToBufferDescriptorHeap(start_handle_to_copy_to_gpu, handle_num_to_copy_to_gpu);
+        if (!handles_to_copy_to_gpu.empty()) {
+          auto gpu_handle = shader_visible_descriptor_heap.CopyToBufferDescriptorHeap(handles_to_copy_to_gpu.data(), static_cast<uint32_t>(handles_to_copy_to_gpu.size()), memory_resource.get());
           gpu_descriptor_handles.insert({pass_name, gpu_handle});
         }
       }
+      descriptor_heap_buffers.Term();
+      descriptor_heap_rtv.Term();
+      descriptor_heap_dsv.Term();
+      // barrier configuration
+      buffer_state_before_render_pass_list.insert({named_buffers.at(StrId("swapchain")), kBufferStateFlagPresent});
+      barrier = ConfigureBarrier(render_pass_id_map, render_pass_order, {}, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
     }
-    // barrier configuration
-    buffer_state_before_render_pass_list.insert({named_buffers.at(StrId("swapchain")), kBufferStateFlagPresent});
-    auto barrier = ConfigureBarrier(render_pass_id_map, render_pass_order, {}, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
     std::pmr::unordered_map<CommandQueueType, uint64_t> pass_signal_val;
     std::pmr::unordered_map<StrId, std::pmr::unordered_map<CommandQueueType, uint64_t>> waiting_pass;
     std::pmr::unordered_map<CommandQueueType, D3d12CommandList**> command_lists;
