@@ -273,7 +273,6 @@ constexpr D3D12_SHADER_RESOURCE_VIEW_DESC GetD3d12ShaderResourceViewDesc(const B
 }
 constexpr D3D12_UNORDERED_ACCESS_VIEW_DESC GetD3d12UnorderedAccessViewDesc(const BufferConfig& desc) {
   D3D12_UNORDERED_ACCESS_VIEW_DESC view_desc{};
-  // TODO
   view_desc.Format = GetDxgiFormat(desc.format);
   switch (desc.dimension_type) {
     case BufferDimensionType::kBuffer: {
@@ -325,6 +324,59 @@ constexpr D3D12_UNORDERED_ACCESS_VIEW_DESC GetD3d12UnorderedAccessViewDesc(const
       break;
     }
   }
+  return view_desc;
+}
+constexpr D3D12_RENDER_TARGET_VIEW_DESC GetD3d12RenderTargetViewDesc(const BufferConfig& desc) {
+  D3D12_RENDER_TARGET_VIEW_DESC view_desc{};
+  view_desc.Format = GetDxgiFormat(desc.format);
+  switch (desc.dimension_type) {
+    case BufferDimensionType::kBuffer: {
+      view_desc.ViewDimension = D3D12_RTV_DIMENSION_BUFFER;
+      view_desc.Buffer.FirstElement = 0;
+      view_desc.Buffer.NumElements = 1;
+      break;
+    }
+    case BufferDimensionType::k1d: {
+      view_desc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE1D;
+      view_desc.Texture1D.MipSlice = 0;
+      break;
+    }
+    case BufferDimensionType::k1dArray: {
+      view_desc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE1DARRAY;
+      view_desc.Texture1DArray.MipSlice = 0;
+      view_desc.Texture1DArray.FirstArraySlice = desc.index_to_render;
+      view_desc.Texture1DArray.ArraySize = desc.buffer_num_to_render;
+      break;
+    }
+    case BufferDimensionType::k2d: {
+      view_desc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+      view_desc.Texture2D.MipSlice = 0;
+      view_desc.Texture2D.PlaneSlice = desc.index_to_render;
+      break;
+    }
+    case BufferDimensionType::k2dArray: {
+      view_desc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2DARRAY;
+      view_desc.Texture2DArray.MipSlice = 0;
+      view_desc.Texture2DArray.FirstArraySlice = 0;
+      view_desc.Texture2DArray.ArraySize = desc.buffer_num_to_render;
+      view_desc.Texture2DArray.PlaneSlice = desc.index_to_render; // not sure w/FirstArraySlice
+      break;
+    }
+    case BufferDimensionType::k3d: {
+      view_desc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE3D;
+      view_desc.Texture3D.MipSlice = 0;
+      view_desc.Texture3D.FirstWSlice = desc.index_to_render;
+      view_desc.Texture3D.WSize = desc.buffer_num_to_render;
+      break;
+    }
+    case BufferDimensionType::kCube:
+    case BufferDimensionType::kCubeArray:
+    case BufferDimensionType::kAS: {
+      // not supported.
+      break;
+    }
+  }
+  // TODO
   return view_desc;
 }
 }
@@ -599,7 +651,8 @@ TEST_CASE("d3d12/render") {
               }
               case BufferStateType::kRtv: {
                 if (create_handle) {
-                  // TODO
+                  auto desc = GetD3d12RenderTargetViewDesc(buffer_config);
+                  device.Get()->CreateRenderTargetView(resource, &desc, cpu_handle);
                 }
                 push_back_cpu_handle = true;
                 break;
@@ -613,7 +666,7 @@ TEST_CASE("d3d12/render") {
               }
               case BufferStateType::kCopySrc:
               case BufferStateType::kCopyDst: {
-                // push back to pass_resources (always)
+                pass_resources[pass_name].push_back(resource);
                 break;
               }
               case BufferStateType::kPresent: {
