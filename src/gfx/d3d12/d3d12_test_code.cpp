@@ -549,58 +549,60 @@ TEST_CASE("d3d12/render") {
               cpu_descriptor_handles[pass_name].push_back(swapchain.GetRtvHandle());
             }
           } else {
-            // TODO
+            auto state_type = pass.buffer_list[i].state_type;
+            if (!cpu_descriptor_handles_per_buffer.contains(buffer_id)) {
+              cpu_descriptor_handles_per_buffer.insert({buffer_id, std::pmr::unordered_map<BufferStateType, D3D12_CPU_DESCRIPTOR_HANDLE>{memory_resource.get()}});
+            }
+            auto create_handle = !cpu_descriptor_handles_per_buffer.at(buffer_id).contains(state_type);
+            if (create_handle) {
+              auto handle = descriptor_heap_buffers.RetainHandle();
+              cpu_descriptor_handles_per_buffer.at(buffer_id).insert({state_type, handle});
+            }
+            auto& cpu_handle = cpu_descriptor_handles_per_buffer.at(buffer_id).at(state_type);
             auto& resource = physical_buffer.at(buffer_id);
             auto& buffer_config = pass.buffer_list[i];
-            switch (pass.buffer_list[i].state_type) {
-              case BufferStateType::kCbv:
-              case BufferStateType::kSrv:
+            bool push_back_cpu_handle = false;
+            bool push_back_gpu_handle = false;
+            switch (state_type) {
+              case BufferStateType::kCbv: {
+                if (create_handle) {
+                  D3D12_CONSTANT_BUFFER_VIEW_DESC desc{resource->GetGPUVirtualAddress(), physical_buffer_size_in_byte.at(buffer_id)};
+                  device.Get()->CreateConstantBufferView(&desc, cpu_handle);
+                }
+                push_back_cpu_handle = true;
+                push_back_gpu_handle = true;
+                break;
+              }
+              case BufferStateType::kSrv: {
+                if (create_handle) {
+                  auto desc = GetD3d12ShaderResourceViewDesc(buffer_config, resource);
+                  device.Get()->CreateShaderResourceView(resource, &desc, cpu_handle);
+                }
+                push_back_cpu_handle = true;
+                push_back_gpu_handle = true;
+                break;
+              }
               case BufferStateType::kUav: {
-                if (!cpu_descriptor_handles_per_buffer.contains(buffer_id)) {
-                  cpu_descriptor_handles_per_buffer.insert({buffer_id, std::pmr::unordered_map<BufferStateType, D3D12_CPU_DESCRIPTOR_HANDLE>{memory_resource.get()}});
+                if (create_handle) {
+                  auto desc = GetD3d12UnorderedAccessViewDesc(buffer_config);
+                  device.Get()->CreateUnorderedAccessView(resource, nullptr, &desc, cpu_handle);
                 }
-                auto state_type = pass.buffer_list[i].state_type;
-                if (!cpu_descriptor_handles_per_buffer.at(buffer_id).contains(state_type)) {
-                  auto handle = descriptor_heap_buffers.RetainHandle();
-                  cpu_descriptor_handles_per_buffer.at(buffer_id).insert({state_type, handle});
-                  switch (state_type) {
-                    case BufferStateType::kCbv: {
-                      D3D12_CONSTANT_BUFFER_VIEW_DESC desc{resource->GetGPUVirtualAddress(), physical_buffer_size_in_byte.at(buffer_id)};
-                      device.Get()->CreateConstantBufferView(&desc, handle);
-                      break;
-                    }
-                    case BufferStateType::kSrv: {
-                      auto desc = GetD3d12ShaderResourceViewDesc(buffer_config, resource);
-                      device.Get()->CreateShaderResourceView(resource, &desc, handle);
-                      break;
-                    }
-                    case BufferStateType::kUav: {
-                      auto desc = GetD3d12UnorderedAccessViewDesc(buffer_config);
-                      device.Get()->CreateUnorderedAccessView(resource, nullptr, &desc, handle);
-                      break;
-                    }
-                    case BufferStateType::kRtv:
-                    case BufferStateType::kDsv:
-                    case BufferStateType::kCopySrc:
-                    case BufferStateType::kCopyDst:
-                    case BufferStateType::kPresent:
-                      // unreachable
-                      break;
-                  }
-                }
-                handles_to_copy_to_gpu.push_back(cpu_descriptor_handles_per_buffer.at(buffer_id).at(state_type));
+                push_back_cpu_handle = true;
+                push_back_gpu_handle = true;
                 break;
               }
               case BufferStateType::kRtv: {
-                // make handle in cpu region if not created yet
-                // create view
-                // push back to cpu_descriptor_handles (always)
+                if (create_handle) {
+                  // TODO
+                }
+                push_back_cpu_handle = true;
                 break;
               }
               case BufferStateType::kDsv: {
-                // make handle in cpu region if not created yet
-                // create view
-                // push back to cpu_descriptor_handles (always)
+                if (create_handle) {
+                  // TODO
+                }
+                push_back_cpu_handle = true;
                 break;
               }
               case BufferStateType::kCopySrc:
@@ -611,6 +613,12 @@ TEST_CASE("d3d12/render") {
               case BufferStateType::kPresent: {
                 break;
               }
+            }
+            if (push_back_cpu_handle) {
+              cpu_descriptor_handles[pass_name].push_back(cpu_handle);
+            }
+            if (push_back_gpu_handle) {
+              handles_to_copy_to_gpu.push_back(cpu_handle);
             }
           }
         }
