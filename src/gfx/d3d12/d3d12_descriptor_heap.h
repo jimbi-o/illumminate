@@ -4,10 +4,14 @@
 namespace illuminate::gfx::d3d12 {
 class DescriptorHeap {
  public:
+  ~DescriptorHeap();
   bool Init(D3d12Device* const device, const D3D12_DESCRIPTOR_HEAP_TYPE heap_type, const uint32_t descriptor_handle_num);
   void Term();
-  ~DescriptorHeap();
-  D3D12_CPU_DESCRIPTOR_HANDLE RetainHandle();
+  constexpr D3D12_CPU_DESCRIPTOR_HANDLE RetainHandle() {
+    auto addr = heap_start_cpu_ + handle_increment_size_ * used_handle_num_;
+    used_handle_num_++;
+    return {addr};
+  }
  private:
   ID3D12DescriptorHeap* descriptor_heap_ = nullptr;
   uint64_t heap_start_cpu_ = 0;
@@ -16,6 +20,3 @@ class DescriptorHeap {
 };
 }
 #endif
-/*
- = CreateDescriptorHeap(device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, descriptor_handle_num, D3D12_DESCRIPTOR_HEAP_FLAG_NONE);
-*/

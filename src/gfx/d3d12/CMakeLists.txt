@@ -93,5 +93,6 @@ target_sources(illuminategfxd3d12 PRIVATE
   "d3d12_command_queue.cpp"
   "d3d12_swapchain.cpp"
   "d3d12_shader_visible_descriptor_heap.cpp"
+  "d3d12_descriptor_heap.cpp"
   "${d3d12memoryallocator_SOURCE_DIR}/src/D3D12MemAlloc.cpp"
 )
