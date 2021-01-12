@@ -33,6 +33,7 @@ constexpr bool IsInitialValueUsed(const BufferStateType state_type, const Buffer
     case kPresent: return true;
   }
 }
+enum DepthStencilFlag : uint8_t { kDepthStencilFlagDepth = 0x1, kDepthStencilFlagStencil = 0x2, };
 class BufferConfig {
  public:
   constexpr BufferConfig()
@@ -44,6 +45,7 @@ class BufferConfig {
         dimension_type(BufferDimensionType::kBuffer),
         index_to_render(0),
         buffer_num_to_render(1),
+        depth_stencil_flag(DepthStencilFlag{}),
         depth(1)
   {}
   constexpr BufferConfig(StrId&& buffer_name, const BufferStateType state)
@@ -56,6 +58,7 @@ class BufferConfig {
         dimension_type(state_type == BufferStateType::kCbv ? BufferDimensionType::kBuffer : BufferDimensionType::k2d),
         index_to_render(0),
         buffer_num_to_render(1),
+        depth_stencil_flag(static_cast<DepthStencilFlag>(kDepthStencilFlagDepth | kDepthStencilFlagStencil)),
         depth(1)
   {}
   constexpr BufferConfig& LoadOpType(const BufferLoadOpType op) { load_op_type = op; return *this; }
@@ -65,6 +68,7 @@ class BufferConfig {
   constexpr BufferConfig& Depth(const uint32_t d) { depth = d; return *this; }
   constexpr BufferConfig& Dimension(const BufferDimensionType type) { dimension_type = type; return *this; }
   constexpr BufferConfig& RenderTargetIndex(const uint8_t index, const uint8_t num = 1) { index_to_render = index; buffer_num_to_render = num; return *this; }
+  constexpr BufferConfig& SetDepthStencilFlag(const DepthStencilFlag flag) { depth_stencil_flag = flag; return *this; }
   StrId name;
   BufferStateType  state_type;
   BufferLoadOpType load_op_type;
@@ -76,7 +80,7 @@ class BufferConfig {
   BufferDimensionType dimension_type;
   uint8_t          index_to_render;
   uint8_t          buffer_num_to_render;
-  std::byte        _pad;
+  DepthStencilFlag depth_stencil_flag;
   uint32_t         depth;
 };
 struct BufferSize2d { uint32_t width, height; };
