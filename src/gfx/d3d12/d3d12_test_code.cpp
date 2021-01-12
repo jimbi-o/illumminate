@@ -549,13 +549,19 @@ TEST_CASE("d3d12/render") {
               cpu_descriptor_handles[pass_name].push_back(swapchain.GetRtvHandle());
             }
           } else {
-            auto state_type = pass.buffer_list[i].state_type;
             if (!cpu_descriptor_handles_per_buffer.contains(buffer_id)) {
               cpu_descriptor_handles_per_buffer.insert({buffer_id, std::pmr::unordered_map<BufferStateType, D3D12_CPU_DESCRIPTOR_HANDLE>{memory_resource.get()}});
             }
+            auto state_type = pass.buffer_list[i].state_type;
             auto create_handle = !cpu_descriptor_handles_per_buffer.at(buffer_id).contains(state_type);
             if (create_handle) {
-              auto handle = descriptor_heap_buffers.RetainHandle();
+              auto descriptor_heap = &descriptor_heap_buffers;
+              if (state_type == BufferStateType::kRtv) {
+                descriptor_heap = &descriptor_heap_rtv;
+              } else if (state_type == BufferStateType::kDsv) {
+                descriptor_heap = &descriptor_heap_dsv;
+              }
+              auto handle = descriptor_heap->RetainHandle();
               cpu_descriptor_handles_per_buffer.at(buffer_id).insert({state_type, handle});
             }
             auto& cpu_handle = cpu_descriptor_handles_per_buffer.at(buffer_id).at(state_type);
