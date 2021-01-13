@@ -609,9 +609,9 @@ TEST_CASE("d3d12/render") {
     std::rotate(allocators.begin(), allocators.begin() + 1, allocators.end());
     swapchain.UpdateBackBufferIndex();
     PhysicalBufferList physical_buffer{memory_resource.get()};
-    std::pmr::unordered_map<StrId, D3D12_GPU_DESCRIPTOR_HANDLE> gpu_descriptor_handles{memory_resource.get()};
-    std::pmr::unordered_map<StrId, std::pmr::vector<D3D12_CPU_DESCRIPTOR_HANDLE>> cpu_descriptor_handles{memory_resource.get()};
-    std::pmr::unordered_map<StrId, std::pmr::vector<ID3D12Resource*>> pass_resources{memory_resource.get()};
+    std::pmr::unordered_map<StrId, D3D12_GPU_DESCRIPTOR_HANDLE> gpu_descriptor_handles{memory_resource.get()}; // cbv, srv, uav
+    std::pmr::unordered_map<StrId, std::pmr::vector<D3D12_CPU_DESCRIPTOR_HANDLE>> cpu_descriptor_handles{memory_resource.get()}; // uav, dsv, rtv
+    std::pmr::unordered_map<StrId, std::pmr::vector<ID3D12Resource*>> pass_resources{memory_resource.get()}; // uav, copy_src, copy_dst
     PassBarrierInfoSet barrier;
     {
       // prepare physical buffers
@@ -673,7 +673,6 @@ TEST_CASE("d3d12/render") {
                   D3D12_CONSTANT_BUFFER_VIEW_DESC desc{resource->GetGPUVirtualAddress(), physical_buffer_size_in_byte.at(buffer_id)};
                   device.Get()->CreateConstantBufferView(&desc, cpu_handle);
                 }
-                push_back_cpu_handle = true;
                 push_back_gpu_handle = true;
                 break;
               }
@@ -682,7 +681,6 @@ TEST_CASE("d3d12/render") {
                   auto desc = GetD3d12ShaderResourceViewDesc(buffer_config, resource);
                   device.Get()->CreateShaderResourceView(resource, &desc, cpu_handle);
                 }
-                push_back_cpu_handle = true;
                 push_back_gpu_handle = true;
                 break;
               }
