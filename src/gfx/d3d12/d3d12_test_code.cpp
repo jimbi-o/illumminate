@@ -451,6 +451,11 @@ TEST_CASE("d3d12/render") {
   CommandList command_list_pool;
   CHECK(command_list_pool.Init(device.Get()));
   std::vector<std::vector<ID3D12CommandAllocator**>> allocators(buffer_num);
+  DescriptorHeap descriptor_heap_buffers, descriptor_heap_rtv, descriptor_heap_dsv;
+  const uint32_t descriptor_handle_num = 8;
+  CHECK(descriptor_heap_buffers.Init(device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, descriptor_handle_num));
+  CHECK(descriptor_heap_rtv.Init(device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, descriptor_handle_num));
+  CHECK(descriptor_heap_dsv.Init(device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_DSV, descriptor_handle_num));
   SUBCASE("clear swapchain rtv@graphics queue") {
     RenderPassList render_pass_list{memory_resource.get()};
     {
@@ -631,11 +636,6 @@ TEST_CASE("d3d12/render") {
       std::tie(physical_allocation, physical_buffer) = CreatePhysicalBuffers(buffer_creation_descs, physical_buffer_size_in_byte, physical_buffer_alignment, physical_buffer_address_offset, std::move(physical_buffer), physical_buffer_allocator, memory_resource.get());
       // prepare pass buffer handles and resources
       std::pmr::unordered_map<BufferId, std::pmr::unordered_map<BufferStateType, D3D12_CPU_DESCRIPTOR_HANDLE>> cpu_descriptor_handles_per_buffer{memory_resource.get()};
-      const uint32_t descriptor_handle_num = 8;
-      DescriptorHeap descriptor_heap_buffers, descriptor_heap_rtv, descriptor_heap_dsv;
-      CHECK(descriptor_heap_buffers.Init(device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, descriptor_handle_num));
-      CHECK(descriptor_heap_rtv.Init(device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, descriptor_handle_num));
-      CHECK(descriptor_heap_dsv.Init(device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_DSV, descriptor_handle_num));
       for (auto& [pass_name, buffer_ids] : buffer_id_list) {
         auto& pass = render_pass_id_map.at(pass_name);
         std::pmr::vector<D3D12_CPU_DESCRIPTOR_HANDLE> handles_to_copy_to_gpu{memory_resource.get()};
@@ -735,9 +735,6 @@ TEST_CASE("d3d12/render") {
           gpu_descriptor_handles.insert({pass_name, gpu_handle});
         }
       }
-      descriptor_heap_buffers.Term();
-      descriptor_heap_rtv.Term();
-      descriptor_heap_dsv.Term();
       // barrier configuration
       buffer_state_before_render_pass_list.insert({named_buffers.at(StrId("swapchain")), kBufferStateFlagPresent});
       barrier = ConfigureBarrier(render_pass_id_map, render_pass_order, {}, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
@@ -820,6 +817,9 @@ TEST_CASE("d3d12/render") {
     allocators.pop_back();
   }
   command_queue.WaitAll();
+  descriptor_heap_buffers.Term();
+  descriptor_heap_rtv.Term();
+  descriptor_heap_dsv.Term();
   command_list_pool.Term();
   command_allocator.Term();
   shader_visible_descriptor_heap.Term();

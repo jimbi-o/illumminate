@@ -8,6 +8,7 @@ class DescriptorHeap {
   bool Init(D3d12Device* const device, const D3D12_DESCRIPTOR_HEAP_TYPE heap_type, const uint32_t descriptor_handle_num);
   void Term();
   constexpr D3D12_CPU_DESCRIPTOR_HANDLE RetainHandle() {
+    // TODO manage handle num
     auto addr = heap_start_cpu_ + handle_increment_size_ * used_handle_num_;
     used_handle_num_++;
     return {addr};
