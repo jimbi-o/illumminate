@@ -82,7 +82,7 @@ bool Swapchain::Init(DxgiFactory* factory, ID3D12CommandQueue* command_queue_gra
   }
   // prepare rtv
   {
-    descriptor_heap_ = CreateDescriptorHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, swapchain_buffer_num_, D3D12_DESCRIPTOR_HEAP_FLAG_NONE);
+    CreateDescriptorHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, swapchain_buffer_num_, D3D12_DESCRIPTOR_HEAP_FLAG_NONE, &descriptor_heap_);
     ASSERT(descriptor_heap_ && "CreateDescriptorHeap for swapchain rtv failed.");
     descriptor_heap_->SetName(L"descriptorheap_rtv");
     const D3D12_RENDER_TARGET_VIEW_DESC rtv_desc = {format_, D3D12_RTV_DIMENSION_TEXTURE2D, {}};

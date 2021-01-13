@@ -140,9 +140,9 @@ BufferIdList RemoveUnusedBuffers(const RenderPassOrder& render_pass_order, Buffe
   auto it = buffer_id_list.begin();
   while (it != buffer_id_list.end()) {
     if (IsContaining(render_pass_order, it->first)) {
-      it = buffer_id_list.erase(it);
-    } else {
       it++;
+    } else {
+      it = buffer_id_list.erase(it);
     }
   }
   return std::move(buffer_id_list);

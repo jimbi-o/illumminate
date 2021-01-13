@@ -666,6 +666,7 @@ TEST_CASE("d3d12/render") {
             auto& buffer_config = pass.buffer_list[i];
             bool push_back_cpu_handle = false;
             bool push_back_gpu_handle = false;
+            bool push_back_resource = false;
             switch (state_type) {
               case BufferStateType::kCbv: {
                 if (create_handle) {
@@ -692,6 +693,7 @@ TEST_CASE("d3d12/render") {
                 }
                 push_back_cpu_handle = true;
                 push_back_gpu_handle = true;
+                push_back_resource = true;
                 break;
               }
               case BufferStateType::kRtv: {
@@ -712,7 +714,7 @@ TEST_CASE("d3d12/render") {
               }
               case BufferStateType::kCopySrc:
               case BufferStateType::kCopyDst: {
-                pass_resources[pass_name].push_back(resource);
+                push_back_resource = true;
                 break;
               }
               case BufferStateType::kPresent: {
@@ -724,6 +726,9 @@ TEST_CASE("d3d12/render") {
             }
             if (push_back_gpu_handle) {
               handles_to_copy_to_gpu.push_back(cpu_handle);
+            }
+            if (push_back_resource) {
+              pass_resources[pass_name].push_back(resource);
             }
           }
         }

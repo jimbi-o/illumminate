@@ -3,12 +3,12 @@
 namespace illuminate::gfx::d3d12 {
 bool ShaderVisibleDescriptorHeap::Init(D3d12Device* const device) {
   device_ = device;
-  descriptor_heap_buffers_ = CreateDescriptorHeap(device_, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, kMaxBufferNum, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
+  CreateDescriptorHeap(device_, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, kMaxBufferNum, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, &descriptor_heap_buffers_);
   if (descriptor_heap_buffers_ == nullptr) return false;
   heap_start_cpu_buffers_ = descriptor_heap_buffers_->GetCPUDescriptorHandleForHeapStart().ptr;
   heap_start_gpu_buffers_ = descriptor_heap_buffers_->GetGPUDescriptorHandleForHeapStart().ptr;
   buffer_handle_increment_size_ = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-  descriptor_heap_samplers_ = CreateDescriptorHeap(device_, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, kMaxSamplerNum, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE);
+  CreateDescriptorHeap(device_, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, kMaxSamplerNum, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, &descriptor_heap_samplers_);
   if (descriptor_heap_samplers_ == nullptr) return false;
   heap_start_cpu_samplers_ = descriptor_heap_samplers_->GetCPUDescriptorHandleForHeapStart().ptr;
   heap_start_gpu_samplers_ = descriptor_heap_samplers_->GetGPUDescriptorHandleForHeapStart().ptr;

@@ -5,7 +5,7 @@ DescriptorHeap::~DescriptorHeap() {
   Term();
 }
 bool DescriptorHeap::Init(D3d12Device* const device, const D3D12_DESCRIPTOR_HEAP_TYPE heap_type, const uint32_t descriptor_handle_num) {
-  descriptor_heap_ = CreateDescriptorHeap(device, heap_type, descriptor_handle_num, D3D12_DESCRIPTOR_HEAP_FLAG_NONE);
+  CreateDescriptorHeap(device, heap_type, descriptor_handle_num, D3D12_DESCRIPTOR_HEAP_FLAG_NONE, &descriptor_heap_);
   if (descriptor_heap_ == nullptr) return false;
   heap_start_cpu_ = descriptor_heap_->GetCPUDescriptorHandleForHeapStart().ptr;
   handle_increment_size_ = device->GetDescriptorHandleIncrementSize(heap_type);
