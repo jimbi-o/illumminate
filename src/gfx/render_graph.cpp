@@ -647,14 +647,14 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassIdMap& render_pass_id_map, c
       auto split_barrier_begin_pass = FindGreatestCommonDescendent(state_change_info.pass_list_to_access_prev_buffer_state, ancestor_descendent_adjacency_graph_queue_considered, state_change_info.pass_list_to_access_next_buffer_state, kValidPassNotFound, memory_resource);
       auto split_barrier_end_pass = state_change_info.pass_list_to_access_next_buffer_state.empty() ? kValidPassNotFound : FindLeastCommonAncestor(state_change_info.pass_list_to_access_next_buffer_state, descendent_ancestor_adjacency_graph_queue_considered, ancestor_descendent_adjacency_graph_queue_considered, split_barrier_begin_pass, memory_resource);
       auto both_pass_exists = split_barrier_begin_pass != kValidPassNotFound && split_barrier_end_pass != kValidPassNotFound;
-      auto is_same_path = both_pass_exists && split_barrier_begin_pass == split_barrier_end_pass;
+      auto is_same_pass = both_pass_exists && split_barrier_begin_pass == split_barrier_end_pass;
       auto is_same_queue = both_pass_exists ? render_pass_id_map.at(split_barrier_begin_pass).command_queue_type == render_pass_id_map.at(split_barrier_end_pass).command_queue_type : true;
-      auto is_next_path = both_pass_exists && is_same_queue && pass_index_per_queue.at(split_barrier_begin_pass) + 1 >= pass_index_per_queue.at(split_barrier_end_pass);
+      auto is_next_pass = both_pass_exists && is_same_queue && pass_index_per_queue.at(split_barrier_begin_pass) + 1 >= pass_index_per_queue.at(split_barrier_end_pass);
       auto is_buffer_needed_before_end_pass = state_change_info.pass_list_to_access_next_buffer_state.contains(split_barrier_end_pass);
       auto is_state_change_needed_right_before_initial_pass = is_buffer_needed_before_end_pass && split_barrier_begin_pass == kValidPassNotFound && pass_index_per_queue.at(split_barrier_end_pass) == 0;
       auto is_state_change_needed_right_after_final_pass = split_barrier_end_pass == kValidPassNotFound && pass_index_per_queue.at(split_barrier_begin_pass) + 1 == next_index.at(render_pass_id_map.at(split_barrier_begin_pass).command_queue_type);
       auto is_split_begin_pass_not_found = split_barrier_begin_pass == kValidPassNotFound && !state_change_info.pass_list_to_access_prev_buffer_state.empty();
-      if (is_same_path || (is_next_path && is_buffer_needed_before_end_pass) || is_state_change_needed_right_before_initial_pass || is_state_change_needed_right_after_final_pass || is_split_begin_pass_not_found) {
+      if (is_same_pass || (is_next_pass && is_buffer_needed_before_end_pass) || is_state_change_needed_right_before_initial_pass || is_state_change_needed_right_after_final_pass || is_split_begin_pass_not_found) {
         // no split
         if (is_state_change_needed_right_before_initial_pass || is_split_begin_pass_not_found) {
           barrier_pass_name.push_back(split_barrier_end_pass);
