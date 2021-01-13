@@ -516,6 +516,23 @@ BufferStateList CreateBufferCreationStateList(const BufferCreationDescList& buff
   }
   return buffer_creation_state_list;
 }
+constexpr bool IsValidResourceState(const CommandQueueType type, const BufferStateFlags flag) {
+  switch (type) {
+    case CommandQueueType::kGraphics: return true;
+    case CommandQueueType::kCompute: {
+      if (flag & kBufferStateFlagSrvPsOnly) return false;
+      if (flag & kBufferStateFlagRtv) return false;
+      if (flag & kBufferStateFlagDsvWrite) return false;
+      if (flag & kBufferStateFlagDsvRead) return false;
+      return true;
+    }
+    case CommandQueueType::kTransfer: {
+      if (flag & ~(kBufferStateFlagCopySrc | kBufferStateFlagCopyDst)) return false;
+      return true;
+    }
+    case CommandQueueType::kNum: return false;
+  }
+}
 PassBarrierInfoSet ConfigureBarrier(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const PassSignalInfo& pass_signal_info, const BufferIdList& buffer_id_list, const BufferStateList& buffer_state_before_render_pass_list, const BufferStateList& buffer_state_after_render_pass_list, std::pmr::memory_resource* memory_resource) {
   // gather state change info per buffer
   struct BufferStateChangeInfo {
@@ -2985,6 +3002,48 @@ TEST_CASE("barrier") {
     CHECK(barrier_info.barrier_before_pass[StrId("D")][0].state_flag_after_pass  == kBufferStateFlagDsvWrite);
     CHECK(barrier_info.barrier_before_pass[StrId("D")][0].split_type == BarrierSplitType::kEnd);
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("D")));
+  }
+}
+TEST_CASE("barrier2") { // TODO merge with "barrier" test
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  CHECK(IsValidResourceState(CommandQueueType::kGraphics, kBufferStateFlagSrvPsOnly));
+  CHECK(IsValidResourceState(CommandQueueType::kCompute, kBufferStateFlagSrvNonPs));
+  CHECK(!IsValidResourceState(CommandQueueType::kCompute, kBufferStateFlagSrvPsOnly));
+  CHECK(!IsValidResourceState(CommandQueueType::kCompute, kBufferStateFlagRtv));
+  CHECK(!IsValidResourceState(CommandQueueType::kCompute, kBufferStateFlagDsvWrite));
+  CHECK(!IsValidResourceState(CommandQueueType::kCompute, kBufferStateFlagDsvRead));
+  CHECK(!IsValidResourceState(CommandQueueType::kCompute, kBufferStateFlagSrv));
+  CHECK(IsValidResourceState(CommandQueueType::kTransfer, kBufferStateFlagCopySrc));
+  CHECK(IsValidResourceState(CommandQueueType::kTransfer, kBufferStateFlagCopyDst));
+  CHECK(!IsValidResourceState(CommandQueueType::kTransfer, kBufferStateFlagCbv));
+  CHECK(!IsValidResourceState(CommandQueueType::kTransfer, kBufferStateFlagUav));
+  CHECK(!IsValidResourceState(CommandQueueType::kTransfer, kBufferStateFlagSrv));
+  CHECK(!IsValidResourceState(CommandQueueType::kTransfer, kBufferStateFlagRtv));
+  CHECK(!IsValidResourceState(CommandQueueType::kTransfer, kBufferStateFlagDsvWrite));
+  CHECK(!IsValidResourceState(CommandQueueType::kTransfer, kBufferStateFlagDsvRead));
+  {
+    auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
+    BatchInfoList batch_info_list{memory_resource.get()};
+    batch_info_list.push_back(RenderPassOrder{memory_resource.get()});
+    batch_info_list.back().push_back(StrId("A"));
+    batch_info_list.back().push_back(StrId("B"));
+    RenderPassIdMap render_pass_id_map{memory_resource.get()};
+    render_pass_id_map.insert({StrId("A"), RenderPass(StrId("A"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv)}, memory_resource.get()})});
+    render_pass_id_map.insert({StrId("B"), RenderPass(StrId("B"), {{BufferConfig(StrId("depth"), BufferStateType::kDsv).LoadOpType(BufferLoadOpType::kLoadReadOnly)}, memory_resource.get()})});
+    auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
+    BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
+    buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
+    auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
+    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
+    CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_after_pass  == kBufferStateFlagDsvRead);
+    CHECK(barrier_info.barrier_after_pass[StrId("A")][0].split_type == BarrierSplitType::kNone);
+    CHECK(!barrier_info.barrier_before_pass.contains(StrId("B")));
+    CHECK(!barrier_info.barrier_after_pass.contains(StrId("B")));
   }
 }
 TEST_CASE("MergePassSignalInfo") {
