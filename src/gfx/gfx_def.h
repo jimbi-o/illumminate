@@ -46,7 +46,7 @@ constexpr auto GetClearValueColorBuffer(const ClearValue& clear_value) {
 constexpr auto GetClearValueDepthBuffer(const ClearValue& clear_value) {
   return std::get<1>(clear_value);
 }
-enum BufferStateType : uint8_t { kCbv = 0, kSrv, kUav, kRtv, kDsv, kCopySrc, kCopyDst, kPresent, };
+enum BufferStateType : uint8_t { kCbv = 0, kSrvPsOnly, kSrvNonPs, kSrvAll, kUav, kRtv, kDsv, kCopySrc, kCopyDst, kPresent, };
 enum BufferLoadOpType : uint8_t { kDontCare = 0, kClear, kLoadWrite, kLoadReadOnly, };
 enum BufferDimensionType : uint8_t { kBuffer = 0, k1d, k1dArray, k2d, k2dArray, k3d, kCube, kCubeArray, kAS, };
 }

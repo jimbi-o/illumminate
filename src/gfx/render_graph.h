@@ -12,7 +12,9 @@ namespace illuminate::gfx {
 constexpr bool IsOutputBuffer(const BufferStateType state_type, const BufferLoadOpType load_op_type) {
   switch (state_type) {
     case kCbv: return false;
-    case kSrv: return false;
+    case kSrvPsOnly: return false;
+    case kSrvNonPs: return false;
+    case kSrvAll: return false;
     case kUav: return (load_op_type == kLoadReadOnly) ? false : true;
     case kRtv: return true;
     case kDsv: return (load_op_type == kLoadReadOnly) ? false : true;
@@ -24,7 +26,9 @@ constexpr bool IsOutputBuffer(const BufferStateType state_type, const BufferLoad
 constexpr bool IsInitialValueUsed(const BufferStateType state_type, const BufferLoadOpType load_op_type) {
   switch (state_type) {
     case kCbv: return true;
-    case kSrv: return true;
+    case kSrvNonPs: return true;
+    case kSrvPsOnly: return true;
+    case kSrvAll: return true;
     case kUav: return (load_op_type == kDontCare || load_op_type == kClear) ? false : true;
     case kRtv: return (load_op_type == kDontCare || load_op_type == kClear) ? false : true;
     case kDsv: return (load_op_type == kDontCare || load_op_type == kClear) ? false : true;
@@ -51,7 +55,7 @@ class BufferConfig {
   constexpr BufferConfig(StrId&& buffer_name, const BufferStateType state)
       : name(std::move(buffer_name)),
         state_type(state),
-        load_op_type((state_type == BufferStateType::kSrv || state_type == BufferStateType::kCbv || state_type == BufferStateType::kCopySrc || state_type == BufferStateType::kPresent) ? BufferLoadOpType::kLoadReadOnly : (state_type == BufferStateType::kDsv ? BufferLoadOpType::kClear : BufferLoadOpType::kDontCare)),
+        load_op_type((state_type == BufferStateType::kSrvPsOnly || state_type == BufferStateType::kSrvNonPs || state_type == BufferStateType::kSrvAll || state_type == BufferStateType::kCbv || state_type == BufferStateType::kCopySrc || state_type == BufferStateType::kPresent) ? BufferLoadOpType::kLoadReadOnly : (state_type == BufferStateType::kDsv ? BufferLoadOpType::kClear : BufferLoadOpType::kDontCare)),
         format(state_type == BufferStateType::kDsv ? BufferFormat::kD32Float : (state_type == BufferStateType::kCbv ? BufferFormat::kUnknown : BufferFormat::kR8G8B8A8Unorm)),
         size_type(BufferSizeType::kMainbufferRelative), width(1.0f), height(1.0f),
         clear_value(state_type == BufferStateType::kDsv ? GetClearValueDefaultDepthBuffer() : GetClearValueDefaultColorBuffer()),
@@ -164,7 +168,9 @@ enum BufferStateFlags : uint32_t {
 constexpr BufferStateFlags GetBufferStateFlag(const BufferStateType type, const BufferLoadOpType load_op_type) {
   switch (type) {
     case kCbv: return kBufferStateFlagCbv;
-    case kSrv: return kBufferStateFlagSrv;
+    case kSrvPsOnly: return kBufferStateFlagSrvPsOnly;
+    case kSrvNonPs:  return kBufferStateFlagSrvNonPs;
+    case kSrvAll:    return kBufferStateFlagSrv;
     case kUav: return kBufferStateFlagUav;
     case kRtv: return kBufferStateFlagRtv;
     case kDsv: return (load_op_type == BufferLoadOpType::kLoadReadOnly) ? kBufferStateFlagDsvRead : kBufferStateFlagDsvWrite;
