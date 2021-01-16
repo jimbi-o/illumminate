@@ -40,15 +40,18 @@ enum CommandQueueTypeFlag : uint8_t {
   kCommandQueueTypeCompute  = 0x2,
   kCommandQueueTypeTransfer = 0x4,
 };
-constexpr CommandQueueTypeFlag ConvertCommandQueueTypeToFlag(const CommandQueueType type) {
+constexpr CommandQueueTypeFlag ConvertCommandQueueTypeToFlag(const CommandQueueType& type) {
   switch (type) {
     case CommandQueueType::kGraphics: return kCommandQueueTypeGraphics;
     case CommandQueueType::kCompute:  return kCommandQueueTypeCompute;
     case CommandQueueType::kTransfer: return kCommandQueueTypeTransfer;
   }
 }
-constexpr CommandQueueTypeFlag MergeCommandQueueTypeFlag(const CommandQueueTypeFlag& a, const CommandQueueTypeFlag& b) {
-  return static_cast<CommandQueueTypeFlag>(a | b);
+constexpr bool IsContainingCommandQueueType(const CommandQueueTypeFlag& flag, const CommandQueueType& type) {
+  return flag & ConvertCommandQueueTypeToFlag(type);
+}
+constexpr void MergeCommandQueueTypeFlag(CommandQueueTypeFlag* const a, const CommandQueueType& b) {
+  *a = static_cast<CommandQueueTypeFlag>(*a | ConvertCommandQueueTypeToFlag(b));
 }
 constexpr auto GetClearValueDefaultColorBuffer() {
   return ClearValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f});

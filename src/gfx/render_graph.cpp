@@ -368,7 +368,7 @@ PassSignalInfo ConfigureBufferResourceDependency(const RenderPassIdMap& render_p
 PassSignalInfo ConvertBatchToSignalInfo(const BatchInfoList& batch_info_list, const RenderPassIdMap& render_pass_id_map, std::pmr::memory_resource* memory_resource) {
   PassSignalInfo pass_signal_wait_info{memory_resource};
   std::pmr::unordered_map<CommandQueueType, StrId> last_pass_executed_per_batch{memory_resource};
-  std::pmr::unordered_set<CommandQueueType> pass_executed_queue{memory_resource};
+  CommandQueueTypeFlag pass_executed_queue;
   for (uint32_t i = 0; i < batch_info_list.size() - 1; i++) {
     for (auto& pass_name : batch_info_list[i]) {
       auto& pass = render_pass_id_map.at(pass_name);
@@ -376,8 +376,8 @@ PassSignalInfo ConvertBatchToSignalInfo(const BatchInfoList& batch_info_list, co
     }
     for (auto& pass_name : batch_info_list[i + 1]) {
       auto& pass = render_pass_id_map.at(pass_name);
-      if (pass_executed_queue.contains(pass.command_queue_type)) continue;
-      pass_executed_queue.insert(pass.command_queue_type);
+      if (IsContainingCommandQueueType(pass_executed_queue, pass.command_queue_type)) continue;
+      MergeCommandQueueTypeFlag(&pass_executed_queue, pass.command_queue_type);
       for (auto& [signal_queue, signal_pass] : last_pass_executed_per_batch) {
         if (signal_queue == pass.command_queue_type) continue;
         if (!pass_signal_wait_info.contains(signal_pass)) {
@@ -387,7 +387,7 @@ PassSignalInfo ConvertBatchToSignalInfo(const BatchInfoList& batch_info_list, co
       }
     }
     last_pass_executed_per_batch.clear();
-    pass_executed_queue.clear();
+    pass_executed_queue = kCommandQueueTypeNone;
   }
   return pass_signal_wait_info;
 }
@@ -538,8 +538,9 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassIdMap& render_pass_id_map, c
     BufferStateFlags prev_buffer_state;
     BufferStateFlags next_buffer_state;
     std::pmr::unordered_set<StrId> pass_list_to_access_prev_buffer_state;
-    std::pmr::unordered_set<CommandQueueType> queue_list_to_access_next_buffer_state;
     std::pmr::unordered_set<StrId> pass_list_to_access_next_buffer_state;
+    CommandQueueTypeFlag queue_list_to_access_next_buffer_state;
+    std::byte _pad[7] = {};
   };
   std::pmr::unordered_map<BufferId, std::pmr::vector<BufferStateChangeInfo>> buffer_state_change_list{memory_resource};
   std::pmr::unordered_map<BufferId, std::pmr::unordered_map<CommandQueueType, StrId>> last_pass_accessed_per_buffer{memory_resource};
@@ -566,7 +567,7 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassIdMap& render_pass_id_map, c
           barrier_exists = true;
           buffer_state_change_list.insert({buffer_id, std::pmr::vector<BufferStateChangeInfo>{memory_resource}});
         }
-        buffer_state_change_list.at(buffer_id).push_back({last_flag, flag, std::pmr::unordered_set<StrId>{memory_resource}, std::pmr::unordered_set<CommandQueueType>{memory_resource}, std::pmr::unordered_set<StrId>{memory_resource}});
+        buffer_state_change_list.at(buffer_id).push_back({last_flag, flag, std::pmr::unordered_set<StrId>{memory_resource}, std::pmr::unordered_set<StrId>{memory_resource}, kCommandQueueTypeNone});
         if (last_pass_accessed_per_buffer.contains(buffer_id)) {
           auto& barrier = buffer_state_change_list.at(buffer_id).back();
           for (auto&& [queue, accessed_pass] : last_pass_accessed_per_buffer.at(buffer_id)) {
@@ -577,8 +578,8 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassIdMap& render_pass_id_map, c
       }
       if (barrier_exists) {
         auto& barrier = buffer_state_change_list.at(buffer_id).back();
-        if (!barrier.queue_list_to_access_next_buffer_state.contains(pass.command_queue_type)) {
-          barrier.queue_list_to_access_next_buffer_state.insert(pass.command_queue_type);
+        if (!IsContainingCommandQueueType(barrier.queue_list_to_access_next_buffer_state, pass.command_queue_type)) {
+          MergeCommandQueueTypeFlag(&barrier.queue_list_to_access_next_buffer_state, pass.command_queue_type);
           barrier.pass_list_to_access_next_buffer_state.insert(pass_name);
         }
       }
@@ -601,7 +602,7 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassIdMap& render_pass_id_map, c
     if (!barrier_exists) {
       buffer_state_change_list.insert({buffer_id, std::pmr::vector<BufferStateChangeInfo>{memory_resource}});
     }
-    buffer_state_change_list.at(buffer_id).push_back({last_flag, flag, std::pmr::unordered_set<StrId>{memory_resource}, std::pmr::unordered_set<CommandQueueType>{memory_resource}, std::pmr::unordered_set<StrId>{memory_resource}});
+    buffer_state_change_list.at(buffer_id).push_back({last_flag, flag, std::pmr::unordered_set<StrId>{memory_resource}, std::pmr::unordered_set<StrId>{memory_resource}, kCommandQueueTypeNone});
     if (last_pass_accessed_per_buffer.contains(buffer_id)) {
       auto& barrier = buffer_state_change_list.at(buffer_id).back();
       for (auto&& [queue, accessed_pass] : last_pass_accessed_per_buffer.at(buffer_id)) {
