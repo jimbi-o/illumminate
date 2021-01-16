@@ -411,18 +411,6 @@ RenderPassOrder ConvertBatchInfoBackToRenderPassOrder(BatchInfoList&& batch_info
   }
   return render_pass_order;
 }
-namespace {
-const uint32_t kCommandQueueTypeGraphics = 0x1;
-const uint32_t kCommandQueueTypeCompute  = 0x2;
-const uint32_t kCommandQueueTypeTransfer = 0x4;
-constexpr uint32_t ConvertCommandQueueTypeToFlag(const CommandQueueType type) {
-  switch (type) {
-    case CommandQueueType::kGraphics: return kCommandQueueTypeGraphics;
-    case CommandQueueType::kCompute:  return kCommandQueueTypeCompute;
-    case CommandQueueType::kTransfer: return kCommandQueueTypeTransfer;
-  }
-}
-}
 static StrId FindGreatestCommonDescendent(const StrId& a, const StrId& b, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>& ancestor_descendent_render_pass_map, const std::pmr::unordered_set<StrId>& stop_pass, const StrId& pass_not_found, std::pmr::memory_resource* memory_resource) {
   if (a == b) return a;
   if (stop_pass.contains(a)) return a;

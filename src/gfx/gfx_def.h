@@ -34,6 +34,22 @@ struct BufferDesc {
 enum class CommandQueueType : uint8_t { kGraphics = 0, kCompute, kTransfer, };
 static const CommandQueueType kCommandQueueTypeSet[]{CommandQueueType::kGraphics, CommandQueueType::kCompute, CommandQueueType::kTransfer};
 static const auto kCommandQueueTypeNum = static_cast<uint32_t>(CommandQueueType::kTransfer) + 1;
+enum CommandQueueTypeFlag : uint8_t {
+  kCommandQueueTypeNone     = 0x0,
+  kCommandQueueTypeGraphics = 0x1,
+  kCommandQueueTypeCompute  = 0x2,
+  kCommandQueueTypeTransfer = 0x4,
+};
+constexpr CommandQueueTypeFlag ConvertCommandQueueTypeToFlag(const CommandQueueType type) {
+  switch (type) {
+    case CommandQueueType::kGraphics: return kCommandQueueTypeGraphics;
+    case CommandQueueType::kCompute:  return kCommandQueueTypeCompute;
+    case CommandQueueType::kTransfer: return kCommandQueueTypeTransfer;
+  }
+}
+constexpr CommandQueueTypeFlag MergeCommandQueueTypeFlag(const CommandQueueTypeFlag& a, const CommandQueueTypeFlag& b) {
+  return static_cast<CommandQueueTypeFlag>(a | b);
+}
 constexpr auto GetClearValueDefaultColorBuffer() {
   return ClearValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f});
 }
