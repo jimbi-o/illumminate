@@ -420,7 +420,6 @@ constexpr uint32_t ConvertCommandQueueTypeToFlag(const CommandQueueType type) {
     case CommandQueueType::kGraphics: return kCommandQueueTypeGraphics;
     case CommandQueueType::kCompute:  return kCommandQueueTypeCompute;
     case CommandQueueType::kTransfer: return kCommandQueueTypeTransfer;
-    case CommandQueueType::kNum:      return 0;
   }
 }
 }
@@ -543,7 +542,6 @@ constexpr bool IsValidResourceState(const CommandQueueType type, const BufferSta
       if (flag & ~(kBufferStateFlagCopySrc | kBufferStateFlagCopyDst)) return false;
       return true;
     }
-    case CommandQueueType::kNum: return false;
   }
 }
 PassBarrierInfoSet ConfigureBarrier(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const PassSignalInfo& pass_signal_info, const BufferIdList& buffer_id_list, const BufferStateList& buffer_state_before_render_pass_list, const BufferStateList& buffer_state_after_render_pass_list, std::pmr::memory_resource* memory_resource) {
