@@ -39,6 +39,8 @@ enum CommandQueueTypeFlag : uint8_t {
   kCommandQueueTypeGraphics = 0x1,
   kCommandQueueTypeCompute  = 0x2,
   kCommandQueueTypeTransfer = 0x4,
+  kCommandQueueTypeAll      = (0x4 | 0x2 | 0x1),
+  kCommandQueueTypeGC       = (0x2 | 0x1),
 };
 constexpr CommandQueueTypeFlag ConvertCommandQueueTypeToFlag(const CommandQueueType& type) {
   switch (type) {
