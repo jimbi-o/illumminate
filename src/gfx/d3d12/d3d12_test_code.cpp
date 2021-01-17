@@ -672,7 +672,7 @@ TEST_CASE("d3d12/render") {
   }
 #if 0
   // TODO
-  SUBCASE("fill swapchain uav with shader@compute queue") {
+  SUBCASE("fill uav with shader@compute queue and copy to swapchain buffer") {
   }
   SUBCASE("clear + draw triangle to swapchain w/dsv") {
   }
@@ -681,8 +681,6 @@ TEST_CASE("d3d12/render") {
   SUBCASE("clear + draw moving triangle to rtv w/dsv, copy to uav@compute queue") {
   }
   SUBCASE("transfer texture from cpu and use@graphics queue") {
-  }
-  SUBCASE("exec frame multiple times") {
   }
 #endif
   auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
