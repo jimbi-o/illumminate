@@ -682,6 +682,8 @@ TEST_CASE("d3d12/render") {
   }
   SUBCASE("transfer texture from cpu and use@graphics queue") {
   }
+  SUBCASE("imgui") {
+  }
 #endif
   auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
   auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
