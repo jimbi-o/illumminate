@@ -614,6 +614,8 @@ TEST_CASE("d3d12/render") {
     std::rotate(allocators.begin(), allocators.begin() + 1, allocators.end());
     swapchain.UpdateBackBufferIndex();
     PhysicalBufferList physical_buffer{memory_resource.get()};
+    PhysicalAllocationList physical_allocation{memory_resource.get()};
+    auto physical_buffer_allocator = CreateMemoryHeapAllocator(device.Get(), dxgi_core.GetAdapter());
     std::pmr::unordered_map<StrId, D3D12_GPU_DESCRIPTOR_HANDLE> gpu_descriptor_handles{memory_resource.get()}; // cbv, srv, uav
     std::pmr::unordered_map<StrId, std::pmr::vector<D3D12_CPU_DESCRIPTOR_HANDLE>> cpu_descriptor_handles{memory_resource.get()}; // uav, dsv, rtv
     std::pmr::unordered_map<StrId, std::pmr::vector<ID3D12Resource*>> pass_resources{memory_resource.get()}; // uav, copy_src, copy_dst
@@ -631,8 +633,6 @@ TEST_CASE("d3d12/render") {
       // TODO aliasing barrier
       auto [physical_buffer_lifetime_begin_pass, physical_buffer_lifetime_end_pass] = CalculatePhysicalBufferLiftime(render_pass_order, buffer_id_list, memory_resource.get());
       auto physical_buffer_address_offset = GetPhysicalBufferAddressOffset(render_pass_order, physical_buffer_lifetime_begin_pass, physical_buffer_lifetime_end_pass, physical_buffer_size_in_byte, physical_buffer_alignment, memory_resource.get());
-      auto physical_buffer_allocator = CreateMemoryHeapAllocator(device.Get(), dxgi_core.GetAdapter());
-      PhysicalAllocationList physical_allocation;
       std::tie(physical_allocation, physical_buffer) = CreatePhysicalBuffers(buffer_creation_descs, physical_buffer_size_in_byte, physical_buffer_alignment, physical_buffer_address_offset, std::move(physical_buffer), physical_buffer_allocator, memory_resource.get());
       // prepare pass buffer handles and resources
       std::pmr::unordered_map<BufferId, std::pmr::unordered_map<BufferStateType, D3D12_CPU_DESCRIPTOR_HANDLE>> cpu_descriptor_handles_per_buffer{memory_resource.get()};
@@ -793,6 +793,13 @@ TEST_CASE("d3d12/render") {
         }
       }
     }
+    command_queue.WaitAll();
+    for (auto& [buffer_id, allocation] : physical_allocation) {
+      if (allocation == nullptr) continue;
+      allocation->Release();
+      physical_buffer.at(buffer_id)->Release();
+    }
+    physical_buffer_allocator->Release();
   }
   SUBCASE("fill swapchain uav with shader@compute queue") {
     // TODO
