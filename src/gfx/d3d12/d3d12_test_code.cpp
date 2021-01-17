@@ -546,7 +546,7 @@ TEST_CASE("d3d12/render") {
           StrId("copy"),
           {
             {
-              BufferConfig(StrId("mainbuffer"), BufferStateType::kSrv),
+              BufferConfig(StrId("mainbuffer"), BufferStateType::kSrvPsOnly),
               BufferConfig(StrId("swapchain"), BufferStateType::kRtv),
             },
             memory_resource.get()
@@ -676,7 +676,9 @@ TEST_CASE("d3d12/render") {
                 push_back_gpu_handle = true;
                 break;
               }
-              case BufferStateType::kSrv: {
+              case BufferStateType::kSrvPsOnly:
+              case BufferStateType::kSrvNonPs:
+              case BufferStateType::kSrvAll: {
                 if (create_handle) {
                   auto desc = GetD3d12ShaderResourceViewDesc(buffer_config, resource);
                   device.Get()->CreateShaderResourceView(resource, &desc, cpu_handle);

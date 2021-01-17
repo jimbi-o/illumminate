@@ -20,7 +20,6 @@ constexpr inline D3D12_COMMAND_LIST_TYPE ConvertToD3d12CommandQueueType(const Co
     case CommandQueueType::kGraphics: return D3D12_COMMAND_LIST_TYPE_DIRECT;
     case CommandQueueType::kCompute:  return D3D12_COMMAND_LIST_TYPE_COMPUTE;
     case CommandQueueType::kTransfer: return D3D12_COMMAND_LIST_TYPE_COPY;
-    case CommandQueueType::kNum:      return D3D12_COMMAND_LIST_TYPE_DIRECT;
   }
 }
 constexpr inline DXGI_FORMAT GetDxgiFormat(const BufferFormat format) {
