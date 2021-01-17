@@ -566,12 +566,11 @@ TEST_CASE("d3d12/render") {
     std::pmr::unordered_map<StrId, RenderFunction> render_functions{memory_resource.get()};
     {
       render_functions.insert({StrId("mainpass"), [](D3d12CommandList* const command_list, const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, ID3D12Resource** resource){
-        // TODO
         const UINT clear_color[4]{255,255,0,255};
-        command_list->ClearUnorderedAccessViewUint(gpu_handle, *cpu_handle, *resource, clear_color, 0, nullptr);
+        command_list->ClearUnorderedAccessViewUint(gpu_handle, cpu_handle[0], resource[0], clear_color, 0, nullptr);
       }});
       render_functions.insert({StrId("copy"), [](D3d12CommandList* const command_list, [[maybe_unused]]const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, [[maybe_unused]]ID3D12Resource** resource){
-        // TODO
+        // TODO use shader to copy input buffer
         const FLOAT clear_color[4] = {0.0f,1.0f,1.0f,1.0f};
         command_list->ClearRenderTargetView(*cpu_handle, clear_color, 0, nullptr);
       }});
