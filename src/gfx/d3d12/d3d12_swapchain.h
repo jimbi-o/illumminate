@@ -11,8 +11,8 @@ class Swapchain {
   void EnableVsync(const bool b) { vsync_ = b; }
   void UpdateBackBufferIndex();
   bool Present();
-  constexpr ID3D12Resource* GetResource() { return resources_[buffer_index_]; }
-  constexpr D3D12_CPU_DESCRIPTOR_HANDLE GetRtvHandle() const { return cpu_handles_rtv_[buffer_index_]; }
+  ID3D12Resource* GetResource() { return resources_[buffer_index_]; }
+  D3D12_CPU_DESCRIPTOR_HANDLE GetRtvHandle() const { return cpu_handles_rtv_[buffer_index_]; }
   constexpr DXGI_FORMAT GetDxgiFormat() const { return format_; }
  private:
   DXGI_FORMAT format_ = DXGI_FORMAT_UNKNOWN;
