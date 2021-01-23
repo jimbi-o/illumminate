@@ -99,5 +99,10 @@ target_sources(illuminategfxd3d12 PRIVATE
 )
 
 add_custom_command(TARGET illuminategfxd3d12 POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different  $<TARGET_FILE:dxcompiler> $<TARGET_FILE_DIR:illuminategfxd3d12>
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:dxcompiler> $<TARGET_FILE_DIR:illuminategfxd3d12>
   )
+if (BUILD_WITH_TEST)
+  add_custom_command(TARGET illuminategfxd3d12 POST_BUILD
+	COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/../shader $<TARGET_FILE_DIR:illuminategfxd3d12>/shader
+	)
+endif()
