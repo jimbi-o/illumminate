@@ -95,4 +95,9 @@ target_sources(illuminategfxd3d12 PRIVATE
   "d3d12_shader_visible_descriptor_heap.cpp"
   "d3d12_descriptor_heap.cpp"
   "${d3d12memoryallocator_SOURCE_DIR}/src/D3D12MemAlloc.cpp"
+  "d3d12_shader_compiler.cpp"
 )
+
+add_custom_command(TARGET illuminategfxd3d12 POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different  $<TARGET_FILE:dxcompiler> $<TARGET_FILE_DIR:illuminategfxd3d12>
+  )

@@ -84,6 +84,7 @@ target_link_libraries(illuminategfx PRIVATE spdlog illuminatecore dxcompiler)
 target_include_directories(illuminategfx
   PUBLIC
   "../../../include"
+  "${dxc_SOURCE_DIR}/include"
   PRIVATE
   "."
   "../"
