@@ -102,13 +102,24 @@ void ShaderCompiler::Term() {
   compiler_->Release();
   utils_->Release();
 }
-IDxcResult* ShaderCompiler::Compile(const char* filename, LPCWSTR target_profile, std::pmr::memory_resource* memory_resource) {
+IDxcResult* ShaderCompiler::Compile(const char* filename, const ShaderType target_profile, std::pmr::memory_resource* memory_resource) {
   auto buffer_size = MAX_PATH;
   auto abspath = reinterpret_cast<char*>(memory_resource->allocate(buffer_size, alignof(char)));
   auto path_len = GetAbsolutePath(filename, abspath, buffer_size);
   auto abspath_mb = reinterpret_cast<wchar_t*>(memory_resource->allocate(strlen(abspath) * 2, alignof(char)));
   ConvertToLPCWSTR(abspath, abspath_mb, path_len);
-  auto ret = CreateShaderResource(utils_, compiler_, abspath_mb, target_profile, memory_resource);
+  IDxcResult* ret = nullptr;
+  switch (target_profile) {
+    case ShaderType::kPs:  ret = CreateShaderResource(utils_, compiler_, abspath_mb, L"ps_6_5", memory_resource); break;
+    case ShaderType::kVs:  ret = CreateShaderResource(utils_, compiler_, abspath_mb, L"vs_6_5", memory_resource); break;
+    case ShaderType::kGs:  ret = CreateShaderResource(utils_, compiler_, abspath_mb, L"gs_6_5", memory_resource); break;
+    case ShaderType::kHs:  ret = CreateShaderResource(utils_, compiler_, abspath_mb, L"hs_6_5", memory_resource); break;
+    case ShaderType::kDs:  ret = CreateShaderResource(utils_, compiler_, abspath_mb, L"ds_6_5", memory_resource); break;
+    case ShaderType::kCs:  ret = CreateShaderResource(utils_, compiler_, abspath_mb, L"cs_6_5", memory_resource); break;
+    case ShaderType::kLib: ret = CreateShaderResource(utils_, compiler_, abspath_mb, L"lib_6_5", memory_resource); break;
+    case ShaderType::kMs:  ret = CreateShaderResource(utils_, compiler_, abspath_mb, L"ms_6_5", memory_resource); break;
+    case ShaderType::kAs:  ret = CreateShaderResource(utils_, compiler_, abspath_mb, L"as_6_5", memory_resource); break;
+  }
   memory_resource->deallocate(abspath, buffer_size, alignof(char));
   memory_resource->deallocate(abspath_mb, strlen(abspath) * 2, alignof(char));
   return ret;
@@ -183,10 +194,10 @@ TEST_CASE("ShaderCompiler class") {
   CHECK(device.Init(dxgi_core.GetAdapter()));
   ShaderCompiler shader_compiler;
   CHECK(shader_compiler.Init(device.Get(), memory_resource.get()));
-  auto result = shader_compiler.Compile("shader/test/test.vs.hlsl", L"vs_6_5", memory_resource.get());
+  auto result = shader_compiler.Compile("shader/test/test.vs.hlsl", ShaderType::kVs, memory_resource.get());
   CHECK(result);
   shader_compiler.ReleaseResult(result);
-  result = shader_compiler.Compile("shader/test/test.vs.hlsl", L"vs_6_5", memory_resource.get());
+  result = shader_compiler.Compile("shader/test/test.vs.hlsl", ShaderType::kVs, memory_resource.get());
   CHECK(result);
   shader_compiler.Term();
   device.Term();

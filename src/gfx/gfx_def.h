@@ -70,5 +70,6 @@ constexpr auto GetClearValueDepthBuffer(const ClearValue& clear_value) {
 enum BufferStateType : uint8_t { kCbv = 0, kSrvPsOnly, kSrvNonPs, kSrvAll, kUav, kRtv, kDsv, kCopySrc, kCopyDst, kPresent, };
 enum BufferLoadOpType : uint8_t { kDontCare = 0, kClear, kLoadWrite, kLoadReadOnly, };
 enum BufferDimensionType : uint8_t { kBuffer = 0, k1d, k1dArray, k2d, k2dArray, k3d, kCube, kCubeArray, kAS, };
+enum ShaderType : uint8_t { kPs, kVs, kGs, kHs, kDs, kCs, kLib, kMs, kAs, };
 }
 #endif

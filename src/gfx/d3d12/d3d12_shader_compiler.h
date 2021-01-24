@@ -7,7 +7,7 @@ class ShaderCompiler {
  public:
   bool Init(D3d12Device* const device, std::pmr::memory_resource* memory_resource);
   void Term();
-  IDxcResult* Compile(const char* filename, LPCWSTR target_profile, std::pmr::memory_resource* memory_resource);
+  IDxcResult* Compile(const char* filename, const ShaderType, std::pmr::memory_resource* memory_resource);
   void ReleaseResult(IDxcResult* const);
  private:
   D3d12Device* device_ = nullptr;
