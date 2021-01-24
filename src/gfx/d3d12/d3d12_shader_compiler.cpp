@@ -1,7 +1,8 @@
+#include "d3d12_shader_compiler.h"
 #include "d3d12_device.h"
 #include "d3d12_dxgi_core.h"
 #include "d3d12_minimal_for_cpp.h"
-#include "dxc/dxcapi.h" // wanted to move this source code to upper directory, but could not remove errors compiling WinAdapter.h
+namespace illuminate::gfx::d3d12 {
 namespace {
 // https://simoncoenen.com/blog/programming/graphics/DxcRevised.html
 IDxcUtils* CreateDxcUtils() {
@@ -65,8 +66,6 @@ IDxcResult* CreateShaderResource(IDxcUtils* const utils, IDxcCompiler3* const co
   }
   return result;
 }
-const uint32_t buffer_size_in_bytes = 32 * 1024;
-std::byte buffer[buffer_size_in_bytes]{};
 uint32_t GetAbsolutePath(const char* filename, char* dst, const uint32_t dst_size) {
   auto len = GetModuleFileName(nullptr, dst, dst_size);
   if (len == 0) {
@@ -82,6 +81,41 @@ uint32_t GetAbsolutePath(const char* filename, char* dst, const uint32_t dst_siz
 uint32_t ConvertToLPCWSTR(const char* text, wchar_t* dst, const uint32_t text_len) {
   auto len = mbstowcs(dst, text, text_len);
   return len;
+}
+#ifdef BUILD_WITH_TEST
+const uint32_t buffer_size_in_bytes = 32 * 1024;
+std::byte buffer[buffer_size_in_bytes]{};
+#endif
+}
+bool ShaderCompiler::Init(D3d12Device* const device, std::pmr::memory_resource* memory_resource) {
+  device_ = device;
+  utils_ = CreateDxcUtils();
+  if (!utils_) return false;
+  compiler_ = CreateDxcShaderCompiler();
+  if (!compiler_) return false;
+  return true;
+}
+void ShaderCompiler::Term() {
+  for (auto& r : results_) {
+    r->Release();
+  }
+  compiler_->Release();
+  utils_->Release();
+}
+IDxcResult* ShaderCompiler::Compile(const char* filename, LPCWSTR target_profile, std::pmr::memory_resource* memory_resource) {
+  auto buffer_size = MAX_PATH;
+  auto abspath = reinterpret_cast<char*>(memory_resource->allocate(buffer_size, alignof(char)));
+  auto path_len = GetAbsolutePath(filename, abspath, buffer_size);
+  auto abspath_mb = reinterpret_cast<wchar_t*>(memory_resource->allocate(strlen(abspath) * 2, alignof(char)));
+  ConvertToLPCWSTR(abspath, abspath_mb, path_len);
+  auto ret = CreateShaderResource(utils_, compiler_, abspath_mb, target_profile, memory_resource);
+  memory_resource->deallocate(abspath, buffer_size, alignof(char));
+  memory_resource->deallocate(abspath_mb, strlen(abspath) * 2, alignof(char));
+  return ret;
+}
+void ShaderCompiler::ReleaseResult(IDxcResult* const result) {
+  results_.erase(result);
+  result->Release();
 }
 }
 #include "doctest/doctest.h"
@@ -137,4 +171,24 @@ TEST_CASE("compile shader using dxc") {
   device.Term();
   dxgi_core.Term();
   shader_result->Release();
+}
+TEST_CASE("ShaderCompiler class") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  using namespace illuminate::gfx::d3d12;
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
+  DxgiCore dxgi_core;
+  CHECK(dxgi_core.Init());
+  Device device;
+  CHECK(device.Init(dxgi_core.GetAdapter()));
+  ShaderCompiler shader_compiler;
+  CHECK(shader_compiler.Init(device.Get(), memory_resource.get()));
+  auto result = shader_compiler.Compile("shader/test/test.vs.hlsl", L"vs_6_5", memory_resource.get());
+  CHECK(result);
+  shader_compiler.ReleaseResult(result);
+  result = shader_compiler.Compile("shader/test/test.vs.hlsl", L"vs_6_5", memory_resource.get());
+  CHECK(result);
+  shader_compiler.Term();
+  device.Term();
+  dxgi_core.Term();
 }
