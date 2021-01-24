@@ -49,7 +49,7 @@ IDxcResult* CreateShaderResource(IDxcUtils* const utils, IDxcCompiler3* const co
   arguments.push_back(DXC_ARG_WARNINGS_ARE_ERRORS);
   arguments.push_back(L"-Qstrip_debug");
   arguments.push_back(L"-Qstrip_reflect");
-  // arguments.push_back(L"-Qstrip_rootsignature");
+  arguments.push_back(L"-Qstrip_rootsignature");
   IDxcResult* result = nullptr;
   DxcBuffer source{blob->GetBufferPointer(), blob->GetBufferSize(), DXC_CP_ACP};
   hr = compiler->Compile(&source, arguments.data(), arguments.size(), nullptr, IID_PPV_ARGS(&result));
@@ -108,20 +108,31 @@ TEST_CASE("compile shader using dxc") {
   Device device;
   CHECK(device.Init(dxgi_core.GetAdapter()));
   {
+    auto root_signature_blob = GetResultOutput<IDxcBlob>(shader_result, DXC_OUT_ROOT_SIGNATURE);
+    CHECK(root_signature_blob);
+    ID3D12RootSignature* root_signature = nullptr;
+    auto hr = device.Get()->CreateRootSignature(0, root_signature_blob->GetBufferPointer(), root_signature_blob->GetBufferSize(), IID_PPV_ARGS(&root_signature));
+    CHECK(SUCCEEDED(hr));
+    CHECK(root_signature);
     auto shader_object = GetResultOutput<IDxcBlob>(shader_result, DXC_OUT_OBJECT);
     CHECK(shader_object);
-    struct PipilineStateDescLocal {
+    struct {
+      CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE root_signature;
       CD3DX12_PIPELINE_STATE_STREAM_VS vs;
+    } desc_local {
+      root_signature,
+      D3D12_SHADER_BYTECODE{shader_object->GetBufferPointer(), shader_object->GetBufferSize()},
     };
-    PipilineStateDescLocal desc_local{(D3D12_SHADER_BYTECODE{shader_object->GetBufferPointer(), shader_object->GetBufferSize()})};
     D3D12_PIPELINE_STATE_STREAM_DESC desc{sizeof(desc_local), &desc_local};
     ID3D12PipelineState* pso = nullptr;
-    auto hr = device.Get()->CreatePipelineState(&desc, IID_PPV_ARGS(&pso));
+    hr = device.Get()->CreatePipelineState(&desc, IID_PPV_ARGS(&pso));
     // if crash, enable dev mode + ExperimentalShaderModels (https://github.com/microsoft/DirectXShaderCompiler/issues/2550)
     CHECK(SUCCEEDED(hr));
     CHECK(pso);
     pso->Release();
     shader_object->Release();
+    root_signature->Release();
+    root_signature_blob->Release();
   }
   device.Term();
   dxgi_core.Term();
