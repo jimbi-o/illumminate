@@ -19,18 +19,21 @@ IDxcCompiler3* CreateDxcShaderCompiler() {
   logerror("CreateDxcShaderCompiler failed. {}", hr);
   return nullptr;
 }
-void PrintDxcCompilerErrorMessage(IDxcResult* result) {
-  if (!result->HasOutput(DXC_OUT_ERRORS)) return;
-  IDxcBlobUtf8* error = nullptr;
-  auto hr = result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&error), nullptr);
-  if (SUCCEEDED(hr) && error) {
-    logerror("dxc:{}", error->GetStringPointer());
-    error->Release();
-  } else {
-    logerror("Failed to get error message. {}", hr);
-  }
+template <typename T>
+std::pair<T*, IDxcBlobUtf16*> GetResultOutputWithOutputName(IDxcResult* result, const DXC_OUT_KIND kind) {
+  if (!result->HasOutput(kind)) return {};
+  T* output = nullptr;
+  IDxcBlobUtf16* output_text = nullptr;
+  auto hr = result->GetOutput(kind, IID_PPV_ARGS(&output), &output_text);
+  return {output, output_text};
 }
-std::pair<IDxcResult*, IDxcBlob*> CreateShaderResource(IDxcUtils* const utils, IDxcCompiler3* const compiler, LPCWSTR filepath_absolute, LPCWSTR target_profile, std::pmr::memory_resource* memory_resource) {
+template <typename T>
+T* GetResultOutput(IDxcResult* result, const DXC_OUT_KIND kind) {
+  auto [output, output_name] = GetResultOutputWithOutputName<T>(result, kind);
+  if (output_name) output_name->Release();
+  return output;
+}
+IDxcResult* CreateShaderResource(IDxcUtils* const utils, IDxcCompiler3* const compiler, LPCWSTR filepath_absolute, LPCWSTR target_profile, std::pmr::memory_resource* memory_resource) {
   IDxcBlobEncoding* blob = nullptr;
   auto hr = utils->LoadFile(filepath_absolute, nullptr, &blob);
   if (FAILED(hr)) {
@@ -38,32 +41,29 @@ std::pair<IDxcResult*, IDxcBlob*> CreateShaderResource(IDxcUtils* const utils, I
     return {};
   }
   std::pmr::vector<LPCWSTR> arguments{memory_resource};
+  arguments.push_back(L"-E");
+  arguments.push_back(L"main");
   arguments.push_back(L"-T");
   arguments.push_back(target_profile);
+  arguments.push_back(DXC_ARG_DEBUG);
+  arguments.push_back(DXC_ARG_PACK_MATRIX_ROW_MAJOR);
+  arguments.push_back(DXC_ARG_WARNINGS_ARE_ERRORS);
+  arguments.push_back(L"-Qstrip_debug");
+  arguments.push_back(L"-Qstrip_reflect");
   IDxcResult* result = nullptr;
   DxcBuffer source{blob->GetBufferPointer(), blob->GetBufferSize(), DXC_CP_ACP};
   hr = compiler->Compile(&source, arguments.data(), arguments.size(), nullptr, IID_PPV_ARGS(&result));
   blob->Release();
+  if (auto error = GetResultOutput<IDxcBlobUtf8>(result, DXC_OUT_ERRORS); error) {
+    logerror("dxc:{}", error->GetStringPointer());
+    error->Release();
+  }
   if (FAILED(hr)) {
     logerror(L"Compile for CreateShaderResource failed. {} {}", filepath_absolute, hr);
-    PrintDxcCompilerErrorMessage(result);
     result->Release();
     return {};
   }
-  PrintDxcCompilerErrorMessage(result);
-  if (!result->HasOutput(DXC_OUT_OBJECT)) {
-    logerror(L"Missing object in shader, {}", filepath_absolute);
-    result->Release();
-    return {};
-  }
-  IDxcBlob* shaderobj = nullptr;
-  hr = result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&shaderobj), nullptr);
-  if (FAILED(hr)) {
-    logerror(L"Failed to get shader object. {} {}", filepath_absolute, hr);
-    result->Release();
-    return {};
-  }
-  return {result, shaderobj};
+  return result;
 }
 const uint32_t buffer_size_in_bytes = 32 * 1024;
 std::byte buffer[buffer_size_in_bytes]{};
@@ -100,9 +100,7 @@ TEST_CASE("compile shader using dxc") {
   auto abspath_mb = reinterpret_cast<wchar_t*>(abspath + path_len);
   path_len = ConvertToLPCWSTR(abspath, abspath_mb, path_len);
   CHECK(path_len);
-  auto [result, shader_resource] = CreateShaderResource(utils, compiler, abspath_mb, L"vs_6_6", memory_resource.get());
-  CHECK(result);
-  CHECK(shader_resource);
-  shader_resource->Release();
-  result->Release();
+  auto shader_result = CreateShaderResource(utils, compiler, abspath_mb, L"vs_6_6", memory_resource.get());
+  CHECK(shader_result);
+  shader_result->Release();
 }
