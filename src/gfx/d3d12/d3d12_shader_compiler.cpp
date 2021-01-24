@@ -1,8 +1,7 @@
-#include "dxc/Support/WinIncludes.h"
-#include "dxc/Support/WinFunctions.h"
-#include "dxc/dxcapi.h"
+#include "d3d12_device.h"
+#include "d3d12_dxgi_core.h"
 #include "d3d12_minimal_for_cpp.h"
-// wanted to move to upper directory, but could not remove errors compiling WinAdapter.h
+#include "dxc/dxcapi.h" // wanted to move this source code to upper directory, but could not remove errors compiling WinAdapter.h
 namespace {
 // https://simoncoenen.com/blog/programming/graphics/DxcRevised.html
 IDxcUtils* CreateDxcUtils() {
@@ -50,6 +49,7 @@ IDxcResult* CreateShaderResource(IDxcUtils* const utils, IDxcCompiler3* const co
   arguments.push_back(DXC_ARG_WARNINGS_ARE_ERRORS);
   arguments.push_back(L"-Qstrip_debug");
   arguments.push_back(L"-Qstrip_reflect");
+  // arguments.push_back(L"-Qstrip_rootsignature");
   IDxcResult* result = nullptr;
   DxcBuffer source{blob->GetBufferPointer(), blob->GetBufferSize(), DXC_CP_ACP};
   hr = compiler->Compile(&source, arguments.data(), arguments.size(), nullptr, IID_PPV_ARGS(&result));
@@ -85,6 +85,7 @@ uint32_t ConvertToLPCWSTR(const char* text, wchar_t* dst, const uint32_t text_le
 }
 }
 #include "doctest/doctest.h"
+#include "d3dx12.h"
 TEST_CASE("compile shader using dxc") {
   using namespace illuminate;
   using namespace illuminate::gfx;
@@ -95,12 +96,34 @@ TEST_CASE("compile shader using dxc") {
   auto compiler = CreateDxcShaderCompiler();
   CHECK(compiler);
   auto abspath = reinterpret_cast<char*>(buffer);
-  auto path_len = GetAbsolutePath("test/test.vs.hlsl", abspath, buffer_size_in_bytes);
+  auto path_len = GetAbsolutePath("shader/test/test.vs.hlsl", abspath, buffer_size_in_bytes);
   CHECK(path_len == strlen(abspath));
   auto abspath_mb = reinterpret_cast<wchar_t*>(abspath + path_len);
   path_len = ConvertToLPCWSTR(abspath, abspath_mb, path_len);
   CHECK(path_len);
-  auto shader_result = CreateShaderResource(utils, compiler, abspath_mb, L"vs_6_6", memory_resource.get());
+  auto shader_result = CreateShaderResource(utils, compiler, abspath_mb, L"vs_6_5", memory_resource.get());
   CHECK(shader_result);
+  DxgiCore dxgi_core;
+  CHECK(dxgi_core.Init());
+  Device device;
+  CHECK(device.Init(dxgi_core.GetAdapter()));
+  {
+    auto shader_object = GetResultOutput<IDxcBlob>(shader_result, DXC_OUT_OBJECT);
+    CHECK(shader_object);
+    struct PipilineStateDescLocal {
+      CD3DX12_PIPELINE_STATE_STREAM_VS vs;
+    };
+    PipilineStateDescLocal desc_local{(D3D12_SHADER_BYTECODE{shader_object->GetBufferPointer(), shader_object->GetBufferSize()})};
+    D3D12_PIPELINE_STATE_STREAM_DESC desc{sizeof(desc_local), &desc_local};
+    ID3D12PipelineState* pso = nullptr;
+    auto hr = device.Get()->CreatePipelineState(&desc, IID_PPV_ARGS(&pso));
+    // if crash, enable dev mode + ExperimentalShaderModels (https://github.com/microsoft/DirectXShaderCompiler/issues/2550)
+    CHECK(SUCCEEDED(hr));
+    CHECK(pso);
+    pso->Release();
+    shader_object->Release();
+  }
+  device.Term();
+  dxgi_core.Term();
   shader_result->Release();
 }

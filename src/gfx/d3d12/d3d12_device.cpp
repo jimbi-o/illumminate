@@ -24,6 +24,15 @@ bool Device::Init(DxgiAdapter* const adapter) {
     }
   }
 #endif
+  {
+    UUID experimental_features[] = { D3D12ExperimentalShaderModels };
+    auto hr = CALL(D3D12EnableExperimentalFeatures)(1, experimental_features, nullptr, nullptr);
+    if (SUCCEEDED(hr)) {
+      loginfo("experimental shader models enabled.");
+    } else {
+      logwarn("Failed to enable experimental shader models. {}", hr);
+    }
+  }
   auto hr = CALL(D3D12CreateDevice)(adapter, D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(&device_));
   ASSERT(SUCCEEDED(hr) && device_ && "D3D12CreateDevice failed.");
 #ifndef SHIP_BUILD
