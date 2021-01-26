@@ -103,6 +103,6 @@ add_custom_command(TARGET illuminategfxd3d12 POST_BUILD
   )
 if (BUILD_WITH_TEST)
   add_custom_command(TARGET illuminategfxd3d12 POST_BUILD
-	COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/../shader $<TARGET_FILE_DIR:illuminategfxd3d12>/shader
+	COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/../shader ${CMAKE_BINARY_DIR}/shader
 	)
 endif()

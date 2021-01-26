@@ -5,6 +5,7 @@
 #include "d3d12_device.h"
 #include "d3d12_dxgi_core.h"
 #include "d3d12_minimal_for_cpp.h"
+#include "d3d12_shader_compiler.h"
 #include "d3d12_shader_visible_descriptor_heap.h"
 #include "d3d12_swapchain.h"
 #include "gfx/win32/win32_window.h"
@@ -18,6 +19,7 @@
 #pragma clang diagnostic pop
 #endif
 #include "doctest/doctest.h"
+#include "d3dx12.h"
 namespace {
 const uint32_t buffer_size_in_bytes = 32 * 1024;
 std::byte buffer[buffer_size_in_bytes]{};
@@ -587,6 +589,8 @@ TEST_CASE("d3d12/render") {
   CHECK(swapchain.Init(dxgi_core.GetFactory(), command_queue.Get(CommandQueueType::kGraphics), device.Get(), window.GetHwnd(), swapchain_buffer_num, buffer_num));
   ShaderVisibleDescriptorHeap shader_visible_descriptor_heap;
   CHECK(shader_visible_descriptor_heap.Init(device.Get()));
+  ShaderCompiler shader_compiler;
+  CHECK(shader_compiler.Init(device.Get()));
   CommandAllocator command_allocator;
   CHECK(command_allocator.Init(device.Get()));
   CommandList command_list_pool;
@@ -657,12 +661,48 @@ TEST_CASE("d3d12/render") {
           memory_resource.get()
         }
                                           ));
+    ID3D12RootSignature* copy_root_signature = nullptr;
+    ID3D12PipelineState* copy_pipeline_state = nullptr;
+    {
+      auto shader_result_vs = shader_compiler.Compile(L"shader/test/fullscreen-triangle.vs.hlsl", ShaderType::kVs, memory_resource.get());
+      CHECK(shader_result_vs);
+      auto shader_result_ps = shader_compiler.Compile(L"shader/test/copysrv.ps.hlsl", ShaderType::kPs, memory_resource.get());
+      CHECK(shader_result_ps);
+      auto root_signature_blob = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_ps, DXC_OUT_ROOT_SIGNATURE);
+      CHECK(root_signature_blob);
+      auto hr = device.Get()->CreateRootSignature(0, root_signature_blob->GetBufferPointer(), root_signature_blob->GetBufferSize(), IID_PPV_ARGS(&copy_root_signature));
+      CHECK(SUCCEEDED(hr));
+      CHECK(copy_root_signature);
+      auto shader_object_vs = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_vs, DXC_OUT_OBJECT);
+      CHECK(shader_object_vs);
+      auto shader_object_ps = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_ps, DXC_OUT_OBJECT);
+      CHECK(shader_object_ps);
+      struct {
+        CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE root_signature;
+        CD3DX12_PIPELINE_STATE_STREAM_VS vs;
+        CD3DX12_PIPELINE_STATE_STREAM_PS ps;
+      } desc_local {
+        copy_root_signature,
+        D3D12_SHADER_BYTECODE{shader_object_vs->GetBufferPointer(), shader_object_vs->GetBufferSize()},
+        D3D12_SHADER_BYTECODE{shader_object_ps->GetBufferPointer(), shader_object_ps->GetBufferSize()},
+      };
+      D3D12_PIPELINE_STATE_STREAM_DESC desc{sizeof(desc_local), &desc_local};
+      hr = device.Get()->CreatePipelineState(&desc, IID_PPV_ARGS(&copy_pipeline_state));
+      CHECK(SUCCEEDED(hr));
+      CHECK(copy_pipeline_state);
+      shader_object_ps->Release();
+      shader_object_vs->Release();
+      shader_result_ps->Release();
+      shader_result_vs->Release();
+    }
     render_functions.insert({StrId("mainpass"), [](D3d12CommandList* const command_list, const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, ID3D12Resource** resource){
       const UINT clear_color[4]{255,255,0,255};
       command_list->ClearUnorderedAccessViewUint(gpu_handle, cpu_handle[0], resource[0], clear_color, 0, nullptr);
     }});
-    render_functions.insert({StrId("copy"), [](D3d12CommandList* const command_list, [[maybe_unused]]const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, [[maybe_unused]]ID3D12Resource** resource){
-      // TODO use shader to copy input buffer
+    render_functions.insert({StrId("copy"), [copy_root_signature, copy_pipeline_state](D3d12CommandList* const command_list, const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, [[maybe_unused]]ID3D12Resource** resource){
+      command_list->SetGraphicsRootSignature(copy_root_signature);
+      command_list->SetPipelineState(copy_pipeline_state);
+      command_list->SetGraphicsRootDescriptorTable(0, gpu_handle);
       const FLOAT clear_color[4] = {0.0f,1.0f,1.0f,1.0f};
       command_list->ClearRenderTargetView(*cpu_handle, clear_color, 0, nullptr);
     }});
@@ -804,6 +844,7 @@ TEST_CASE("d3d12/render") {
   descriptor_heap_dsv.Term();
   command_list_pool.Term();
   command_allocator.Term();
+  shader_compiler.Term();
   shader_visible_descriptor_heap.Term();
   swapchain.Term();
   window.Term();

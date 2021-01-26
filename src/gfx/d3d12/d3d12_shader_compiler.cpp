@@ -12,6 +12,13 @@ IDxcUtils* CreateDxcUtils() {
   logerror("CreateDxcUtils failed. {}", hr);
   return nullptr;
 }
+IDxcIncludeHandler* CreateDxcIncludeHandler(IDxcUtils* utils) {
+  IDxcIncludeHandler* include_handler = nullptr;
+  auto hr = utils->CreateDefaultIncludeHandler(&include_handler);
+  if (SUCCEEDED(hr)) return include_handler;
+  logerror("CreateDefaultIncludeHandler failed. {}", hr);
+  return nullptr;
+}
 IDxcCompiler3* CreateDxcShaderCompiler() {
   IDxcCompiler3* compiler = nullptr;
   auto hr = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler));
@@ -19,28 +26,15 @@ IDxcCompiler3* CreateDxcShaderCompiler() {
   logerror("CreateDxcShaderCompiler failed. {}", hr);
   return nullptr;
 }
-template <typename T>
-std::pair<T*, IDxcBlobUtf16*> GetResultOutputWithOutputName(IDxcResult* result, const DXC_OUT_KIND kind) {
-  if (!result->HasOutput(kind)) return {};
-  T* output = nullptr;
-  IDxcBlobUtf16* output_text = nullptr;
-  auto hr = result->GetOutput(kind, IID_PPV_ARGS(&output), &output_text);
-  return {output, output_text};
-}
-template <typename T>
-T* GetResultOutput(IDxcResult* result, const DXC_OUT_KIND kind) {
-  auto [output, output_name] = GetResultOutputWithOutputName<T>(result, kind);
-  if (output_name) output_name->Release();
-  return output;
-}
-IDxcResult* CreateShaderResource(IDxcUtils* const utils, IDxcCompiler3* const compiler, LPCWSTR filepath_absolute, LPCWSTR target_profile, std::pmr::memory_resource* memory_resource) {
+IDxcResult* CreateShaderResource(IDxcUtils* const utils, IDxcIncludeHandler* const include_handler, IDxcCompiler3* const compiler, LPCWSTR filename, LPCWSTR target_profile, std::pmr::memory_resource* memory_resource) {
   IDxcBlobEncoding* blob = nullptr;
-  auto hr = utils->LoadFile(filepath_absolute, nullptr, &blob);
+  auto hr = utils->LoadFile(filename, nullptr, &blob);
   if (FAILED(hr)) {
-    logerror(L"LoadFile for CreateShaderResource failed. {} {}", filepath_absolute, hr);
+    logerror(L"LoadFile for CreateShaderResource failed. {} {}", filename, hr);
     return {};
   }
   std::pmr::vector<LPCWSTR> arguments{memory_resource};
+  arguments.reserve(12);
   arguments.push_back(L"-E");
   arguments.push_back(L"main");
   arguments.push_back(L"-T");
@@ -51,82 +45,63 @@ IDxcResult* CreateShaderResource(IDxcUtils* const utils, IDxcCompiler3* const co
   arguments.push_back(L"-Qstrip_debug");
   arguments.push_back(L"-Qstrip_reflect");
   arguments.push_back(L"-Qstrip_rootsignature");
+  arguments.push_back(L"-I");
+  {
+    auto include_path = reinterpret_cast<wchar_t*>(memory_resource->allocate((wcslen(filename) + 1) * sizeof(wchar_t), alignof(wchar_t)));
+    wcscpy(include_path, filename);
+    auto dir_term_pos = wcsrchr(include_path, L'/');
+    *dir_term_pos = L'\0';
+    arguments.push_back(include_path);
+  }
   IDxcResult* result = nullptr;
   DxcBuffer source{blob->GetBufferPointer(), blob->GetBufferSize(), DXC_CP_ACP};
-  hr = compiler->Compile(&source, arguments.data(), arguments.size(), nullptr, IID_PPV_ARGS(&result));
+  hr = compiler->Compile(&source, arguments.data(), arguments.size(), include_handler, IID_PPV_ARGS(&result));
   blob->Release();
-  if (auto error = GetResultOutput<IDxcBlobUtf8>(result, DXC_OUT_ERRORS); error) {
+  if (auto error = ShaderCompiler::GetResultOutput<IDxcBlobUtf8>(result, DXC_OUT_ERRORS); error) {
     logerror("dxc:{}", error->GetStringPointer());
     error->Release();
   }
   if (FAILED(hr)) {
-    logerror(L"Compile for CreateShaderResource failed. {} {}", filepath_absolute, hr);
+    logerror(L"Compile for CreateShaderResource failed. {} {}", filename, hr);
     result->Release();
     return {};
   }
   return result;
-}
-uint32_t GetAbsolutePath(const char* filename, char* dst, const uint32_t dst_size) {
-  auto len = GetModuleFileName(nullptr, dst, dst_size);
-  if (len == 0) {
-    logerror("GetModuleFileName failed.");
-    return 0;
-  }
-  auto pos = strrchr(dst, '\\');
-  pos++;
-  strcpy(pos, filename);
-  len = strlen(filename);
-  return pos - dst + len;
-}
-uint32_t ConvertToLPCWSTR(const char* text, wchar_t* dst, const uint32_t text_len) {
-  auto len = mbstowcs(dst, text, text_len);
-  return len;
 }
 #ifdef BUILD_WITH_TEST
 const uint32_t buffer_size_in_bytes = 32 * 1024;
 std::byte buffer[buffer_size_in_bytes]{};
 #endif
 }
-bool ShaderCompiler::Init(D3d12Device* const device, std::pmr::memory_resource* memory_resource) {
+bool ShaderCompiler::Init(D3d12Device* const device) {
   device_ = device;
   utils_ = CreateDxcUtils();
   if (!utils_) return false;
+  include_handler_ = CreateDxcIncludeHandler(utils_);
+  if (!include_handler_) return false;
   compiler_ = CreateDxcShaderCompiler();
   if (!compiler_) return false;
   return true;
 }
 void ShaderCompiler::Term() {
-  for (auto& r : results_) {
-    r->Release();
-  }
   compiler_->Release();
+  include_handler_->Release();
   utils_->Release();
 }
-IDxcResult* ShaderCompiler::Compile(const char* filename, const ShaderType target_profile, std::pmr::memory_resource* memory_resource) {
-  auto buffer_size = MAX_PATH;
-  auto abspath = reinterpret_cast<char*>(memory_resource->allocate(buffer_size, alignof(char)));
-  auto path_len = GetAbsolutePath(filename, abspath, buffer_size);
-  auto abspath_mb = reinterpret_cast<wchar_t*>(memory_resource->allocate(strlen(abspath) * 2, alignof(char)));
-  ConvertToLPCWSTR(abspath, abspath_mb, path_len);
+IDxcResult* ShaderCompiler::Compile(const LPCWSTR filename, const ShaderType target_profile, std::pmr::memory_resource* memory_resource) {
   IDxcResult* ret = nullptr;
   switch (target_profile) {
-    case ShaderType::kPs:  ret = CreateShaderResource(utils_, compiler_, abspath_mb, L"ps_6_5", memory_resource); break;
-    case ShaderType::kVs:  ret = CreateShaderResource(utils_, compiler_, abspath_mb, L"vs_6_5", memory_resource); break;
-    case ShaderType::kGs:  ret = CreateShaderResource(utils_, compiler_, abspath_mb, L"gs_6_5", memory_resource); break;
-    case ShaderType::kHs:  ret = CreateShaderResource(utils_, compiler_, abspath_mb, L"hs_6_5", memory_resource); break;
-    case ShaderType::kDs:  ret = CreateShaderResource(utils_, compiler_, abspath_mb, L"ds_6_5", memory_resource); break;
-    case ShaderType::kCs:  ret = CreateShaderResource(utils_, compiler_, abspath_mb, L"cs_6_5", memory_resource); break;
-    case ShaderType::kLib: ret = CreateShaderResource(utils_, compiler_, abspath_mb, L"lib_6_5", memory_resource); break;
-    case ShaderType::kMs:  ret = CreateShaderResource(utils_, compiler_, abspath_mb, L"ms_6_5", memory_resource); break;
-    case ShaderType::kAs:  ret = CreateShaderResource(utils_, compiler_, abspath_mb, L"as_6_5", memory_resource); break;
+    case ShaderType::kPs:  ret = CreateShaderResource(utils_, include_handler_, compiler_, filename, L"ps_6_5", memory_resource); break;
+    case ShaderType::kVs:  ret = CreateShaderResource(utils_, include_handler_, compiler_, filename, L"vs_6_5", memory_resource); break;
+    case ShaderType::kGs:  ret = CreateShaderResource(utils_, include_handler_, compiler_, filename, L"gs_6_5", memory_resource); break;
+    case ShaderType::kHs:  ret = CreateShaderResource(utils_, include_handler_, compiler_, filename, L"hs_6_5", memory_resource); break;
+    case ShaderType::kDs:  ret = CreateShaderResource(utils_, include_handler_, compiler_, filename, L"ds_6_5", memory_resource); break;
+    case ShaderType::kCs:  ret = CreateShaderResource(utils_, include_handler_, compiler_, filename, L"cs_6_5", memory_resource); break;
+    case ShaderType::kLib: ret = CreateShaderResource(utils_, include_handler_, compiler_, filename, L"lib_6_5", memory_resource); break;
+    case ShaderType::kMs:  ret = CreateShaderResource(utils_, include_handler_, compiler_, filename, L"ms_6_5", memory_resource); break;
+    case ShaderType::kAs:  ret = CreateShaderResource(utils_, include_handler_, compiler_, filename, L"as_6_5", memory_resource); break;
   }
-  memory_resource->deallocate(abspath, buffer_size, alignof(char));
-  memory_resource->deallocate(abspath_mb, strlen(abspath) * 2, alignof(char));
   return ret;
-}
-void ShaderCompiler::ReleaseResult(IDxcResult* const result) {
-  results_.erase(result);
-  result->Release();
 }
 }
 #include "doctest/doctest.h"
@@ -138,28 +113,24 @@ TEST_CASE("compile shader using dxc") {
   auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
   auto utils = CreateDxcUtils();
   CHECK(utils);
+  auto include_handler = CreateDxcIncludeHandler(utils);
+  CHECK(include_handler);
   auto compiler = CreateDxcShaderCompiler();
   CHECK(compiler);
-  auto abspath = reinterpret_cast<char*>(buffer);
-  auto path_len = GetAbsolutePath("shader/test/test.vs.hlsl", abspath, buffer_size_in_bytes);
-  CHECK(path_len == strlen(abspath));
-  auto abspath_mb = reinterpret_cast<wchar_t*>(abspath + path_len);
-  path_len = ConvertToLPCWSTR(abspath, abspath_mb, path_len);
-  CHECK(path_len);
-  auto shader_result = CreateShaderResource(utils, compiler, abspath_mb, L"vs_6_5", memory_resource.get());
+  auto shader_result = CreateShaderResource(utils, include_handler, compiler, L"shader/test/test.vs.hlsl", L"vs_6_5", memory_resource.get());
   CHECK(shader_result);
   DxgiCore dxgi_core;
   CHECK(dxgi_core.Init());
   Device device;
   CHECK(device.Init(dxgi_core.GetAdapter()));
   {
-    auto root_signature_blob = GetResultOutput<IDxcBlob>(shader_result, DXC_OUT_ROOT_SIGNATURE);
+    auto root_signature_blob = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result, DXC_OUT_ROOT_SIGNATURE);
     CHECK(root_signature_blob);
     ID3D12RootSignature* root_signature = nullptr;
     auto hr = device.Get()->CreateRootSignature(0, root_signature_blob->GetBufferPointer(), root_signature_blob->GetBufferSize(), IID_PPV_ARGS(&root_signature));
     CHECK(SUCCEEDED(hr));
     CHECK(root_signature);
-    auto shader_object = GetResultOutput<IDxcBlob>(shader_result, DXC_OUT_OBJECT);
+    auto shader_object = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result, DXC_OUT_OBJECT);
     CHECK(shader_object);
     struct {
       CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE root_signature;
@@ -182,6 +153,8 @@ TEST_CASE("compile shader using dxc") {
   device.Term();
   dxgi_core.Term();
   shader_result->Release();
+  compiler->Release();
+  utils->Release();
 }
 TEST_CASE("ShaderCompiler class") {
   using namespace illuminate;
@@ -193,11 +166,10 @@ TEST_CASE("ShaderCompiler class") {
   Device device;
   CHECK(device.Init(dxgi_core.GetAdapter()));
   ShaderCompiler shader_compiler;
-  CHECK(shader_compiler.Init(device.Get(), memory_resource.get()));
-  auto result = shader_compiler.Compile("shader/test/test.vs.hlsl", ShaderType::kVs, memory_resource.get());
+  CHECK(shader_compiler.Init(device.Get()));
+  auto result = shader_compiler.Compile(L"shader/test/test.vs.hlsl", ShaderType::kVs, memory_resource.get());
   CHECK(result);
-  shader_compiler.ReleaseResult(result);
-  result = shader_compiler.Compile("shader/test/test.vs.hlsl", ShaderType::kVs, memory_resource.get());
+  result = shader_compiler.Compile(L"shader/test/test.vs.hlsl", ShaderType::kVs, memory_resource.get());
   CHECK(result);
   shader_compiler.Term();
   device.Term();
