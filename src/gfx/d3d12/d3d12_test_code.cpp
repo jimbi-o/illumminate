@@ -681,10 +681,12 @@ TEST_CASE("d3d12/render") {
         CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE root_signature;
         CD3DX12_PIPELINE_STATE_STREAM_VS vs;
         CD3DX12_PIPELINE_STATE_STREAM_PS ps;
+        CD3DX12_PIPELINE_STATE_STREAM_RENDER_TARGET_FORMATS render_target_formats;
       } desc_local {
         copy_root_signature,
         D3D12_SHADER_BYTECODE{shader_object_vs->GetBufferPointer(), shader_object_vs->GetBufferSize()},
         D3D12_SHADER_BYTECODE{shader_object_ps->GetBufferPointer(), shader_object_ps->GetBufferSize()},
+        {{{swapchain.GetDxgiFormat()}, 1}},
       };
       D3D12_PIPELINE_STATE_STREAM_DESC desc{sizeof(desc_local), &desc_local};
       hr = device.Get()->CreatePipelineState(&desc, IID_PPV_ARGS(&copy_pipeline_state));
@@ -704,7 +706,7 @@ TEST_CASE("d3d12/render") {
       command_list->SetPipelineState(copy_pipeline_state);
       command_list->SetGraphicsRootDescriptorTable(0, gpu_handle);
       const FLOAT clear_color[4] = {0.0f,1.0f,1.0f,1.0f};
-      command_list->ClearRenderTargetView(*cpu_handle, clear_color, 0, nullptr);
+      command_list->ClearRenderTargetView(*cpu_handle, clear_color, 0, nullptr); // TODO change to Draw
     }});
     render_functions.insert({StrId("present"), [&swapchain]([[maybe_unused]]D3d12CommandList* const command_list, [[maybe_unused]]const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, [[maybe_unused]]const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, [[maybe_unused]]ID3D12Resource** resource){
       swapchain.Present();
