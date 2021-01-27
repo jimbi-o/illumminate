@@ -20,7 +20,7 @@ constexpr bool IsOutputBuffer(const BufferStateType state_type, const BufferLoad
     case kDsv: return (load_op_type == kLoadReadOnly) ? false : true;
     case kCopySrc: return false;
     case kCopyDst: return true;
-    case kPresent: return false;
+    case kPresent: return true;
   }
 }
 constexpr bool IsInitialValueUsed(const BufferStateType state_type, const BufferLoadOpType load_op_type) {
@@ -251,7 +251,7 @@ struct PassBarrierInfoSet {
 PassSignalInfo ConvertBatchToSignalInfo(const BatchInfoList& batch_info_list, const RenderPassIdMap& render_pass_id_map, std::pmr::memory_resource* memory_resource);
 PassSignalInfo MergePassSignalInfo(PassSignalInfo&&, PassSignalInfo&&);
 RenderPassOrder ConvertBatchInfoBackToRenderPassOrder(BatchInfoList&& batch_info_list, std::pmr::memory_resource* memory_resource);
-BufferStateList CreateBufferCreationStateList(const BufferCreationDescList& buffer_creation_descs, std::pmr::memory_resource* memory_resource);
+BufferStateList CreateBufferCreationStateList(const BufferCreationDescList& buffer_creation_descs, BufferStateList&& states_to_be_merged);
 PassBarrierInfoSet ConfigureBarrier(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const PassSignalInfo& pass_signal_info, const BufferIdList& buffer_id_list, const BufferStateList& buffer_state_before_render_pass_list, const BufferStateList& buffer_state_after_render_pass_list, std::pmr::memory_resource* memory_resource);
 }
 #endif

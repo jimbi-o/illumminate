@@ -2,7 +2,9 @@
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Weverything"
 #endif
+#ifdef _WIN32
 #define SPDLOG_WCHAR_TO_UTF8_SUPPORT
+#endif
 #include "spdlog/spdlog.h"
 #include "spdlog/fmt/ostr.h" // for custom class logging
 #ifdef __clang__

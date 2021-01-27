@@ -23,6 +23,8 @@
 namespace {
 const uint32_t buffer_size_in_bytes = 32 * 1024;
 std::byte buffer[buffer_size_in_bytes]{};
+const uint32_t buffer_tmp_size_in_bytes = 32 * 1024;
+std::byte buffer_tmp[buffer_tmp_size_in_bytes]{};
 using namespace illuminate::gfx;
 using namespace illuminate::gfx::d3d12;
 constexpr D3D12_RESOURCE_BARRIER_FLAGS ConvertToD3d12BarrierSplitFlag(const BarrierSplitType& split_type) {
@@ -427,6 +429,8 @@ constexpr D3D12_DEPTH_STENCIL_VIEW_DESC GetD3d12DepthStencilViewDesc(const Buffe
   return view_desc;
 }
 struct BufferInfoSet {
+  BufferInfoSet()
+      : physical_buffer_allocator(nullptr) {}
   BufferInfoSet(D3D12MA::Allocator* const allocator, std::pmr::memory_resource* memory_resource)
       : physical_buffer_allocator(allocator)
       , physical_buffer(memory_resource)
@@ -562,10 +566,16 @@ BufferInfoSet CreateBufferInfoSet(D3d12Device* const device, DxgiAdapter* const 
     }
   }
   // barrier configuration
-  auto buffer_state_before_render_pass_list = CreateBufferCreationStateList(buffer_creation_descs, memory_resource);
-  buffer_state_before_render_pass_list.insert(std::make_move_iterator(external_buffer_states.begin()), std::make_move_iterator(external_buffer_states.end()));
+  auto buffer_state_before_render_pass_list = CreateBufferCreationStateList(buffer_creation_descs, std::move(external_buffer_states));
   set.barrier = ConfigureBarrier(render_pass_id_map, render_pass_order, {}, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource);
   return set;
+}
+void RetainCommandList(const CommandQueueType pass_queue_type, CommandAllocator* command_allocator, std::pmr::unordered_map<CommandQueueType, D3d12CommandList**>* command_lists, CommandList* command_list_pool, ShaderVisibleDescriptorHeap* shader_visible_descriptor_heap, std::vector<std::vector<ID3D12CommandAllocator**>>* allocators) {
+  if (command_lists->contains(pass_queue_type)) return;
+  auto command_allocators = command_allocator->RetainCommandAllocator(pass_queue_type, 1);
+  allocators->back().push_back(std::move(command_allocators));
+  command_lists->insert({pass_queue_type, command_list_pool->RetainCommandList(pass_queue_type, 1, command_allocators)});
+  shader_visible_descriptor_heap->SetDescriptorHeapsToCommandList((*command_lists)[pass_queue_type][0]);
 }
 }
 TEST_CASE("d3d12/render") {
@@ -664,9 +674,10 @@ TEST_CASE("d3d12/render") {
     ID3D12RootSignature* copy_root_signature = nullptr;
     ID3D12PipelineState* copy_pipeline_state = nullptr;
     {
-      auto shader_result_vs = shader_compiler.Compile(L"shader/test/fullscreen-triangle.vs.hlsl", ShaderType::kVs, memory_resource.get());
+      auto memory_resource_tmp = std::make_shared<PmrLinearAllocator>(buffer_tmp, buffer_tmp_size_in_bytes);
+      auto shader_result_vs = shader_compiler.Compile(L"shader/test/fullscreen-triangle.vs.hlsl", ShaderType::kVs, memory_resource_tmp.get());
       CHECK(shader_result_vs);
-      auto shader_result_ps = shader_compiler.Compile(L"shader/test/copysrv.ps.hlsl", ShaderType::kPs, memory_resource.get());
+      auto shader_result_ps = shader_compiler.Compile(L"shader/test/copysrv.ps.hlsl", ShaderType::kPs, memory_resource_tmp.get());
       CHECK(shader_result_ps);
       auto root_signature_blob = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_ps, DXC_OUT_ROOT_SIGNATURE);
       CHECK(root_signature_blob);
@@ -738,101 +749,117 @@ TEST_CASE("d3d12/render") {
   auto named_buffers = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, named_buffer_list, memory_resource.get());
   {
     // cull unused render pass
-    auto adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, memory_resource.get());
-    auto consumer_producer_render_pass_map = CreateConsumerProducerMap(adjacency_graph, memory_resource.get());
-    auto used_render_pass_list = GetBufferProducerPassList(adjacency_graph, CreateValueSetFromMap(named_buffers, memory_resource.get()), memory_resource.get());
+    auto memory_resource_tmp = std::make_shared<PmrLinearAllocator>(buffer_tmp, buffer_tmp_size_in_bytes);
+    auto adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, memory_resource_tmp.get());
+    auto consumer_producer_render_pass_map = CreateConsumerProducerMap(adjacency_graph, memory_resource_tmp.get());
+    auto used_render_pass_list = GetBufferProducerPassList(adjacency_graph, CreateValueSetFromMap(named_buffers, memory_resource_tmp.get()), memory_resource.get());
     used_render_pass_list = GetUsedRenderPassList(std::move(used_render_pass_list), consumer_producer_render_pass_map);
     render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
     buffer_id_list = RemoveUnusedBuffers(render_pass_order, std::move(buffer_id_list));
+    memory_resource_tmp->Reset();
   }
   PassSignalInfo pass_signal_info;
   {
     // queue signal, wait info
-    auto adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, memory_resource.get());
-    auto consumer_producer_render_pass_map = CreateConsumerProducerMap(adjacency_graph, memory_resource.get());
+    auto memory_resource_tmp = std::make_shared<PmrLinearAllocator>(buffer_tmp, buffer_tmp_size_in_bytes);
+    auto adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, memory_resource_tmp.get());
+    auto consumer_producer_render_pass_map = CreateConsumerProducerMap(adjacency_graph, memory_resource_tmp.get());
     auto [async_compute_batching, render_pass_unprocessed] = ConfigureAsyncComputeBatching(render_pass_id_map, std::move(render_pass_order), {}, {}, memory_resource.get());
     auto pass_signal_info_resource = ConfigureBufferResourceDependency(render_pass_id_map, async_compute_batching, consumer_producer_render_pass_map, memory_resource.get());
     auto pass_signal_info_batch = ConvertBatchToSignalInfo(async_compute_batching, render_pass_id_map, memory_resource.get());
     pass_signal_info = MergePassSignalInfo(std::move(pass_signal_info_resource), std::move(pass_signal_info_batch));
     render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(async_compute_batching), memory_resource.get());
+    memory_resource_tmp->Reset();
   }
-  auto queue_type = CommandQueueType::kGraphics;
-  uint64_t signal_val = 0;
-  command_queue.WaitOnCpu({{queue_type, signal_val}});
-  for (auto a : allocators.front()) {
-    command_allocator.ReturnCommandAllocator(a);
-  }
-  allocators.front().clear();
-  std::rotate(allocators.begin(), allocators.begin() + 1, allocators.end());
-  swapchain.UpdateBackBufferIndex();
-  auto& swapchain_buffer_id = named_buffers.at(StrId("swapchain"));
-  PhysicalBufferList external_buffers{memory_resource.get()};
-  external_buffers.insert({swapchain_buffer_id, swapchain.GetResource()});
-  CpuHandleListPerBuffer external_handles{memory_resource.get()};
-  external_handles.insert({swapchain_buffer_id, std::pmr::unordered_map<BufferStateType, D3D12_CPU_DESCRIPTOR_HANDLE>{memory_resource.get()}});
-  external_handles.at(swapchain_buffer_id).insert({BufferStateType::kRtv, swapchain.GetRtvHandle()});
-  BufferStateList external_buffer_state{memory_resource.get()};
-  external_buffer_state.insert({swapchain_buffer_id, kBufferStateFlagPresent});
-  auto buffers = CreateBufferInfoSet(device.Get(), dxgi_core.GetAdapter(),
-                                     render_pass_id_map, render_pass_order, buffer_id_list,
-                                     mainbuffer_size, swapchain_size,
-                                     std::move(external_buffers), std::move(external_handles), std::move(external_buffer_state),
-                                     &descriptor_heap_buffers, &descriptor_heap_rtv, &descriptor_heap_dsv,
-                                     &shader_visible_descriptor_heap,
-                                     memory_resource.get());
-  std::pmr::unordered_map<CommandQueueType, uint64_t> pass_signal_val;
-  std::pmr::unordered_map<StrId, std::pmr::unordered_map<CommandQueueType, uint64_t>> waiting_pass;
-  std::pmr::unordered_map<CommandQueueType, D3d12CommandList**> command_lists;
-  for (auto& pass_name : render_pass_order) {
-    auto pass_queue_type = render_pass_id_map.at(pass_name).command_queue_type;
-    if (waiting_pass.contains(pass_name)) {
-      for (auto& [signal_queue, signal_val] : waiting_pass.at(pass_name)) {
-        command_queue.RegisterWaitOnQueue(signal_queue, signal_val, pass_queue_type);
-      }
-    }
-    if (!command_lists.contains(pass_queue_type)) {
-      auto command_allocators = command_allocator.RetainCommandAllocator(pass_queue_type, 1);
-      command_lists.insert({pass_queue_type, command_list_pool.RetainCommandList(pass_queue_type, 1, command_allocators)});
-      shader_visible_descriptor_heap.SetDescriptorHeapsToCommandList(command_lists[pass_queue_type][0]);
-      allocators.back().push_back(std::move(command_allocators));
-    }
-    auto barrier_before_render_funcition_exists = buffers.barrier.barrier_before_pass.contains(pass_name);
-    if (barrier_before_render_funcition_exists) {
-      ExecuteBarrier(buffers.barrier.barrier_before_pass.at(pass_name), buffers.physical_buffer, command_lists.at(pass_queue_type)[0], memory_resource.get());
-    }
-    if (barrier_before_render_funcition_exists && pass_name == StrId("present")) {
-      ExecuteCommandList(command_lists.at(pass_queue_type), 1, command_queue.Get(pass_queue_type), &command_list_pool);
-      if (buffers.barrier.barrier_after_pass.contains(pass_name)) {
-        auto command_allocators = command_allocator.RetainCommandAllocator(pass_queue_type, 1);
-        command_lists.insert({pass_queue_type, command_list_pool.RetainCommandList(pass_queue_type, 1, command_allocators)});
-        shader_visible_descriptor_heap.SetDescriptorHeapsToCommandList(command_lists[pass_queue_type][0]);
-        allocators.back().push_back(std::move(command_allocators));
-      } else {
-        command_lists.erase(pass_queue_type);
-      }
-    }
+  const uint32_t kFrameNumToTest = 10;
+  std::pmr::vector<std::unordered_map<CommandQueueType, uint64_t>> frame_wait_signal{memory_resource.get()};
+  frame_wait_signal.resize(buffer_num);
+  for (uint32_t frame_no = 0; frame_no < kFrameNumToTest; frame_no++) {
+    auto memory_resource_tmp = std::make_shared<PmrLinearAllocator>(buffer_tmp, buffer_tmp_size_in_bytes);
+    auto frame_index = frame_no % buffer_num;
+    command_queue.WaitOnCpu(std::move(frame_wait_signal[frame_index]));
     {
-      auto gpu_handle_ptr = buffers.gpu_descriptor_handles.contains(pass_name) ? buffers.gpu_descriptor_handles.at(pass_name) : D3D12_GPU_DESCRIPTOR_HANDLE{};
-      auto cpu_handle_ptr = buffers.cpu_descriptor_handles.contains(pass_name) ? buffers.cpu_descriptor_handles.at(pass_name).data() : nullptr;
-      auto resource_ptr   = buffers.pass_resources.contains(pass_name) ? buffers.pass_resources.at(pass_name).data() : nullptr;
-      render_functions.at(pass_name)(command_lists.at(pass_queue_type)[0], gpu_handle_ptr, cpu_handle_ptr, resource_ptr);
+      for (auto a : allocators.front()) {
+        command_allocator.ReturnCommandAllocator(a);
+      }
+      allocators.front().clear();
+      std::rotate(allocators.begin(), allocators.begin() + 1, allocators.end());
     }
-    if (buffers.barrier.barrier_after_pass.contains(pass_name)) {
-      ExecuteBarrier(buffers.barrier.barrier_after_pass.at(pass_name), buffers.physical_buffer, command_lists.at(pass_queue_type)[0], memory_resource.get());
+    BufferInfoSet buffers;
+    {
+      swapchain.UpdateBackBufferIndex();
+      auto& swapchain_buffer_id = named_buffers.at(StrId("swapchain"));
+      PhysicalBufferList external_buffers{memory_resource_tmp.get()};
+      external_buffers.insert({swapchain_buffer_id, swapchain.GetResource()});
+      CpuHandleListPerBuffer external_handles{memory_resource_tmp.get()};
+      external_handles.insert({swapchain_buffer_id, std::pmr::unordered_map<BufferStateType, D3D12_CPU_DESCRIPTOR_HANDLE>{memory_resource_tmp.get()}});
+      external_handles.at(swapchain_buffer_id).insert({BufferStateType::kRtv, swapchain.GetRtvHandle()});
+      BufferStateList external_buffer_state{memory_resource_tmp.get()};
+      external_buffer_state.insert({swapchain_buffer_id, kBufferStateFlagPresent});
+      buffers = CreateBufferInfoSet(device.Get(), dxgi_core.GetAdapter(),
+                                         render_pass_id_map, render_pass_order, buffer_id_list,
+                                         mainbuffer_size, swapchain_size,
+                                         std::move(external_buffers), std::move(external_handles), std::move(external_buffer_state),
+                                         &descriptor_heap_buffers, &descriptor_heap_rtv, &descriptor_heap_dsv,
+                                         &shader_visible_descriptor_heap,
+                                         memory_resource_tmp.get()); // TODO refactor
     }
-    if (pass_signal_info.contains(pass_name)) {
-      ExecuteCommandList(command_lists.at(pass_queue_type), 1, command_queue.Get(pass_queue_type), &command_list_pool);
-      command_lists.erase(pass_queue_type);
-      command_queue.RegisterSignal(pass_queue_type, ++pass_signal_val[pass_queue_type]);
-      for (auto& waiting_pass_name : pass_signal_info.at(pass_name)) {
-        if (!waiting_pass.contains(waiting_pass_name)) {
-          waiting_pass.insert({waiting_pass_name, std::pmr::unordered_map<CommandQueueType, uint64_t>{memory_resource.get()}});
+    std::pmr::unordered_map<CommandQueueType, uint64_t> pass_signal_val{memory_resource_tmp.get()};
+    std::pmr::unordered_map<StrId, std::pmr::unordered_map<CommandQueueType, uint64_t>> waiting_pass{memory_resource_tmp.get()};
+    std::pmr::unordered_map<CommandQueueType, D3d12CommandList**> command_lists{memory_resource_tmp.get()};
+    for (auto& pass_name : render_pass_order) {
+      auto pass_queue_type = render_pass_id_map.at(pass_name).command_queue_type;
+      if (waiting_pass.contains(pass_name)) {
+        for (auto& [signal_queue, signal_val] : waiting_pass.at(pass_name)) {
+          command_queue.RegisterWaitOnQueue(signal_queue, signal_val, pass_queue_type);
         }
-        waiting_pass.at(waiting_pass_name).insert({pass_queue_type, pass_signal_val[pass_queue_type]});
+      }
+      if (buffers.barrier.barrier_before_pass.contains(pass_name)) {
+        RetainCommandList(pass_queue_type, &command_allocator, &command_lists, &command_list_pool, &shader_visible_descriptor_heap, &allocators);
+        ExecuteBarrier(buffers.barrier.barrier_before_pass.at(pass_name), buffers.physical_buffer, command_lists.at(pass_queue_type)[0], memory_resource_tmp.get());
+      }
+      if (pass_name == StrId("present") && command_lists.contains(pass_queue_type)) {
+        ExecuteCommandList(command_lists.at(pass_queue_type), 1, command_queue.Get(pass_queue_type), &command_list_pool);
+        command_lists.erase(pass_queue_type); // TODO return command_lists?
+      }
+      {
+        auto gpu_handle_ptr = buffers.gpu_descriptor_handles.contains(pass_name) ? buffers.gpu_descriptor_handles.at(pass_name) : D3D12_GPU_DESCRIPTOR_HANDLE{};
+        auto cpu_handle_ptr = buffers.cpu_descriptor_handles.contains(pass_name) ? buffers.cpu_descriptor_handles.at(pass_name).data() : nullptr;
+        auto resource_ptr   = buffers.pass_resources.contains(pass_name) ? buffers.pass_resources.at(pass_name).data() : nullptr;
+        if (pass_name == StrId("present")) {
+          render_functions.at(pass_name)(nullptr, gpu_handle_ptr, cpu_handle_ptr, resource_ptr);
+        } else {
+          RetainCommandList(pass_queue_type, &command_allocator, &command_lists, &command_list_pool, &shader_visible_descriptor_heap, &allocators);
+          render_functions.at(pass_name)(command_lists.at(pass_queue_type)[0], gpu_handle_ptr, cpu_handle_ptr, resource_ptr);
+        }
+      }
+      if (buffers.barrier.barrier_after_pass.contains(pass_name)) {
+        RetainCommandList(pass_queue_type, &command_allocator, &command_lists, &command_list_pool, &shader_visible_descriptor_heap, &allocators);
+        ExecuteBarrier(buffers.barrier.barrier_after_pass.at(pass_name), buffers.physical_buffer, command_lists.at(pass_queue_type)[0], memory_resource_tmp.get());
+      }
+      if (pass_signal_info.contains(pass_name) || pass_name == StrId("present")) {
+        if (pass_name != StrId("present")) {
+          ExecuteCommandList(command_lists.at(pass_queue_type), 1, command_queue.Get(pass_queue_type), &command_list_pool);
+          command_lists.erase(pass_queue_type); // TODO return command_lists?
+        }
+        command_queue.RegisterSignal(pass_queue_type, ++pass_signal_val[pass_queue_type]);
+        if (pass_signal_info.contains(pass_name)) {
+          for (auto& waiting_pass_name : pass_signal_info.at(pass_name)) {
+            if (!waiting_pass.contains(waiting_pass_name)) {
+              waiting_pass.insert({waiting_pass_name, std::pmr::unordered_map<CommandQueueType, uint64_t>{memory_resource_tmp.get()}});
+            }
+            waiting_pass.at(waiting_pass_name).insert({pass_queue_type, pass_signal_val[pass_queue_type]});
+          }
+        }
+        if (pass_name == StrId("present")) {
+          frame_wait_signal[frame_index][pass_queue_type] = pass_signal_val[pass_queue_type];
+        }
       }
     }
   }
   command_queue.WaitAll();
+#if 0
+  // TODO comment-in
   for (auto& [buffer_id, allocation] : buffers.physical_allocation) {
     if (allocation == nullptr) continue;
     allocation->Release();
@@ -845,6 +872,7 @@ TEST_CASE("d3d12/render") {
     }
     allocators.pop_back();
   }
+#endif
   descriptor_heap_buffers.Term();
   descriptor_heap_rtv.Term();
   descriptor_heap_dsv.Term();
