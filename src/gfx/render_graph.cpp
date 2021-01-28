@@ -411,12 +411,10 @@ RenderPassOrder ConvertBatchInfoBackToRenderPassOrder(BatchInfoList&& batch_info
   }
   return render_pass_order;
 }
-BufferStateList CreateBufferCreationStateList(const BufferCreationDescList& buffer_creation_descs, BufferStateList&& states_to_be_merged) {
-  BufferStateList buffer_creation_state_list = std::move(states_to_be_merged);
+BufferStateList CreateBufferCreationStateList(const BufferCreationDescList& buffer_creation_descs, std::pmr::memory_resource* memory_resource) {
+  BufferStateList buffer_creation_state_list{memory_resource};
   for (auto& [buffer_id, desc] : buffer_creation_descs) {
-    if (!buffer_creation_state_list.contains(buffer_id)) {
-      buffer_creation_state_list.insert({buffer_id, desc.initial_state_flag});
-    }
+    buffer_creation_state_list.insert({buffer_id, desc.initial_state_flag});
   }
   return buffer_creation_state_list;
 }

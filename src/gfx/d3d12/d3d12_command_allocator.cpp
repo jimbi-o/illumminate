@@ -44,12 +44,11 @@ ID3D12CommandAllocator** CommandAllocator::RetainCommandAllocator(const CommandQ
   return allocator;
 }
 void CommandAllocator::ReturnCommandAllocator(ID3D12CommandAllocator** const allocator) {
-  const auto command_list_type = std::get<0>(allocation_info_[allocator]);
-  const auto num = std::get<1>(allocation_info_[allocator]);
-  allocation_info_.erase(allocator);
+  auto& [command_list_type, num] = allocation_info_.at(allocator);
   for (uint32_t i = 0; i < num; i++) {
     pool_[command_list_type].push_back(allocator[i]);
   }
+  allocation_info_.erase(allocator);
 }
 }
 #include "doctest/doctest.h"
