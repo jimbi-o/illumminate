@@ -508,17 +508,9 @@ std::pair<StrId, StrId> GetBarrierBeginEndPass(const BufferStateFlags& prev_buff
   return {begin_pass, end_pass};
 }
 }
-PassBarrierInfoSet ConfigureBarrier(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const PassSignalInfo& pass_signal_info, const BufferIdList& buffer_id_list, const BufferStateList& buffer_state_before_render_pass_list, const BufferStateList& buffer_state_after_render_pass_list, std::pmr::memory_resource* memory_resource) {
+BufferStateChangeInfoList GatherBufferStateChangeInfo(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, const BufferStateList& buffer_state_before_render_pass_list, const BufferStateList& buffer_state_after_render_pass_list, std::pmr::memory_resource* memory_resource) {
   // gather state change info per buffer
-  struct BufferStateChangeInfo {
-    BufferStateFlags prev_buffer_state;
-    BufferStateFlags next_buffer_state;
-    std::pmr::unordered_set<StrId> pass_list_to_access_prev_buffer_state;
-    std::pmr::unordered_set<StrId> pass_list_to_access_next_buffer_state;
-    CommandQueueTypeFlag queue_list_to_access_next_buffer_state;
-    std::byte _pad[7] = {};
-  };
-  std::pmr::unordered_map<BufferId, std::pmr::vector<BufferStateChangeInfo>> buffer_state_change_list{memory_resource};
+  BufferStateChangeInfoList buffer_state_change_list{memory_resource};
   std::pmr::unordered_map<BufferId, std::pmr::unordered_map<CommandQueueType, StrId>> last_pass_accessed_per_buffer{memory_resource};
   for (auto& pass_name : render_pass_order) {
     auto& pass = render_pass_id_map.at(pass_name);
@@ -576,52 +568,55 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassIdMap& render_pass_id_map, c
       }
     }
   }
+  return buffer_state_change_list;
+}
+InterPassDistanceMap CreateInterPassDistanceMap(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const PassSignalInfo& pass_signal_info, std::pmr::memory_resource* memory_resource) {
   // create inter pass distance map
-  std::pmr::unordered_map<StrId, std::pmr::unordered_map<StrId, int32_t>> inter_pass_distance_map{memory_resource};
-  {
-    std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>> wait_signal_info{memory_resource};
-    for (auto& [signal_pass, wait_info]: pass_signal_info) {
-      for (auto& wait_pass : wait_info) {
-        if (!wait_signal_info.contains(wait_pass)) {
-          wait_signal_info.insert({wait_pass, std::pmr::unordered_set<StrId>{memory_resource}});
+  InterPassDistanceMap inter_pass_distance_map{memory_resource};
+  std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>> wait_signal_info{memory_resource};
+  for (auto& [signal_pass, wait_info]: pass_signal_info) {
+    for (auto& wait_pass : wait_info) {
+      if (!wait_signal_info.contains(wait_pass)) {
+        wait_signal_info.insert({wait_pass, std::pmr::unordered_set<StrId>{memory_resource}});
+      }
+      wait_signal_info.at(wait_pass).insert(signal_pass);
+    }
+  }
+  inter_pass_distance_map.reserve(render_pass_order.size());
+  std::pmr::unordered_map<CommandQueueType, StrId> prev_pass_per_command_queue_type{memory_resource};
+  for (auto& pass_name : render_pass_order) {
+    inter_pass_distance_map.insert({pass_name, std::pmr::unordered_map<StrId, int32_t>{memory_resource}});
+    inter_pass_distance_map.at(pass_name).insert({pass_name, 0});
+    auto& pass = render_pass_id_map.at(pass_name);
+    auto& command_queue_type = pass.command_queue_type;
+    if (prev_pass_per_command_queue_type.contains(command_queue_type)) {
+      auto& prev_pass = prev_pass_per_command_queue_type.at(command_queue_type);
+      if (inter_pass_distance_map.contains(prev_pass)) {
+        for (auto& [ancestor, distance] : inter_pass_distance_map.at(prev_pass)) {
+          inter_pass_distance_map.at(pass_name).insert({ancestor, distance - 1});
         }
-        wait_signal_info.at(wait_pass).insert(signal_pass);
       }
     }
-    inter_pass_distance_map.reserve(render_pass_order.size());
-    std::pmr::unordered_map<CommandQueueType, StrId> prev_pass_per_command_queue_type{memory_resource};
-    for (auto& pass_name : render_pass_order) {
-      inter_pass_distance_map.insert({pass_name, std::pmr::unordered_map<StrId, int32_t>{memory_resource}});
-      inter_pass_distance_map.at(pass_name).insert({pass_name, 0});
-      auto& pass = render_pass_id_map.at(pass_name);
-      auto& command_queue_type = pass.command_queue_type;
-      if (prev_pass_per_command_queue_type.contains(command_queue_type)) {
-        auto& prev_pass = prev_pass_per_command_queue_type.at(command_queue_type);
-        if (inter_pass_distance_map.contains(prev_pass)) {
-          for (auto& [ancestor, distance] : inter_pass_distance_map.at(prev_pass)) {
-            inter_pass_distance_map.at(pass_name).insert({ancestor, distance - 1});
-          }
+    if (wait_signal_info.contains(pass_name)) {
+      for (auto& signal_pass : wait_signal_info.at(pass_name)) {
+        for (auto& [ancestor, distance] : inter_pass_distance_map.at(signal_pass)) {
+          inter_pass_distance_map.at(pass_name).insert({ancestor, distance - 1});
         }
       }
-      if (wait_signal_info.contains(pass_name)) {
-        for (auto& signal_pass : wait_signal_info.at(pass_name)) {
-          for (auto& [ancestor, distance] : inter_pass_distance_map.at(signal_pass)) {
-            inter_pass_distance_map.at(pass_name).insert({ancestor, distance - 1});
-          }
-        }
-      }
-      prev_pass_per_command_queue_type[command_queue_type] = pass_name;
     }
-    for (auto& descendent : render_pass_order) {
-      auto& map = inter_pass_distance_map.at(descendent);
-      for (auto& [ancestor, distance] : map) {
-        if (distance < 0) {
-          inter_pass_distance_map.at(ancestor).insert({descendent, -distance});
-        }
+    prev_pass_per_command_queue_type[command_queue_type] = pass_name;
+  }
+  for (auto& descendent : render_pass_order) {
+    auto& map = inter_pass_distance_map.at(descendent);
+    for (auto& [ancestor, distance] : map) {
+      if (distance < 0) {
+        inter_pass_distance_map.at(ancestor).insert({descendent, -distance});
       }
     }
   }
-  // format to barriers per pass
+  return inter_pass_distance_map;
+}
+PassBarrierInfoSet ConfigureBarrier(const RenderPassIdMap& render_pass_id_map, const BufferStateChangeInfoList& buffer_state_change_list, const InterPassDistanceMap& inter_pass_distance_map, std::pmr::memory_resource* memory_resource) {
   PassBarrierInfo barrier_before_pass{memory_resource};
   PassBarrierInfo barrier_after_pass{memory_resource};
   std::pmr::vector<BarrierConfig> barrier_info_list{memory_resource};
@@ -2186,7 +2181,9 @@ TEST_CASE("barrier") {
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
     auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
@@ -2212,7 +2209,9 @@ TEST_CASE("barrier") {
     buffer_state_before_render_pass_list.insert({1, kBufferStateFlagDsvWrite});
     auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
@@ -2242,7 +2241,9 @@ TEST_CASE("barrier") {
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
     auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
@@ -2270,7 +2271,9 @@ TEST_CASE("barrier") {
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
     auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
@@ -2299,7 +2302,9 @@ TEST_CASE("barrier") {
     buffer_state_before_render_pass_list.insert({1, kBufferStateFlagDsvWrite});
     auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].buffer_id == 0);
@@ -2339,7 +2344,9 @@ TEST_CASE("barrier") {
     buffer_state_before_render_pass_list.insert({3, kBufferStateFlagDsvWrite});
     auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
@@ -2383,7 +2390,9 @@ TEST_CASE("barrier") {
     buffer_state_before_render_pass_list.insert({3, kBufferStateFlagDsvWrite});
     auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
@@ -2430,7 +2439,9 @@ TEST_CASE("barrier") {
     buffer_state_before_render_pass_list.insert({3, kBufferStateFlagDsvWrite});
     auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
@@ -2474,7 +2485,9 @@ TEST_CASE("barrier") {
     buffer_state_before_render_pass_list.insert({3, kBufferStateFlagDsvWrite});
     auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
@@ -2519,7 +2532,9 @@ TEST_CASE("barrier") {
     buffer_state_before_render_pass_list.insert({3, kBufferStateFlagUav});
     auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
@@ -2574,7 +2589,9 @@ TEST_CASE("barrier") {
     buffer_state_before_render_pass_list.insert({3, kBufferStateFlagDsvWrite});
     auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
@@ -2629,7 +2646,9 @@ TEST_CASE("barrier") {
     buffer_state_before_render_pass_list.insert({3, kBufferStateFlagUav});
     auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
@@ -2661,7 +2680,9 @@ TEST_CASE("barrier") {
     buffer_state_after_render_pass_list.insert({0, kBufferStateFlagPresent});
     auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, buffer_state_before_render_pass_list, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, buffer_state_after_render_pass_list, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(barrier_info.barrier_before_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_before_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagPresent);
     CHECK(barrier_info.barrier_before_pass[StrId("A")][0].state_flag_after_pass  == kBufferStateFlagRtv);
@@ -2689,7 +2710,9 @@ TEST_CASE("barrier") {
     buffer_state_after_render_pass_list.insert({1, kBufferStateFlagPresent});
     auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, buffer_state_before_render_pass_list, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, buffer_state_after_render_pass_list, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(barrier_info.barrier_before_pass[StrId("-")].size() == 1);
     CHECK(barrier_info.barrier_before_pass[StrId("-")][0].state_flag_before_pass == kBufferStateFlagPresent);
     CHECK(barrier_info.barrier_before_pass[StrId("-")][0].state_flag_after_pass  == kBufferStateFlagRtv);
@@ -2722,7 +2745,9 @@ TEST_CASE("barrier") {
     buffer_state_after_render_pass_list.insert({1, kBufferStateFlagPresent});
     auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, buffer_state_before_render_pass_list, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, buffer_state_after_render_pass_list, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("-")));
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("-")));
     CHECK(barrier_info.barrier_before_pass[StrId("A")].size() == 1);
@@ -2749,10 +2774,12 @@ TEST_CASE("barrier") {
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagPresent});
     buffer_state_before_render_pass_list.insert({1, kBufferStateFlagRtv});
     BufferStateList buffer_state_after_render_pass_list{memory_resource.get()};
-    buffer_state_after_render_pass_list.insert({1, kBufferStateFlagPresent});
+    buffer_state_after_render_pass_list.insert({0, kBufferStateFlagPresent});
     auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, buffer_state_before_render_pass_list, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, buffer_state_after_render_pass_list, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(barrier_info.barrier_before_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_before_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagPresent);
     CHECK(barrier_info.barrier_before_pass[StrId("A")][0].state_flag_after_pass  == kBufferStateFlagRtv);
@@ -2782,10 +2809,12 @@ TEST_CASE("barrier") {
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagPresent});
     buffer_state_before_render_pass_list.insert({1, kBufferStateFlagUav});
     BufferStateList buffer_state_after_render_pass_list{memory_resource.get()};
-    buffer_state_after_render_pass_list.insert({1, kBufferStateFlagPresent});
+    buffer_state_after_render_pass_list.insert({0, kBufferStateFlagPresent});
     auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, buffer_state_before_render_pass_list, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, buffer_state_after_render_pass_list, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(barrier_info.barrier_before_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_before_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagPresent);
     CHECK(barrier_info.barrier_before_pass[StrId("A")][0].state_flag_after_pass  == kBufferStateFlagRtv);
@@ -2814,7 +2843,9 @@ TEST_CASE("barrier") {
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagRtv});
     auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagRtv);
@@ -2847,7 +2878,9 @@ TEST_CASE("barrier") {
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
     auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(barrier_info.barrier_before_pass.empty());
     CHECK(barrier_info.barrier_after_pass.empty());
 #endif
@@ -2871,7 +2904,9 @@ TEST_CASE("barrier") {
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
     auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagDsvWrite);
@@ -2905,7 +2940,9 @@ TEST_CASE("barrier") {
     PassSignalInfo pass_signal_info{memory_resource.get()};
     pass_signal_info.insert({StrId("A"), std::pmr::unordered_set<StrId>{memory_resource.get()}});
     pass_signal_info.at(StrId("A")).insert(StrId("B"));
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagUav);
@@ -2937,7 +2974,9 @@ TEST_CASE("barrier") {
     buffer_state_before_render_pass_list.insert({0, static_cast<decltype(kBufferStateFlagDsvRead)>(kBufferStateFlagDsvRead | kBufferStateFlagSrvPsOnly)});
     auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("A")));
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("B")));
@@ -2974,7 +3013,9 @@ TEST_CASE("barrier") {
     buffer_state_before_render_pass_list.insert({1, kBufferStateFlagUav});
     auto pass_signal_info = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("A")));
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("B")));
@@ -3009,7 +3050,9 @@ TEST_CASE("barrier") {
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagUav});
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_before_pass[StrId("B")].size() == 1);
@@ -3038,7 +3081,9 @@ TEST_CASE("barrier") {
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagUav});
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagUav);
@@ -3073,7 +3118,9 @@ TEST_CASE("barrier") {
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagUav});
     buffer_state_before_render_pass_list.insert({1, kBufferStateFlagRtv});
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("A")));
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("B")));
@@ -3107,7 +3154,9 @@ TEST_CASE("barrier") {
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagUav});
     buffer_state_before_render_pass_list.insert({1, kBufferStateFlagRtv});
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagUav);
@@ -3142,7 +3191,9 @@ TEST_CASE("barrier") {
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagUav});
     buffer_state_before_render_pass_list.insert({1, kBufferStateFlagRtv});
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_before_pass[StrId("B")].size() == 1);
@@ -3176,7 +3227,9 @@ TEST_CASE("barrier") {
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagRtv});
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagRtv);
@@ -3208,7 +3261,9 @@ TEST_CASE("barrier") {
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagRtv});
     buffer_state_before_render_pass_list.insert({1, kBufferStateFlagSrvNonPs});
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagRtv);
@@ -3238,7 +3293,9 @@ TEST_CASE("barrier") {
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagUav});
     buffer_state_before_render_pass_list.insert({1, kBufferStateFlagSrvNonPs});
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagUav);
@@ -3271,7 +3328,9 @@ TEST_CASE("barrier") {
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagUav});
     buffer_state_before_render_pass_list.insert({1, kBufferStateFlagSrvNonPs});
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagUav);
@@ -3305,7 +3364,9 @@ TEST_CASE("barrier") {
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagRtv});
     buffer_state_before_render_pass_list.insert({1, kBufferStateFlagSrvNonPs});
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagRtv);
@@ -3336,7 +3397,9 @@ TEST_CASE("barrier") {
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagCopyDst});
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_before_pass[StrId("B")].size() == 1);
@@ -3365,7 +3428,9 @@ TEST_CASE("barrier") {
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagRtv});
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagRtv);
@@ -3394,7 +3459,9 @@ TEST_CASE("barrier") {
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagCopyDst});
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_before_pass[StrId("B")].size() == 1);
@@ -3423,7 +3490,9 @@ TEST_CASE("barrier") {
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagUav});
-    auto barrier_info = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource.get());
+    auto barrier_info = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource.get());
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("A")));
     CHECK(barrier_info.barrier_after_pass[StrId("A")].size() == 1);
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].state_flag_before_pass == kBufferStateFlagUav);
