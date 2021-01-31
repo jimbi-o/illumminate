@@ -826,7 +826,9 @@ TEST_CASE("d3d12/render") {
       UpdateExternalBufferPointers(external_buffers, external_handles, render_pass_id_map, render_pass_order, buffer_id_list, &buffers);
       buffers.current_buffer_state_list.insert_or_assign(swapchain_buffer_id, kBufferStateFlagPresent);
     }
-    auto barriers = ConfigureBarrier(render_pass_id_map, render_pass_order, pass_signal_info, buffer_id_list, buffers.current_buffer_state_list, {}, memory_resource_tmp.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffers.current_buffer_state_list, {}, memory_resource_tmp.get());
+    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource_tmp.get());
+    auto barriers = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource_tmp.get());
     {
       for (auto a : allocators.front()) {
         command_allocator.ReturnCommandAllocator(a);

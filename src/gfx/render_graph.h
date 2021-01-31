@@ -257,8 +257,6 @@ struct BufferStateChangeInfo {
   BufferStateFlags next_buffer_state;
   std::pmr::unordered_set<StrId> pass_list_to_access_prev_buffer_state;
   std::pmr::unordered_set<StrId> pass_list_to_access_next_buffer_state;
-  CommandQueueTypeFlag queue_list_to_access_next_buffer_state;
-  std::byte _pad[7] = {};
 };
 using BufferStateChangeInfoList = std::pmr::unordered_map<BufferId, std::pmr::vector<BufferStateChangeInfo>>;
 BufferStateChangeInfoList GatherBufferStateChangeInfo(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, const BufferStateList& buffer_state_before_render_pass_list, const BufferStateList& buffer_state_after_render_pass_list, std::pmr::memory_resource* memory_resource);
