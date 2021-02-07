@@ -715,7 +715,7 @@ static std::pmr::unordered_set<StrId> GetCommonDescendents(const std::pmr::unord
   }
   return ret;
 }
-std::tuple<PassBarrierInfoSet, PassBarrierInfoSet> ConfigureBarrierForNextFrame(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const BufferStateList& buffer_state_after_render_pass_list, const InterPassDistanceMap& inter_pass_distance_map, const BufferStateChangeInfoList& state_change_info_list, std::pmr::memory_resource* memory_resource) {
+std::tuple<PassBarrierInfoSet, PassBarrierInfoSet> ConfigureBarrierForNextFrame(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const BufferStateList& buffer_state_before_render_pass_list, const BufferStateList& buffer_state_after_render_pass_list, const InterPassDistanceMap& inter_pass_distance_map, const BufferStateChangeInfoList& state_change_info_list, std::pmr::memory_resource* memory_resource) {
   std::pmr::unordered_map<CommandQueueType, StrId> first_pass_per_queue{memory_resource}, last_pass_per_queue{memory_resource};
   for (auto& pass_name : render_pass_order) {
     auto& command_queue_type = render_pass_id_map.at(pass_name).command_queue_type;
@@ -726,6 +726,7 @@ std::tuple<PassBarrierInfoSet, PassBarrierInfoSet> ConfigureBarrierForNextFrame(
   }
   PassBarrierInfoSet current_frame_barriers, next_frame_barriers;
   for (std::pmr::unordered_set<StrId> current_frame_cands{memory_resource}, next_frame_cands{memory_resource}; auto& [buffer_id, state_change_info] : state_change_info_list) {
+    if (!buffer_state_before_render_pass_list.contains(buffer_id)) continue;
     if (buffer_state_after_render_pass_list.contains(buffer_id)) continue;
     auto& begin_info = state_change_info.back();
     auto& end_info = state_change_info.front();
@@ -2345,6 +2346,13 @@ TEST_CASE("barrier") {
     CHECK(barrier_info.barrier_after_pass[StrId("A")][0].split_type == BarrierSplitType::kNone);
     CHECK(!barrier_info.barrier_before_pass.contains(StrId("B")));
     CHECK(!barrier_info.barrier_after_pass.contains(StrId("B")));
+    auto [current_frame_barriers, next_frame_barriers] = ConfigureBarrierForNextFrame(render_pass_id_map, render_pass_order, buffer_state_before_render_pass_list, {}, inter_pass_distance_map, buffer_state_change_list, memory_resource.get());
+    CHECK(current_frame_barriers.barrier_before_pass.empty());
+    CHECK(current_frame_barriers.barrier_after_pass.contains(StrId("B")));
+    CHECK(current_frame_barriers.barrier_after_pass.at(StrId("B"))[0].state_flag_before_pass == kBufferStateFlagDsvRead);
+    CHECK(current_frame_barriers.barrier_after_pass.at(StrId("B"))[0].state_flag_after_pass == kBufferStateFlagDsvWrite);
+    CHECK(next_frame_barriers.barrier_before_pass.empty());
+    CHECK(next_frame_barriers.barrier_after_pass.empty());
   }
   {
     auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
