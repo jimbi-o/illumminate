@@ -368,7 +368,7 @@ PassSignalInfo ConfigureBufferResourceDependency(const RenderPassIdMap& render_p
 PassSignalInfo ConvertBatchToSignalInfo(const BatchInfoList& batch_info_list, const RenderPassIdMap& render_pass_id_map, std::pmr::memory_resource* memory_resource) {
   PassSignalInfo pass_signal_wait_info{memory_resource};
   std::pmr::unordered_map<CommandQueueType, StrId> last_pass_executed_per_batch{memory_resource};
-  CommandQueueTypeFlag pass_executed_queue;
+  CommandQueueTypeFlag pass_executed_queue = kCommandQueueTypeNone;
   for (uint32_t i = 0; i < batch_info_list.size() - 1; i++) {
     for (auto& pass_name : batch_info_list[i]) {
       auto& pass = render_pass_id_map.at(pass_name);
@@ -669,21 +669,164 @@ PassBarrierInfoSet ConfigureBarrier(const RenderPassIdMap& render_pass_id_map, c
   }
   return {std::move(barrier_before_pass), std::move(barrier_after_pass)};
 }
-#if 0
-PassBarrierInfoSet ConfigureBarrierForNextFrame(const RenderPassIdMap& render_pass_id_map, const BufferStateChangeInfoList& buffer_state_change_list, const BufferStateList& buffer_state_before_render_pass_list, const BufferStateList& buffer_state_after_render_pass_list, const InterPassDistanceMap& inter_pass_distance_map, std::pmr::memory_resource* memory_resource) {
-  // TODO
-  for (auto& [buffer_id, list] : buffer_state_change_list) {
-    BufferStateChangeInfo info{
-      list.back().next_buffer_state,
-      list.front().prev_buffer_state
-    };
-    if (buffer_state_before_render_pass_list.contains(buffer_id)) {
-    }
-    if (buffer_state_after_render_pass_list.contains(buffer_id)) {
+static std::pmr::unordered_set<StrId> GetCommonAncestors(const std::pmr::unordered_set<StrId>& pass_list, const RenderPassIdMap& render_pass_id_map, const InterPassDistanceMap& inter_pass_distance_map, const int32_t valid_queues, std::pmr::memory_resource* memory_resource) {
+  std::pmr::unordered_set<StrId> ret{memory_resource};
+  auto it = pass_list.begin();
+  for (auto& [pass, distance] : inter_pass_distance_map.at(*it)) {
+    if (distance <= 0 && IsContainingCommandQueueType(valid_queues, render_pass_id_map.at(pass).command_queue_type)) {
+      ret.insert(pass);
     }
   }
+  it++;
+  while (it != pass_list.end()) {
+    auto& map = inter_pass_distance_map.at(*it);
+    auto ret_it = ret.begin();
+    while (ret_it != ret.end()) {
+      if (!map.contains(*ret_it) || map.at(*ret_it) > 0) {
+        ret_it = ret.erase(ret_it);
+      } else {
+        ret_it++;
+      }
+    }
+    it++;
+  }
+  return ret;
 }
-#endif
+static std::pmr::unordered_set<StrId> GetCommonDescendents(const std::pmr::unordered_set<StrId>& pass_list, const RenderPassIdMap& render_pass_id_map, const InterPassDistanceMap& inter_pass_distance_map, const int32_t valid_queues, std::pmr::memory_resource* memory_resource) {
+  std::pmr::unordered_set<StrId> ret{memory_resource};
+  auto it = pass_list.begin();
+  for (auto& [pass, distance] : inter_pass_distance_map.at(*it)) {
+    if (distance >= 0 && IsContainingCommandQueueType(valid_queues, render_pass_id_map.at(pass).command_queue_type)) {
+      ret.insert(pass);
+    }
+  }
+  it++;
+  while (it != pass_list.end()) {
+    auto& map = inter_pass_distance_map.at(*it);
+    auto ret_it = ret.begin();
+    while (ret_it != ret.end()) {
+      if (!map.contains(*ret_it) || map.at(*ret_it) < 0) {
+        ret_it = ret.erase(ret_it);
+      } else {
+        ret_it++;
+      }
+    }
+    it++;
+  }
+  return ret;
+}
+std::tuple<PassBarrierInfoSet, PassBarrierInfoSet> ConfigureBarrierForNextFrame(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const BufferStateList& buffer_state_after_render_pass_list, const InterPassDistanceMap& inter_pass_distance_map, const BufferStateChangeInfoList& state_change_info_list, std::pmr::memory_resource* memory_resource) {
+  std::pmr::unordered_map<CommandQueueType, StrId> first_pass_per_queue{memory_resource}, last_pass_per_queue{memory_resource};
+  for (auto& pass_name : render_pass_order) {
+    auto& command_queue_type = render_pass_id_map.at(pass_name).command_queue_type;
+    if (!first_pass_per_queue.contains(command_queue_type)) {
+      first_pass_per_queue.insert({command_queue_type, pass_name});
+    }
+    last_pass_per_queue.insert_or_assign(command_queue_type, pass_name);
+  }
+  PassBarrierInfoSet current_frame_barriers, next_frame_barriers;
+  for (std::pmr::unordered_set<StrId> current_frame_cands{memory_resource}, next_frame_cands{memory_resource}; auto& [buffer_id, state_change_info] : state_change_info_list) {
+    if (buffer_state_after_render_pass_list.contains(buffer_id)) continue;
+    auto& begin_info = state_change_info.back();
+    auto& end_info = state_change_info.front();
+    auto& begin_state = begin_info.next_buffer_state;
+    auto& end_state = end_info.prev_buffer_state;
+    if (begin_state == end_state) continue;
+    current_frame_cands.clear();
+    next_frame_cands.clear();
+    auto valid_queues = (GetValidCommandQueues(begin_state) & GetValidCommandQueues(end_state));
+    auto& last_pass = begin_info.pass_list_to_access_next_buffer_state;
+    current_frame_cands = GetCommonDescendents(last_pass, render_pass_id_map, inter_pass_distance_map, valid_queues, memory_resource);
+    auto& first_pass = end_info.pass_list_to_access_prev_buffer_state;
+    next_frame_cands = GetCommonAncestors(first_pass, render_pass_id_map, inter_pass_distance_map, valid_queues, memory_resource);
+    int32_t max_distance = 0;
+    StrId begin_pass, end_pass;
+    for (auto& begin_pass_cand : current_frame_cands) {
+      auto& command_queue_type_begin = render_pass_id_map.at(begin_pass_cand).command_queue_type;
+      auto& next_frame_first_pass = first_pass_per_queue.at(command_queue_type_begin);
+      auto distance_to_next_frame_start = inter_pass_distance_map.at(begin_pass_cand).at(last_pass_per_queue.at(command_queue_type_begin)) + 1;
+      for (auto& end_pass_cand : next_frame_cands) {
+        if (!inter_pass_distance_map.at(end_pass_cand).contains(next_frame_first_pass)) continue;
+        auto& command_queue_type_end = render_pass_id_map.at(end_pass_cand).command_queue_type;
+        auto distance = distance_to_next_frame_start + inter_pass_distance_map.at(first_pass_per_queue.at(command_queue_type_end)).at(end_pass_cand);
+        if (max_distance < distance) {
+          max_distance = distance;
+          begin_pass = begin_pass_cand;
+          end_pass = end_pass_cand;
+        }
+      }
+    }
+    for (auto& begin_pass_cand : current_frame_cands) {
+      for (auto& end_pass_cand : current_frame_cands) {
+        if (auto distance = inter_pass_distance_map.at(begin_pass_cand).at(end_pass_cand); distance >= 0 && max_distance < distance) {
+          max_distance = distance;
+          begin_pass = begin_pass_cand;
+          end_pass = end_pass_cand;
+        }
+      }
+    }
+    for (auto& begin_pass_cand : next_frame_cands) {
+      for (auto& end_pass_cand : next_frame_cands) {
+        if (auto distance = inter_pass_distance_map.at(begin_pass_cand).at(end_pass_cand); distance >= 0 && max_distance < distance) {
+          max_distance = distance;
+          begin_pass = begin_pass_cand;
+          end_pass = end_pass_cand;
+        }
+      }
+    }
+    if (!begin_pass || !end_pass) {
+      logerror("ConfigureBarrierForNextFrame. valid barrier pass not found. {} {} {}", buffer_id, begin_pass, end_pass);
+      continue;
+    }
+    if (begin_pass == end_pass && current_frame_cands.contains(begin_pass) && next_frame_cands.contains(begin_pass)) {
+      // split
+      {
+        // begin
+        auto barrier_container = &current_frame_barriers.barrier_after_pass;
+        if (!barrier_container->contains(begin_pass)) {
+          barrier_container->insert({begin_pass, std::pmr::vector<BarrierConfig>{memory_resource}});
+        }
+        barrier_container->at(begin_pass).push_back({buffer_id, begin_state, end_state, BarrierSplitType::kEnd});
+      }
+      {
+        // end
+        auto barrier_container = &next_frame_barriers.barrier_before_pass;
+        if (!barrier_container->contains(begin_pass)) {
+          barrier_container->insert({begin_pass, std::pmr::vector<BarrierConfig>{memory_resource}});
+        }
+        barrier_container->at(begin_pass).push_back({buffer_id, begin_state, end_state, BarrierSplitType::kEnd});
+      }
+      continue;
+    }
+    PassBarrierInfo* barrier_container_to_insert_begin = nullptr;
+    {
+      if (current_frame_cands.contains(begin_pass)) {
+        barrier_container_to_insert_begin = last_pass.contains(begin_pass) ? &current_frame_barriers.barrier_after_pass : &current_frame_barriers.barrier_before_pass;
+      } else {
+        barrier_container_to_insert_begin = first_pass.contains(begin_pass) ? &next_frame_barriers.barrier_before_pass : &next_frame_barriers.barrier_after_pass;
+      }
+      if (!barrier_container_to_insert_begin->contains(begin_pass)) {
+        barrier_container_to_insert_begin->insert({begin_pass, std::pmr::vector<BarrierConfig>{memory_resource}});
+      }
+      barrier_container_to_insert_begin->at(begin_pass).push_back({buffer_id, begin_state, end_state, BarrierSplitType::kNone});
+    }
+    if (begin_pass == end_pass) continue;
+    if (max_distance <= 1 && render_pass_id_map.at(begin_pass).command_queue_type == render_pass_id_map.at(end_pass).command_queue_type) continue;
+    barrier_container_to_insert_begin->at(begin_pass).back().split_type = BarrierSplitType::kBegin;
+    PassBarrierInfo* barrier_container_to_insert_end = nullptr;
+    if (current_frame_cands.contains(end_pass)) {
+      ASSERT(last_pass.contains(end_pass));
+      barrier_container_to_insert_end = &current_frame_barriers.barrier_before_pass;
+    } else {
+      barrier_container_to_insert_end = first_pass.contains(end_pass) ? &next_frame_barriers.barrier_before_pass : &next_frame_barriers.barrier_after_pass;
+    }
+    if (!barrier_container_to_insert_end->contains(end_pass)) {
+      barrier_container_to_insert_end->insert({end_pass, std::pmr::vector<BarrierConfig>{memory_resource}});
+    }
+    barrier_container_to_insert_end->at(end_pass).push_back({buffer_id, begin_state, end_state, BarrierSplitType::kEnd});
+  }
+  return {current_frame_barriers, next_frame_barriers};
+}
 }
 #ifdef BUILD_WITH_TEST
 namespace {

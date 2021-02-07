@@ -40,5 +40,13 @@ constexpr auto CreateValueSetFromMap(const std::pmr::unordered_map<K,V>& map, st
   }
   return ret;
 }
+template <typename K, typename V>
+constexpr bool IsContainingValue(const std::pmr::unordered_map<K, V>& map, const V& v) {
+  // consider using std::find_if 
+  for (auto& [key, value] : map) {
+    if (value == v) return true;
+  }
+  return false;
+}
 }
 #endif

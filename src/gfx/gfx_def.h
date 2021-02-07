@@ -49,7 +49,7 @@ constexpr CommandQueueTypeFlag ConvertCommandQueueTypeToFlag(const CommandQueueT
     case CommandQueueType::kTransfer: return kCommandQueueTypeTransfer;
   }
 }
-constexpr bool IsContainingCommandQueueType(const CommandQueueTypeFlag& flag, const CommandQueueType& type) {
+constexpr bool IsContainingCommandQueueType(const int32_t& flag, const CommandQueueType& type) {
   return flag & ConvertCommandQueueTypeToFlag(type);
 }
 constexpr void MergeCommandQueueTypeFlag(CommandQueueTypeFlag* const a, const CommandQueueType& b) {
