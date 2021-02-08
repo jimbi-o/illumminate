@@ -598,6 +598,23 @@ void RetainCommandList(const CommandQueueType pass_queue_type, CommandAllocator*
   command_lists->insert({pass_queue_type, command_list_pool->RetainCommandList(pass_queue_type, 1, command_allocators)});
   shader_visible_descriptor_heap->SetDescriptorHeapsToCommandList((*command_lists)[pass_queue_type][0]);
 }
+PassBarrierInfoSet MergeBarriers(PassBarrierInfoSet&& a, PassBarrierInfoSet&& b) {
+  for (auto&& pair : b.barrier_before_pass) {
+    if (a.barrier_before_pass.contains(pair.first)) {
+      a.barrier_before_pass.at(pair.first).insert(a.barrier_before_pass.at(pair.first).end(), std::make_move_iterator(pair.second.begin()), std::make_move_iterator(pair.second.end()));
+    } else {
+      a.barrier_before_pass.insert(std::move(pair));
+    }
+  }
+  for (auto&& pair : b.barrier_after_pass) {
+    if (a.barrier_after_pass.contains(pair.first)) {
+      a.barrier_after_pass.at(pair.first).insert(a.barrier_after_pass.at(pair.first).end(), std::make_move_iterator(pair.second.begin()), std::make_move_iterator(pair.second.end()));
+    } else {
+      a.barrier_after_pass.insert(std::move(pair));
+    }
+  }
+  return a;
+}
 }
 TEST_CASE("d3d12/render") {
   const uint32_t buffer_num = 2;
@@ -811,6 +828,7 @@ TEST_CASE("d3d12/render") {
   const uint32_t kFrameNumToTest = 10;
   std::pmr::vector<std::unordered_map<CommandQueueType, uint64_t>> frame_wait_signal{memory_resource.get()};
   frame_wait_signal.resize(buffer_num);
+  PassBarrierInfoSet barriers;
   for (uint32_t frame_no = 0; frame_no < kFrameNumToTest; frame_no++) {
     auto memory_resource_tmp = std::make_shared<PmrLinearAllocator>(buffer_tmp, buffer_tmp_size_in_bytes);
     auto frame_index = frame_no % buffer_num;
@@ -828,7 +846,9 @@ TEST_CASE("d3d12/render") {
     }
     auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffers.current_buffer_state_list, {}, memory_resource_tmp.get());
     auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource_tmp.get());
-    auto barriers = ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource_tmp.get());
+    barriers = MergeBarriers(std::move(barriers), ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource_tmp.get()));
+    auto [current_frame_barriers, next_frame_barriers] = ConfigureBarrierForNextFrame(render_pass_id_map, render_pass_order, buffers.current_buffer_state_list, {}, inter_pass_distance_map, buffer_state_change_list, memory_resource.get());
+    barriers = MergeBarriers(std::move(barriers), std::move(current_frame_barriers));
     {
       for (auto a : allocators.front()) {
         command_allocator.ReturnCommandAllocator(a);
@@ -855,13 +875,13 @@ TEST_CASE("d3d12/render") {
         command_lists.erase(pass_queue_type); // TODO return command_lists?
       }
       {
-        auto gpu_handle_ptr = buffers.gpu_descriptor_handles.contains(pass_name) ? buffers.gpu_descriptor_handles.at(pass_name) : D3D12_GPU_DESCRIPTOR_HANDLE{};
-        auto cpu_handle_ptr = buffers.cpu_descriptor_handles.contains(pass_name) ? buffers.cpu_descriptor_handles.at(pass_name).data() : nullptr;
-        auto resource_ptr   = buffers.pass_resources.contains(pass_name) ? buffers.pass_resources.at(pass_name).data() : nullptr;
         if (pass_name == StrId("present")) {
-          render_functions.at(pass_name)(nullptr, gpu_handle_ptr, cpu_handle_ptr, resource_ptr);
+          render_functions.at(pass_name)(nullptr, {}, {}, {});
         } else {
           RetainCommandList(pass_queue_type, &command_allocator, &command_lists, &command_list_pool, &shader_visible_descriptor_heap, &allocators);
+          auto gpu_handle_ptr = buffers.gpu_descriptor_handles.contains(pass_name) ? buffers.gpu_descriptor_handles.at(pass_name) : D3D12_GPU_DESCRIPTOR_HANDLE{};
+          auto cpu_handle_ptr = buffers.cpu_descriptor_handles.contains(pass_name) ? buffers.cpu_descriptor_handles.at(pass_name).data() : nullptr;
+          auto resource_ptr   = buffers.pass_resources.contains(pass_name) ? buffers.pass_resources.at(pass_name).data() : nullptr;
           render_functions.at(pass_name)(command_lists.at(pass_queue_type)[0], gpu_handle_ptr, cpu_handle_ptr, resource_ptr);
         }
       }
@@ -888,6 +908,7 @@ TEST_CASE("d3d12/render") {
         }
       }
     }
+    barriers = std::move(next_frame_barriers);
   }
   command_queue.WaitAll();
   for (auto& [buffer_id, allocation] : buffers.physical_allocation) {

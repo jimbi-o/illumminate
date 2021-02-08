@@ -243,11 +243,6 @@ struct BarrierConfig {
   BarrierSplitType split_type;
   std::byte _pad[3]{};
 };
-using PassBarrierInfo = std::pmr::unordered_map<StrId, std::pmr::vector<BarrierConfig>>;
-struct PassBarrierInfoSet {
-  PassBarrierInfo barrier_before_pass;
-  PassBarrierInfo barrier_after_pass;
-};
 PassSignalInfo ConvertBatchToSignalInfo(const BatchInfoList& batch_info_list, const RenderPassIdMap& render_pass_id_map, std::pmr::memory_resource* memory_resource);
 PassSignalInfo MergePassSignalInfo(PassSignalInfo&&, PassSignalInfo&&);
 RenderPassOrder ConvertBatchInfoBackToRenderPassOrder(BatchInfoList&& batch_info_list, std::pmr::memory_resource* memory_resource);
@@ -262,6 +257,11 @@ using BufferStateChangeInfoList = std::pmr::unordered_map<BufferId, std::pmr::ve
 BufferStateChangeInfoList GatherBufferStateChangeInfo(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, const BufferStateList& buffer_state_before_render_pass_list, const BufferStateList& buffer_state_after_render_pass_list, std::pmr::memory_resource* memory_resource);
 using InterPassDistanceMap = std::pmr::unordered_map<StrId, std::pmr::unordered_map<StrId, int32_t>>;
 InterPassDistanceMap CreateInterPassDistanceMap(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const PassSignalInfo& pass_signal_info, std::pmr::memory_resource* memory_resource);
+using PassBarrierInfo = std::pmr::unordered_map<StrId, std::pmr::vector<BarrierConfig>>;
+struct PassBarrierInfoSet {
+  PassBarrierInfo barrier_before_pass;
+  PassBarrierInfo barrier_after_pass;
+};
 PassBarrierInfoSet ConfigureBarrier(const RenderPassIdMap& render_pass_id_map, const BufferStateChangeInfoList& buffer_state_change_list, const InterPassDistanceMap& inter_pass_distance_map, std::pmr::memory_resource* memory_resource);
 std::tuple<PassBarrierInfoSet, PassBarrierInfoSet> ConfigureBarrierForNextFrame(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const BufferStateList& buffer_state_before_render_pass_list, const BufferStateList& buffer_state_after_render_pass_list, const InterPassDistanceMap& inter_pass_distance_map, const BufferStateChangeInfoList& state_change_info_list, std::pmr::memory_resource* memory_resource);
 }
