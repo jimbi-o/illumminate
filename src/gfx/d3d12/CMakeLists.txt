@@ -34,6 +34,11 @@ FetchContent_Declare(
   GIT_SHALLOW    OFF
 )
 FetchContent_MakeAvailable(d3d12memoryallocator)
+FetchContent_Declare(
+  dxcapi
+  URL https://ci.appveyor.com/api/projects/antiagainst/directxshadercompiler/artifacts/build%2FRelease%2Fdxc-artifacts.zip?branch=master&pr=false&job=image%3A%20Visual%20Studio%202017
+)
+FetchContent_MakeAvailable(dxcapi)
 
 add_subdirectory("../win32" "${CMAKE_CURRENT_BINARY_DIR}/gfx/win32")
 add_subdirectory(".." "${CMAKE_CURRENT_BINARY_DIR}/gfx")
@@ -66,7 +71,7 @@ else()
   target_compile_definitions(illuminategfxd3d12 PRIVATE DOCTEST_CONFIG_DISABLE)
 endif()
 
-target_link_libraries(illuminategfxd3d12 PRIVATE dxguid.lib illuminategfx illuminategfxwin32)
+target_link_libraries(illuminategfxd3d12 PRIVATE dxguid.lib illuminategfx illuminategfxwin32 ${dxcapi_SOURCE_DIR}/lib/dxcompiler.lib)
 
 target_include_directories(illuminategfxd3d12
   PUBLIC
@@ -82,6 +87,7 @@ target_include_directories(illuminategfxd3d12
   "${spdlog_SOURCE_DIR}/include"
   "${d3dx12_SOURCE_DIR}/Libraries/D3DX12"
   "${d3d12memoryallocator_SOURCE_DIR}/src"
+  "${dxcapi_SOURCE_DIR}/include"
 )
 
 target_sources(illuminategfxd3d12 PRIVATE
@@ -99,7 +105,7 @@ target_sources(illuminategfxd3d12 PRIVATE
 )
 
 add_custom_command(TARGET illuminategfxd3d12 POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:dxcompiler> $<TARGET_FILE_DIR:illuminategfxd3d12>
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different ${dxcapi_SOURCE_DIR}/bin/dxcompiler.dll $<TARGET_FILE_DIR:illuminategfxd3d12>
   )
 if (BUILD_WITH_TEST)
   add_custom_command(TARGET illuminategfxd3d12 POST_BUILD
