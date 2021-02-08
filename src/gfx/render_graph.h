@@ -263,5 +263,6 @@ BufferStateChangeInfoList GatherBufferStateChangeInfo(const RenderPassIdMap& ren
 using InterPassDistanceMap = std::pmr::unordered_map<StrId, std::pmr::unordered_map<StrId, int32_t>>;
 InterPassDistanceMap CreateInterPassDistanceMap(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const PassSignalInfo& pass_signal_info, std::pmr::memory_resource* memory_resource);
 PassBarrierInfoSet ConfigureBarrier(const RenderPassIdMap& render_pass_id_map, const BufferStateChangeInfoList& buffer_state_change_list, const InterPassDistanceMap& inter_pass_distance_map, std::pmr::memory_resource* memory_resource);
+std::tuple<PassBarrierInfoSet, PassBarrierInfoSet> ConfigureBarrierForNextFrame(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const BufferStateList& buffer_state_before_render_pass_list, const BufferStateList& buffer_state_after_render_pass_list, const InterPassDistanceMap& inter_pass_distance_map, const BufferStateChangeInfoList& state_change_info_list, std::pmr::memory_resource* memory_resource);
 }
 #endif
