@@ -575,17 +575,23 @@ void UpdateExternalBufferPointers(const PhysicalBufferList& external_buffers, co
     dst->physical_buffer.insert_or_assign(buffer_id, resource);
   }
   for (auto& pass_name: render_pass_order) {
+    if (pass_name == StrId("present")) continue;
     auto& pass = render_pass_id_map.at(pass_name);
     auto& buffers = buffer_id_list.at(pass_name);
     for (uint32_t buffer_index = 0; buffer_index < buffers.size(); buffer_index++) {
       auto& buffer_id = buffers[buffer_index];
       if (external_handles.contains(buffer_id)) {
         auto& buffer_config = pass.buffer_list[buffer_index];
-        if (pass.buffer_list.size() == 1 && buffer_config.state_type == BufferStateType::kRtv && external_handles.at(buffer_id).contains(BufferStateType::kRtv)) {
+        if (buffer_config.state_type == BufferStateType::kRtv && external_handles.at(buffer_id).contains(BufferStateType::kRtv)) {
           uint32_t buffer_index_in_cpu_descritors = 0;
+          for (uint32_t check_buffer_index = 0; check_buffer_index < buffer_index; check_buffer_index++) {
+            if (auto& state_type = pass.buffer_list[check_buffer_index].state_type; state_type == BufferStateType::kUav ||  state_type == BufferStateType::kRtv ||  state_type == BufferStateType::kDsv) {
+              buffer_index_in_cpu_descritors++;
+            }
+          }
           dst->cpu_descriptor_handles.at(pass_name)[buffer_index_in_cpu_descritors] = external_handles.at(buffer_id).at(BufferStateType::kRtv);
         } else {
-          ASSERT("UpdateExternalBufferPointers:Only rtv is implemented.");
+          ASSERT(false);
         }
       }
     }
@@ -862,6 +868,10 @@ TEST_CASE("d3d12/render") {
     for (auto& pass_name : render_pass_order) {
       auto pass_queue_type = render_pass_id_map.at(pass_name).command_queue_type;
       if (waiting_pass.contains(pass_name)) {
+        if (command_lists.contains(pass_queue_type)) {
+          ExecuteCommandList(command_lists.at(pass_queue_type), 1, command_queue.Get(pass_queue_type), &command_list_pool);
+          command_lists.erase(pass_queue_type);
+        }
         for (auto& [signal_queue, signal_val] : waiting_pass.at(pass_name)) {
           command_queue.RegisterWaitOnQueue(signal_queue, signal_val, pass_queue_type);
         }
@@ -872,7 +882,7 @@ TEST_CASE("d3d12/render") {
       }
       if (pass_name == StrId("present") && command_lists.contains(pass_queue_type)) {
         ExecuteCommandList(command_lists.at(pass_queue_type), 1, command_queue.Get(pass_queue_type), &command_list_pool);
-        command_lists.erase(pass_queue_type); // TODO return command_lists?
+        command_lists.erase(pass_queue_type);
       }
       {
         if (pass_name == StrId("present")) {
@@ -892,7 +902,7 @@ TEST_CASE("d3d12/render") {
       if (pass_signal_info.contains(pass_name) || pass_name == StrId("present")) {
         if (pass_name != StrId("present")) {
           ExecuteCommandList(command_lists.at(pass_queue_type), 1, command_queue.Get(pass_queue_type), &command_list_pool);
-          command_lists.erase(pass_queue_type); // TODO return command_lists?
+          command_lists.erase(pass_queue_type);
         }
         command_queue.RegisterSignal(pass_queue_type, ++pass_signal_val[pass_queue_type]);
         if (pass_signal_info.contains(pass_name)) {
