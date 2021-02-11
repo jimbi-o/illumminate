@@ -575,7 +575,6 @@ void UpdateExternalBufferPointers(const PhysicalBufferList& external_buffers, co
     dst->physical_buffer.insert_or_assign(buffer_id, resource);
   }
   for (auto& pass_name: render_pass_order) {
-    if (pass_name == StrId("present")) continue;
     auto& pass = render_pass_id_map.at(pass_name);
     auto& buffers = buffer_id_list.at(pass_name);
     for (uint32_t buffer_index = 0; buffer_index < buffers.size(); buffer_index++) {
@@ -668,21 +667,9 @@ TEST_CASE("d3d12/render") {
           memory_resource.get()
         }
                                           ));
-    render_pass_list.push_back(RenderPass(
-        StrId("present"),
-        {
-          {
-            BufferConfig(StrId("swapchain"), BufferStateType::kPresent),
-          },
-          memory_resource.get()
-        }
-                                          ));
     render_functions.insert({StrId("mainpass"), [](D3d12CommandList* const command_list, [[maybe_unused]]const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, [[maybe_unused]]ID3D12Resource** resource){
       const FLOAT clear_color[4] = {0.0f,1.0f,1.0f,1.0f};
       command_list->ClearRenderTargetView(cpu_handle[0], clear_color, 0, nullptr);
-    }});
-    render_functions.insert({StrId("present"), [&swapchain]([[maybe_unused]]D3d12CommandList* const command_list, [[maybe_unused]]const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, [[maybe_unused]]const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, [[maybe_unused]]ID3D12Resource** resource){
-      swapchain.Present();
     }});
   }
   SUBCASE("clear swapchain uav@compute queue") {
@@ -702,15 +689,6 @@ TEST_CASE("d3d12/render") {
           {
             BufferConfig(StrId("mainbuffer"), BufferStateType::kSrvPsOnly),
             BufferConfig(StrId("swapchain"), BufferStateType::kRtv),
-          },
-          memory_resource.get()
-        }
-                                          ));
-    render_pass_list.push_back(RenderPass(
-        StrId("present"),
-        {
-          {
-            BufferConfig(StrId("swapchain"), BufferStateType::kPresent),
           },
           memory_resource.get()
         }
@@ -766,9 +744,6 @@ TEST_CASE("d3d12/render") {
       const FLOAT clear_color[4] = {0.0f,1.0f,1.0f,1.0f};
       command_list->OMSetRenderTargets(1, cpu_handle, true, nullptr);
       command_list->DrawInstanced(3, 1, 0, 0);
-    }});
-    render_functions.insert({StrId("present"), [&swapchain]([[maybe_unused]]D3d12CommandList* const command_list, [[maybe_unused]]const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, [[maybe_unused]]const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, [[maybe_unused]]ID3D12Resource** resource){
-      swapchain.Present();
     }});
   }
 #if 0
@@ -832,6 +807,7 @@ TEST_CASE("d3d12/render") {
                                   memory_resource.get()); // TODO refactor
   }
   const uint32_t kFrameNumToTest = 10;
+  std::pmr::unordered_map<CommandQueueType, uint64_t> pass_signal_val{memory_resource.get()};
   std::pmr::vector<std::unordered_map<CommandQueueType, uint64_t>> frame_wait_signal{memory_resource.get()};
   frame_wait_signal.resize(buffer_num);
   PassBarrierInfoSet barriers;
@@ -839,6 +815,7 @@ TEST_CASE("d3d12/render") {
     auto memory_resource_tmp = std::make_shared<PmrLinearAllocator>(buffer_tmp, buffer_tmp_size_in_bytes);
     auto frame_index = frame_no % buffer_num;
     command_queue.WaitOnCpu(std::move(frame_wait_signal[frame_index]));
+    BufferStateList buffer_state_after_render_pass_list{memory_resource_tmp.get()};
     {
       swapchain.UpdateBackBufferIndex();
       auto& swapchain_buffer_id = named_buffers.at(StrId("swapchain"));
@@ -849,11 +826,12 @@ TEST_CASE("d3d12/render") {
       external_handles.at(swapchain_buffer_id).insert({BufferStateType::kRtv, swapchain.GetRtvHandle()});
       UpdateExternalBufferPointers(external_buffers, external_handles, render_pass_id_map, render_pass_order, buffer_id_list, &buffers);
       buffers.current_buffer_state_list.insert_or_assign(swapchain_buffer_id, kBufferStateFlagPresent);
+      buffer_state_after_render_pass_list.insert({swapchain_buffer_id, kBufferStateFlagPresent});
     }
-    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffers.current_buffer_state_list, {}, memory_resource_tmp.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffers.current_buffer_state_list, buffer_state_after_render_pass_list, memory_resource_tmp.get());
     auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource_tmp.get());
     barriers = MergeBarriers(std::move(barriers), ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource_tmp.get()));
-    auto [current_frame_barriers, next_frame_barriers] = ConfigureBarrierForNextFrame(render_pass_id_map, render_pass_order, buffers.current_buffer_state_list, {}, inter_pass_distance_map, buffer_state_change_list, memory_resource.get());
+    auto [current_frame_barriers, next_frame_barriers] = ConfigureBarrierForNextFrame(render_pass_id_map, render_pass_order, buffers.current_buffer_state_list, buffer_state_after_render_pass_list, inter_pass_distance_map, buffer_state_change_list, memory_resource.get());
     barriers = MergeBarriers(std::move(barriers), std::move(current_frame_barriers));
     {
       for (auto a : allocators.front()) {
@@ -862,7 +840,6 @@ TEST_CASE("d3d12/render") {
       allocators.front().clear();
       std::rotate(allocators.begin(), allocators.begin() + 1, allocators.end());
     }
-    std::pmr::unordered_map<CommandQueueType, uint64_t> pass_signal_val{memory_resource_tmp.get()};
     std::pmr::unordered_map<StrId, std::pmr::unordered_map<CommandQueueType, uint64_t>> waiting_pass{memory_resource_tmp.get()};
     std::pmr::unordered_map<CommandQueueType, D3d12CommandList**> command_lists{memory_resource_tmp.get()};
     for (auto& pass_name : render_pass_order) {
@@ -880,44 +857,40 @@ TEST_CASE("d3d12/render") {
         RetainCommandList(pass_queue_type, &command_allocator, &command_lists, &command_list_pool, &shader_visible_descriptor_heap, &allocators);
         ExecuteBarrier(barriers.barrier_before_pass.at(pass_name), buffers.physical_buffer, command_lists.at(pass_queue_type)[0], &buffers.current_buffer_state_list, memory_resource_tmp.get());
       }
-      if (pass_name == StrId("present") && command_lists.contains(pass_queue_type)) {
-        ExecuteCommandList(command_lists.at(pass_queue_type), 1, command_queue.Get(pass_queue_type), &command_list_pool);
-        command_lists.erase(pass_queue_type);
-      }
       {
-        if (pass_name == StrId("present")) {
-          render_functions.at(pass_name)(nullptr, {}, {}, {});
-        } else {
-          RetainCommandList(pass_queue_type, &command_allocator, &command_lists, &command_list_pool, &shader_visible_descriptor_heap, &allocators);
-          auto gpu_handle_ptr = buffers.gpu_descriptor_handles.contains(pass_name) ? buffers.gpu_descriptor_handles.at(pass_name) : D3D12_GPU_DESCRIPTOR_HANDLE{};
-          auto cpu_handle_ptr = buffers.cpu_descriptor_handles.contains(pass_name) ? buffers.cpu_descriptor_handles.at(pass_name).data() : nullptr;
-          auto resource_ptr   = buffers.pass_resources.contains(pass_name) ? buffers.pass_resources.at(pass_name).data() : nullptr;
-          render_functions.at(pass_name)(command_lists.at(pass_queue_type)[0], gpu_handle_ptr, cpu_handle_ptr, resource_ptr);
-        }
+        RetainCommandList(pass_queue_type, &command_allocator, &command_lists, &command_list_pool, &shader_visible_descriptor_heap, &allocators);
+        auto gpu_handle_ptr = buffers.gpu_descriptor_handles.contains(pass_name) ? buffers.gpu_descriptor_handles.at(pass_name) : D3D12_GPU_DESCRIPTOR_HANDLE{};
+        auto cpu_handle_ptr = buffers.cpu_descriptor_handles.contains(pass_name) ? buffers.cpu_descriptor_handles.at(pass_name).data() : nullptr;
+        auto resource_ptr   = buffers.pass_resources.contains(pass_name) ? buffers.pass_resources.at(pass_name).data() : nullptr;
+        render_functions.at(pass_name)(command_lists.at(pass_queue_type)[0], gpu_handle_ptr, cpu_handle_ptr, resource_ptr);
       }
       if (barriers.barrier_after_pass.contains(pass_name)) {
         RetainCommandList(pass_queue_type, &command_allocator, &command_lists, &command_list_pool, &shader_visible_descriptor_heap, &allocators);
         ExecuteBarrier(barriers.barrier_after_pass.at(pass_name), buffers.physical_buffer, command_lists.at(pass_queue_type)[0], &buffers.current_buffer_state_list, memory_resource_tmp.get());
       }
-      if (pass_signal_info.contains(pass_name) || pass_name == StrId("present")) {
-        if (pass_name != StrId("present")) {
-          ExecuteCommandList(command_lists.at(pass_queue_type), 1, command_queue.Get(pass_queue_type), &command_list_pool);
-          command_lists.erase(pass_queue_type);
-        }
+      if (pass_signal_info.contains(pass_name)) {
+        ExecuteCommandList(command_lists.at(pass_queue_type), 1, command_queue.Get(pass_queue_type), &command_list_pool);
+        command_lists.erase(pass_queue_type);
         command_queue.RegisterSignal(pass_queue_type, ++pass_signal_val[pass_queue_type]);
-        if (pass_signal_info.contains(pass_name)) {
-          for (auto& waiting_pass_name : pass_signal_info.at(pass_name)) {
-            if (!waiting_pass.contains(waiting_pass_name)) {
-              waiting_pass.insert({waiting_pass_name, std::pmr::unordered_map<CommandQueueType, uint64_t>{memory_resource_tmp.get()}});
-            }
-            waiting_pass.at(waiting_pass_name).insert({pass_queue_type, pass_signal_val[pass_queue_type]});
+        for (auto& waiting_pass_name : pass_signal_info.at(pass_name)) {
+          if (!waiting_pass.contains(waiting_pass_name)) {
+            waiting_pass.insert({waiting_pass_name, std::pmr::unordered_map<CommandQueueType, uint64_t>{memory_resource_tmp.get()}});
           }
-        }
-        if (pass_name == StrId("present")) {
-          frame_wait_signal[frame_index][pass_queue_type] = pass_signal_val[pass_queue_type];
+          waiting_pass.at(waiting_pass_name).insert({pass_queue_type, pass_signal_val[pass_queue_type]});
         }
       }
     }
+    auto present_signal_val = ++pass_signal_val[CommandQueueType::kGraphics];
+    frame_wait_signal[frame_index][CommandQueueType::kGraphics] = present_signal_val;
+    for (auto& [command_queue_type, command_list] : command_lists) {
+      ExecuteCommandList(command_list, 1, command_queue.Get(command_queue_type), &command_list_pool);
+      if (command_queue_type != CommandQueueType::kGraphics) {
+        command_queue.RegisterWaitOnQueue(CommandQueueType::kGraphics, present_signal_val, command_queue_type);
+      }
+    }
+    command_lists.clear();
+    swapchain.Present();
+    command_queue.RegisterSignal(CommandQueueType::kGraphics, present_signal_val);
     barriers = std::move(next_frame_barriers);
   }
   command_queue.WaitAll();
