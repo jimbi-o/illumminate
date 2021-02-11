@@ -657,6 +657,7 @@ TEST_CASE("d3d12/render") {
   std::pmr::unordered_map<StrId, RenderFunction> render_functions{memory_resource.get()};
   const uint32_t buffer_tmp_size_in_bytes = 32 * 1024;
   std::byte buffer_tmp[buffer_tmp_size_in_bytes]{};
+  std::function<void()> term_func;
   SUBCASE("clear swapchain rtv@graphics queue") {
     render_pass_list.push_back(RenderPass(
         StrId("mainpass"),
@@ -745,6 +746,10 @@ TEST_CASE("d3d12/render") {
       command_list->OMSetRenderTargets(1, cpu_handle, true, nullptr);
       command_list->DrawInstanced(3, 1, 0, 0);
     }});
+    term_func = [copy_root_signature, copy_pipeline_state]() {
+      copy_root_signature->Release();
+      copy_pipeline_state->Release();
+    };
   }
 #if 0
   // TODO
@@ -902,6 +907,7 @@ TEST_CASE("d3d12/render") {
     memory_resource_double_buffered->Reset();
   }
   command_queue.WaitAll();
+  if (term_func) term_func();
   for (auto& [buffer_id, allocation] : buffers.physical_allocation) {
     if (allocation == nullptr) continue;
     allocation->Release();
