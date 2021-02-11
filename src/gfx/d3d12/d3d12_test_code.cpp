@@ -21,10 +21,6 @@
 #include "doctest/doctest.h"
 #include "d3dx12.h"
 namespace {
-const uint32_t buffer_size_in_bytes = 32 * 1024;
-std::byte buffer[buffer_size_in_bytes]{};
-const uint32_t buffer_tmp_size_in_bytes = 32 * 1024;
-std::byte buffer_tmp[buffer_tmp_size_in_bytes]{};
 using namespace illuminate::gfx;
 using namespace illuminate::gfx::d3d12;
 constexpr D3D12_RESOURCE_BARRIER_FLAGS ConvertToD3d12BarrierSplitFlag(const BarrierSplitType& split_type) {
@@ -622,14 +618,16 @@ PassBarrierInfoSet MergeBarriers(PassBarrierInfoSet&& a, PassBarrierInfoSet&& b)
 }
 }
 TEST_CASE("d3d12/render") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  using namespace illuminate::gfx::d3d12;
+  const uint32_t buffer_size_in_bytes = 32 * 1024;
+  std::byte buffer[buffer_size_in_bytes]{};
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
   const uint32_t buffer_num = 2;
   const uint32_t swapchain_buffer_num = buffer_num + 1;
   const BufferSize2d swapchain_size{1600, 900};
   const auto mainbuffer_size = swapchain_size;
-  using namespace illuminate;
-  using namespace illuminate::gfx;
-  using namespace illuminate::gfx::d3d12;
-  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
   DxgiCore dxgi_core;
   CHECK(dxgi_core.Init());
   Device device;
@@ -657,6 +655,8 @@ TEST_CASE("d3d12/render") {
   RenderPassList render_pass_list{memory_resource.get()};
   using RenderFunction = std::function<void(D3d12CommandList* const, const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, ID3D12Resource** resource)>;
   std::pmr::unordered_map<StrId, RenderFunction> render_functions{memory_resource.get()};
+  const uint32_t buffer_tmp_size_in_bytes = 32 * 1024;
+  std::byte buffer_tmp[buffer_tmp_size_in_bytes]{};
   SUBCASE("clear swapchain rtv@graphics queue") {
     render_pass_list.push_back(RenderPass(
         StrId("mainpass"),
@@ -811,8 +811,12 @@ TEST_CASE("d3d12/render") {
   std::pmr::vector<std::unordered_map<CommandQueueType, uint64_t>> frame_wait_signal{memory_resource.get()};
   frame_wait_signal.resize(buffer_num);
   PassBarrierInfoSet barriers;
+  const uint32_t buffer_double_buffered_size_in_bytes = 4 * 1024;
+  std::byte buffer_double_buffered[buffer_double_buffered_size_in_bytes * 2]{};
+  auto memory_resource_double_buffered = std::make_shared<PmrDoubleBufferedAllocator>(buffer_double_buffered, &buffer_double_buffered[buffer_double_buffered_size_in_bytes], buffer_double_buffered_size_in_bytes);
+  auto memory_resource_tmp = std::make_shared<PmrLinearAllocator>(buffer_tmp, buffer_tmp_size_in_bytes);
+  size_t memory_resource_tmp_max_used_bytes = 0, memory_resource_double_buffered_max_used_bytes = 0;
   for (uint32_t frame_no = 0; frame_no < kFrameNumToTest; frame_no++) {
-    auto memory_resource_tmp = std::make_shared<PmrLinearAllocator>(buffer_tmp, buffer_tmp_size_in_bytes);
     auto frame_index = frame_no % buffer_num;
     command_queue.WaitOnCpu(std::move(frame_wait_signal[frame_index]));
     BufferStateList buffer_state_after_render_pass_list{memory_resource_tmp.get()};
@@ -831,7 +835,7 @@ TEST_CASE("d3d12/render") {
     auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffers.current_buffer_state_list, buffer_state_after_render_pass_list, memory_resource_tmp.get());
     auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource_tmp.get());
     barriers = MergeBarriers(std::move(barriers), ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource_tmp.get()));
-    auto [current_frame_barriers, next_frame_barriers] = ConfigureBarrierForNextFrame(render_pass_id_map, render_pass_order, buffers.current_buffer_state_list, buffer_state_after_render_pass_list, inter_pass_distance_map, buffer_state_change_list, memory_resource.get());
+    auto [current_frame_barriers, next_frame_barriers] = ConfigureBarrierForNextFrame(render_pass_id_map, render_pass_order, buffers.current_buffer_state_list, buffer_state_after_render_pass_list, inter_pass_distance_map, buffer_state_change_list, memory_resource_double_buffered.get());
     barriers = MergeBarriers(std::move(barriers), std::move(current_frame_barriers));
     {
       for (auto a : allocators.front()) {
@@ -892,6 +896,10 @@ TEST_CASE("d3d12/render") {
     swapchain.Present();
     command_queue.RegisterSignal(CommandQueueType::kGraphics, present_signal_val);
     barriers = std::move(next_frame_barriers);
+    memory_resource_tmp_max_used_bytes = (memory_resource_tmp_max_used_bytes < memory_resource_tmp->GetOffset()) ? memory_resource_tmp->GetOffset() : memory_resource_tmp_max_used_bytes;
+    memory_resource_tmp->Reset();
+    memory_resource_double_buffered_max_used_bytes = (memory_resource_double_buffered_max_used_bytes < memory_resource_double_buffered->GetOffset()) ? memory_resource_double_buffered->GetOffset() : memory_resource_double_buffered_max_used_bytes;
+    memory_resource_double_buffered->Reset();
   }
   command_queue.WaitAll();
   for (auto& [buffer_id, allocation] : buffers.physical_allocation) {
@@ -918,4 +926,8 @@ TEST_CASE("d3d12/render") {
   command_queue.Term();
   device.Term();
   dxgi_core.Term();
+  loginfo("<memory stat> main:{}/{}({:.2f}%) per-frame:{}/{}({:.2f}%) double-buffer:{}/{}({:.2f}%)",
+          memory_resource->GetOffset(), memory_resource->GetBufferSizeInByte(), static_cast<float>(memory_resource->GetOffset()) / memory_resource->GetBufferSizeInByte() * 100.0f,
+          memory_resource_tmp_max_used_bytes, memory_resource_tmp->GetBufferSizeInByte(), static_cast<float>(memory_resource_tmp_max_used_bytes) / memory_resource_tmp->GetBufferSizeInByte() * 100.0f,
+          memory_resource_double_buffered_max_used_bytes, memory_resource_double_buffered->GetBufferSizeInByte(), static_cast<float>(memory_resource_double_buffered_max_used_bytes) / memory_resource_double_buffered->GetBufferSizeInByte() * 100.0f);
 }
