@@ -658,6 +658,7 @@ TEST_CASE("d3d12/render") {
   const uint32_t buffer_tmp_size_in_bytes = 32 * 1024;
   std::byte buffer_tmp[buffer_tmp_size_in_bytes]{};
   std::function<void()> term_func;
+#if 0
   SUBCASE("clear swapchain rtv@graphics queue") {
     render_pass_list.push_back(RenderPass(
         StrId("mainpass"),
@@ -673,6 +674,7 @@ TEST_CASE("d3d12/render") {
       command_list->ClearRenderTargetView(cpu_handle[0], clear_color, 0, nullptr);
     }});
   }
+#endif
   SUBCASE("clear swapchain uav@compute queue") {
     // swapchain can only be used as rtv (no uav, dsv, copy_dst, etc.)
     render_pass_list.push_back(RenderPass(
@@ -717,6 +719,7 @@ TEST_CASE("d3d12/render") {
         CD3DX12_PIPELINE_STATE_STREAM_PS ps;
         CD3DX12_PIPELINE_STATE_STREAM_RENDER_TARGET_FORMATS render_target_formats;
         CD3DX12_PIPELINE_STATE_STREAM_PRIMITIVE_TOPOLOGY topology;
+        CD3DX12_PIPELINE_STATE_STREAM_DEPTH_STENCIL depth_stencil;
       } desc_local {
         copy_root_signature,
         D3D12_SHADER_BYTECODE{shader_object_vs->GetBufferPointer(), shader_object_vs->GetBufferSize()},
@@ -724,6 +727,7 @@ TEST_CASE("d3d12/render") {
         {{{swapchain.GetDxgiFormat()}, 1}},
         D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
       };
+      ((CD3DX12_DEPTH_STENCIL_DESC&)(desc_local.depth_stencil)).DepthEnable = false;
       D3D12_PIPELINE_STATE_STREAM_DESC desc{sizeof(desc_local), &desc_local};
       hr = device.Get()->CreatePipelineState(&desc, IID_PPV_ARGS(&copy_pipeline_state));
       CHECK(SUCCEEDED(hr));
@@ -737,8 +741,12 @@ TEST_CASE("d3d12/render") {
       const UINT clear_color[4]{255,255,0,255};
       command_list->ClearUnorderedAccessViewUint(gpu_handle, cpu_handle[0], resource[0], clear_color, 0, nullptr);
     }});
-    render_functions.insert({StrId("copy"), [copy_root_signature, copy_pipeline_state](D3d12CommandList* const command_list, const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, [[maybe_unused]]ID3D12Resource** resource){
+    render_functions.insert({StrId("copy"), [copy_root_signature, copy_pipeline_state, width = swapchain_size.width, height = swapchain_size.height](D3d12CommandList* const command_list, const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, [[maybe_unused]]ID3D12Resource** resource){
       command_list->SetGraphicsRootSignature(copy_root_signature);
+      D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), D3D12_MIN_DEPTH, D3D12_MAX_DEPTH};
+      command_list->RSSetViewports(1, &viewport);
+      D3D12_RECT scissor_rect{0L, 0L, static_cast<LONG>(width), static_cast<LONG>(height)};
+      command_list->RSSetScissorRects(1, &scissor_rect);
       command_list->SetPipelineState(copy_pipeline_state);
       command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
       command_list->SetGraphicsRootDescriptorTable(0, gpu_handle);
@@ -811,7 +819,7 @@ TEST_CASE("d3d12/render") {
                                   &shader_visible_descriptor_heap,
                                   memory_resource.get()); // TODO refactor
   }
-  const uint32_t kFrameNumToTest = 10;
+  const uint32_t kFrameNumToTest = 1000000;
   std::pmr::unordered_map<CommandQueueType, uint64_t> pass_signal_val{memory_resource.get()};
   std::pmr::vector<std::unordered_map<CommandQueueType, uint64_t>> frame_wait_signal{memory_resource.get()};
   frame_wait_signal.resize(buffer_num);
