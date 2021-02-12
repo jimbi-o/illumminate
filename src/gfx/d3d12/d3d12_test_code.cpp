@@ -658,7 +658,6 @@ TEST_CASE("d3d12/render") {
   const uint32_t buffer_tmp_size_in_bytes = 32 * 1024;
   std::byte buffer_tmp[buffer_tmp_size_in_bytes]{};
   std::function<void()> term_func;
-#if 0
   SUBCASE("clear swapchain rtv@graphics queue") {
     render_pass_list.push_back(RenderPass(
         StrId("mainpass"),
@@ -674,7 +673,6 @@ TEST_CASE("d3d12/render") {
       command_list->ClearRenderTargetView(cpu_handle[0], clear_color, 0, nullptr);
     }});
   }
-#endif
   SUBCASE("clear swapchain uav@compute queue") {
     // swapchain can only be used as rtv (no uav, dsv, copy_dst, etc.)
     render_pass_list.push_back(RenderPass(
@@ -819,7 +817,7 @@ TEST_CASE("d3d12/render") {
                                   &shader_visible_descriptor_heap,
                                   memory_resource.get()); // TODO refactor
   }
-  const uint32_t kFrameNumToTest = 1000000;
+  const uint32_t kFrameNumToTest = 100;
   std::pmr::unordered_map<CommandQueueType, uint64_t> pass_signal_val{memory_resource.get()};
   std::pmr::vector<std::unordered_map<CommandQueueType, uint64_t>> frame_wait_signal{memory_resource.get()};
   frame_wait_signal.resize(buffer_num);
