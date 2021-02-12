@@ -857,8 +857,11 @@ TEST_CASE("d3d12/render") {
     }
     std::pmr::unordered_map<StrId, std::pmr::unordered_map<CommandQueueType, uint64_t>> waiting_pass{memory_resource_tmp.get()};
     std::pmr::unordered_map<CommandQueueType, D3d12CommandList**> command_lists{memory_resource_tmp.get()};
+    std::pmr::unordered_set<CommandQueueType> used_queues{memory_resource_tmp.get()};
+    used_queues.reserve(kCommandQueueTypeNum);
     for (auto& pass_name : render_pass_order) {
       auto pass_queue_type = render_pass_id_map.at(pass_name).command_queue_type;
+      used_queues.insert(pass_queue_type);
       if (waiting_pass.contains(pass_name)) {
         if (command_lists.contains(pass_queue_type)) {
           ExecuteCommandList(command_lists.at(pass_queue_type), 1, command_queue.Get(pass_queue_type), &command_list_pool);
@@ -899,13 +902,17 @@ TEST_CASE("d3d12/render") {
     frame_wait_signal[frame_index][CommandQueueType::kGraphics] = present_signal_val;
     for (auto& [command_queue_type, command_list] : command_lists) {
       ExecuteCommandList(command_list, 1, command_queue.Get(command_queue_type), &command_list_pool);
-      if (command_queue_type != CommandQueueType::kGraphics) {
-        command_queue.RegisterWaitOnQueue(CommandQueueType::kGraphics, present_signal_val, command_queue_type);
-      }
     }
     command_lists.clear();
     swapchain.Present();
     command_queue.RegisterSignal(CommandQueueType::kGraphics, present_signal_val);
+    while (!used_queues.empty()) {
+      auto& command_queue_type = *used_queues.begin();
+      if (command_queue_type != CommandQueueType::kGraphics) {
+        command_queue.RegisterWaitOnQueue(CommandQueueType::kGraphics, present_signal_val, command_queue_type);
+      }
+      used_queues.erase(used_queues.begin());
+    }
     barriers = std::move(next_frame_barriers);
     memory_resource_tmp_max_used_bytes = (memory_resource_tmp_max_used_bytes < memory_resource_tmp->GetOffset()) ? memory_resource_tmp->GetOffset() : memory_resource_tmp_max_used_bytes;
     memory_resource_tmp->Reset();
