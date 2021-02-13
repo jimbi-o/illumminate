@@ -16,7 +16,7 @@ static HWND InitWindow(const char* const title, const uint32_t width, const uint
   wc.hInstance = GetModuleHandle(nullptr);
   wc.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
   wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-  wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 2);
+  wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 2);
   wc.lpszMenuName = nullptr;
   wc.lpszClassName = title;
   wc.hIconSm = LoadIcon(nullptr, IDI_APPLICATION);
