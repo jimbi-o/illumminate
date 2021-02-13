@@ -758,7 +758,7 @@ std::tuple<PassBarrierInfoSet, PassBarrierInfoSet> ConfigureBarrierForNextFrame(
     }
     for (auto& begin_pass_cand : current_frame_cands) {
       for (auto& end_pass_cand : current_frame_cands) {
-        if (auto distance = inter_pass_distance_map.at(begin_pass_cand).at(end_pass_cand); (!begin_pass || distance >= 0 && max_distance < distance)) {
+        if (auto distance = inter_pass_distance_map.at(begin_pass_cand).at(end_pass_cand); (!begin_pass || (distance >= 0 && max_distance < distance))) {
           max_distance = distance;
           begin_pass = begin_pass_cand;
           end_pass = end_pass_cand;
@@ -767,7 +767,7 @@ std::tuple<PassBarrierInfoSet, PassBarrierInfoSet> ConfigureBarrierForNextFrame(
     }
     for (auto& begin_pass_cand : next_frame_cands) {
       for (auto& end_pass_cand : next_frame_cands) {
-        if (auto distance = inter_pass_distance_map.at(begin_pass_cand).at(end_pass_cand); (!!begin_pass || distance >= 0 && max_distance < distance)) {
+        if (auto distance = inter_pass_distance_map.at(begin_pass_cand).at(end_pass_cand); (!!begin_pass || (distance >= 0 && max_distance < distance))) {
           max_distance = distance;
           begin_pass = begin_pass_cand;
           end_pass = end_pass_cand;
