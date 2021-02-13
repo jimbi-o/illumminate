@@ -7,7 +7,7 @@
 #include <unordered_map>
 #include <vector>
 #include "gfx_def.h"
-#include "illuminate.h"
+#include "illuminate/illuminate.h"
 namespace illuminate::gfx {
 constexpr bool IsOutputBuffer(const BufferStateType state_type, const BufferLoadOpType load_op_type) {
   switch (state_type) {
@@ -95,7 +95,7 @@ constexpr uint32_t GetPhysicalBufferHeight(const BufferConfig& config, const Buf
   return GetPhysicalBufferSize(config.size_type, config.height, mainbuffer.height, swapchain.height);
 }
 using BufferConfigList = std::pmr::vector<BufferConfig>;
-using AsyncComputeEnabled = illuminate::EnableDisable;
+using AsyncComputeEnabled = illuminate::core::EnableDisable;
 class RenderPass {
  public:
   RenderPass()

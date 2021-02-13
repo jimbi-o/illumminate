@@ -1,5 +1,4 @@
 #include "render_graph.h"
-#include "minimal_for_cpp.h"
 namespace illuminate::gfx {
 std::tuple<RenderPassIdMap, RenderPassOrder> FormatRenderPassList(RenderPassList&& render_pass_list, std::pmr::memory_resource* memory_resource) {
   RenderPassIdMap render_pass_id_map{memory_resource};
@@ -2114,7 +2113,7 @@ TEST_CASE("AsyncComputeInterFrame") {
   pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, async_compute_batching, consumer_producer_render_pass_map, memory_resource.get());
 }
 TEST_CASE("CountSetBitNum") {
-  using namespace illuminate;
+  using namespace illuminate::core;
   using namespace illuminate::gfx;
   CHECK(CountSetBitNum(0x0) == 0);
   CHECK(CountSetBitNum(0x1) == 1);
