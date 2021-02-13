@@ -5,22 +5,6 @@ project(illuminategfxwin32
   LANGUAGES CXX
 )
 
-include(FetchContent)
-FetchContent_Declare(
-  doctest
-  GIT_REPOSITORY https://github.com/onqtam/doctest.git
-  GIT_TAG        d5aa2bfb8f00b6260296a754af3a3a98d93f7b67
-  GIT_SHALLOW    OFF
-)
-FetchContent_MakeAvailable(doctest)
-FetchContent_Declare(
-  spdlog
-  GIT_REPOSITORY https://github.com/gabime/spdlog.git
-  GIT_TAG        39150eb8c7673f37d740d957acfcbff8c48ef9a6
-  GIT_SHALLOW    OFF
-)
-FetchContent_MakeAvailable(spdlog)
-
 if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
   if (NOT DEFINED BUILD_WITH_TEST)
 	set(BUILD_WITH_TEST ON)
@@ -33,28 +17,20 @@ else()
   add_library(illuminategfxwin32)
 endif()
 
-target_compile_features(illuminategfxwin32 PUBLIC cxx_std_20)
-if (NOT MSVC)
-  target_compile_options(illuminategfxwin32 PRIVATE -msse4.2)
+find_library(ILLUMINATECORE_FOUND illuminatecore)
+if ("${ILLUMINATECORE_FOUND}" STREQUAL "ILLUMINATECORE_FOUND-NOTFOUND")
+  add_subdirectory("../../core" "${CMAKE_CURRENT_BINARY_DIR}/core")
+  target_link_libraries(illuminategfxwin32 PUBLIC illuminatecore)
 endif()
+
+target_compile_features(illuminategfxwin32 PUBLIC cxx_std_20)
 if (BUILD_WITH_TEST)
   target_compile_definitions(illuminategfxwin32 PRIVATE BUILD_WITH_TEST)
-  target_link_libraries(illuminategfxwin32 PRIVATE doctest::doctest)
 else()
   target_compile_definitions(illuminategfxwin32 PRIVATE DOCTEST_CONFIG_DISABLE)
 endif()
 
-target_include_directories(illuminategfxwin32
-  PUBLIC
-  "../../../include"
-  PRIVATE
-  "."
-  "../../"
-  "../../../include/illuminate"
-  "../../../include/illuminate/gfx/win32"
-  "${doctest_SOURCE_DIR}"
-  "${spdlog_SOURCE_DIR}/include"
-)
+target_include_directories(illuminategfxwin32 PRIVATE ".")
 
 target_sources(illuminategfxwin32 PRIVATE
   "win32_window.cpp"

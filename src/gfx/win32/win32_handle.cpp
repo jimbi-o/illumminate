@@ -1,6 +1,5 @@
-#include "win32_handle.h"
-#include "minimal_for_cpp.h"
-#include "doctest/doctest.h"
+#include "illuminate/illuminate.h"
+#include "illuminate/gfx/win32/win32_handle.h"
 namespace illuminate::gfx::win32 {
 HANDLE CreateEventHandle() {
   auto handle = CreateEvent(nullptr, false, false, nullptr);
