@@ -1,6 +1,10 @@
+#include "illuminate/math/vector.h"
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wfloat-equal"
+#endif
 #include "doctest/doctest.h"
-#include "vector.h"
 TEST_CASE("vector") {
   using namespace illuminate::math;
   vec4 v0(1.0f,2.0f,3.0f,4.0f);
@@ -124,3 +128,6 @@ TEST_CASE("vector") {
   sv.normalize();
   CHECK(sv.dist() == 1.0f);
 }
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif

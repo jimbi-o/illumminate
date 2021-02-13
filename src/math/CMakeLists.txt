@@ -31,4 +31,5 @@ else()
   target_compile_definitions(illuminatemath PRIVATE DOCTEST_CONFIG_DISABLE)
 endif()
 
+target_link_libraries(illuminatemath PUBLIC illuminatecore)
 target_include_directories(illuminatemath PRIVATE ".")
