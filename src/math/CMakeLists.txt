@@ -3,8 +3,9 @@ project(illuminatemath
   VERSION 1.0
   DESCRIPTION "math library for graphics"
   LANGUAGES CXX
-)
-add_subdirectory("../core" "${CMAKE_CURRENT_BINARY_DIR}/core")
+  )
+# Currently, this project (illuminatemath) is header only library.
+# This cmake file is used only for test purposes so far.
 
 if (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
   if (NOT DEFINED BUILD_WITH_TEST)
@@ -27,9 +28,10 @@ if ("${CMAKE_VS_PLATFORM_TOOLSET}" STREQUAL "ClangCL")
 endif()
 if (BUILD_WITH_TEST)
   target_compile_definitions(illuminatemath PRIVATE BUILD_WITH_TEST)
+  add_subdirectory("../core" "${CMAKE_CURRENT_BINARY_DIR}/core")
+  target_link_libraries(illuminatemath PUBLIC illuminatecore)
 else()
   target_compile_definitions(illuminatemath PRIVATE DOCTEST_CONFIG_DISABLE)
 endif()
 
-target_link_libraries(illuminatemath PUBLIC illuminatecore)
 target_include_directories(illuminatemath PRIVATE ".")
