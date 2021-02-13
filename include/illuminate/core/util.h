@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <iterator>
 #include <unordered_set>
-namespace illuminate {
+namespace illuminate::core {
 enum class EnableDisable : uint8_t { kEnabled = 0, kDisabled };
 constexpr bool IsEnabled(const EnableDisable e) { return e == EnableDisable::kEnabled; }
 template <typename T, typename U>

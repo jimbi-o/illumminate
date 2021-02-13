@@ -1,5 +1,5 @@
-#include "illuminate.h"
-namespace illuminate {
+#include "illuminate/illuminate.h"
+namespace illuminate::core {
 void ConnectAdjacencyNodes(const StrId& node_name, const std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>& adjacency_graph, std::pmr::unordered_set<StrId>* dst, std::pmr::unordered_set<StrId>* work) {
   work->insert(node_name);
   while (!work->empty()) {

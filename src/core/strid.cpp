@@ -1,4 +1,4 @@
-#include "illuminate.h"
+#include "illuminate/illuminate.h"
 #ifdef ENABLE_STRID_DEBUG_STR
 namespace illuminate::core {
 char StrId::debug_buffer[1024]{};
@@ -7,7 +7,6 @@ uint32_t StrId::debug_buffer_index{};
 #endif
 #include <unordered_map>
 #include <unordered_set>
-#include "minimal_for_cpp.h"
 #include "doctest/doctest.h"
 TEST_CASE("strid") {
   using namespace illuminate;

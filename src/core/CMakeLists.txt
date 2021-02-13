@@ -9,14 +9,14 @@ include(FetchContent)
 FetchContent_Declare(
   doctest
   GIT_REPOSITORY https://github.com/onqtam/doctest.git
-  GIT_TAG        d5aa2bfb8f00b6260296a754af3a3a98d93f7b67
+  GIT_TAG        f0ab4e793fa863d4a5929ff263ddd3bebec8767e
   GIT_SHALLOW    OFF
 )
 FetchContent_MakeAvailable(doctest)
 FetchContent_Declare(
   spdlog
   GIT_REPOSITORY https://github.com/gabime/spdlog.git
-  GIT_TAG        39150eb8c7673f37d740d957acfcbff8c48ef9a6
+  GIT_TAG        8fbc853b0dde6ba5f739cdacd0f3b538876f5695
   GIT_SHALLOW    OFF
 )
 FetchContent_MakeAvailable(spdlog)
@@ -34,25 +34,21 @@ else()
 endif()
 
 target_compile_features(illuminatecore PUBLIC cxx_std_20)
-if (NOT MSVC)
-  target_compile_options(illuminatecore PRIVATE "-msse4.2")
-endif()
 if (BUILD_WITH_TEST)
   target_compile_definitions(illuminatecore PRIVATE BUILD_WITH_TEST)
 else()
   target_compile_definitions(illuminatecore PRIVATE DOCTEST_CONFIG_DISABLE)
 endif()
 
+target_link_libraries(illuminatecore PUBLIC spdlog::spdlog)
+
 target_include_directories(illuminatecore
   PUBLIC
   "../../include"
-  PRIVATE
-  "."
-  "../"
-  "../../include/illuminate"
-  "../../include/illuminate/core"
   "${doctest_SOURCE_DIR}"
   "${spdlog_SOURCE_DIR}/include"
+  PRIVATE
+  "."
 )
 
 target_sources(illuminatecore PRIVATE

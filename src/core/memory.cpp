@@ -1,4 +1,4 @@
-#include "illuminate.h"
+#include "illuminate/illuminate.h"
 #include <memory>
 #include <vector>
 #include "doctest/doctest.h"
