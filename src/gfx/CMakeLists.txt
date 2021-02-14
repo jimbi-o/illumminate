@@ -17,7 +17,9 @@ else()
   add_library(illuminategfx)
 endif()
 
-add_subdirectory("../core" "${CMAKE_CURRENT_BINARY_DIR}/core")
+if (NOT TARGET illuminatecore)
+  add_subdirectory("../core" "${CMAKE_CURRENT_BINARY_DIR}/core")
+endif()
 
 target_compile_features(illuminategfx PUBLIC cxx_std_20)
 if (BUILD_WITH_TEST)
@@ -27,8 +29,6 @@ else()
 endif()
 
 target_link_libraries(illuminategfx PUBLIC illuminatecore)
-
-target_include_directories(illuminategfx PRIVATE ".")
 
 target_sources(illuminategfx PRIVATE
   "render_graph.cpp"

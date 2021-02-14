@@ -32,5 +32,3 @@ if (BUILD_WITH_TEST)
 else()
   target_compile_definitions(illuminatemath PRIVATE DOCTEST_CONFIG_DISABLE)
 endif()
-
-target_include_directories(illuminatemath PRIVATE ".")

@@ -6,6 +6,7 @@
 #include <dxgi1_6.h>
 #include <d3d12.h>
 #include "gfx_def.h"
+#include "illuminate/illuminate.h"
 namespace illuminate::gfx::d3d12 {
 using DxgiFactory = IDXGIFactory7;
 using DxgiAdapter = IDXGIAdapter4;

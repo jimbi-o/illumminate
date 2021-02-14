@@ -47,7 +47,7 @@ using CreateRenderGraphFunc = std::function<RenderGraphConfigD3d12()>;
 #include "d3d12_command_allocator.h"
 #include "d3d12_command_list.h"
 #include "d3d12_command_queue.h"
-#include "gfx/win32/win32_window.h"
+#include "illuminate/gfx/win32/win32_window.h"
 #include "d3d12_swapchain.h"
 #ifdef __clang__
 #pragma clang diagnostic push

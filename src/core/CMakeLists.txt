@@ -40,6 +40,8 @@ endif()
 target_compile_features(illuminatecore PUBLIC cxx_std_20)
 if (WIN32)
   target_compile_options(illuminatecore PUBLIC "/arch:AVX2")
+  target_compile_definitions(spdlog PUBLIC SPDLOG_WCHAR_TO_UTF8_SUPPORT)
+  target_compile_definitions(illuminatecore PUBLIC NOMINMAX)
 else()
   target_compile_options(illuminatecore PUBLIC -msse4.2)
 endif()
@@ -55,9 +57,8 @@ target_include_directories(illuminatecore
   PUBLIC
   "../../include"
   "${doctest_SOURCE_DIR}"
-  "${spdlog_SOURCE_DIR}/include"
   PRIVATE
-  "."
+  "${spdlog_SOURCE_DIR}/include"
 )
 
 target_sources(illuminatecore PRIVATE

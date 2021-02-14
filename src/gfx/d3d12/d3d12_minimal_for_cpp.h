@@ -1,4 +1,3 @@
-#include "minimal_for_cpp.h"
 #include <sstream>
 #include "d3d12_util.h"
 #define CALL(function) reinterpret_cast<decltype(&function)>(GetProcAddress(library_, #function))

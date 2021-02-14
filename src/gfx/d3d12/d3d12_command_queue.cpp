@@ -1,6 +1,6 @@
 #include "d3d12_command_queue.h"
 #include <limits>
-#include "gfx/win32/win32_handle.h"
+#include "illuminate/gfx/win32/win32_handle.h"
 #include "d3d12_minimal_for_cpp.h"
 namespace illuminate::gfx::d3d12 {
 bool CommandQueue::Init(D3d12Device* const device) {

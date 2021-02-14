@@ -8,8 +8,8 @@
 #include "d3d12_shader_compiler.h"
 #include "d3d12_shader_visible_descriptor_heap.h"
 #include "d3d12_swapchain.h"
-#include "gfx/win32/win32_window.h"
-#include "gfx/render_graph.h"
+#include "illuminate/gfx/win32/win32_window.h"
+#include "render_graph.h"
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Weverything"

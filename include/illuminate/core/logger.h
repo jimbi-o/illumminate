@@ -1,8 +1,5 @@
 #ifndef ILLUMINATE_CORE_LOGGER_H
 #define ILLUMINATE_CORE_LOGGER_H
-#ifdef _WIN32
-#define SPDLOG_WCHAR_TO_UTF8_SUPPORT
-#endif
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Weverything"

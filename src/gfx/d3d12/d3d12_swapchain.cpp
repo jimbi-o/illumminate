@@ -124,7 +124,7 @@ bool Swapchain::Present() {
 #include "d3d12_dxgi_core.h"
 #include "d3d12_device.h"
 #include "d3d12_command_queue.h"
-#include "gfx/win32/win32_window.h"
+#include "illuminate/gfx/win32/win32_window.h"
 TEST_CASE("swapchain") {
   const uint32_t swapchain_buffer_num = 3;
   using namespace illuminate::gfx::d3d12;
