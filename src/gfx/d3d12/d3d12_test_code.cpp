@@ -950,3 +950,4 @@ TEST_CASE("d3d12/render") {
           memory_resource_tmp_max_used_bytes, memory_resource_tmp->GetBufferSizeInByte(), static_cast<float>(memory_resource_tmp_max_used_bytes) / memory_resource_tmp->GetBufferSizeInByte() * 100.0f,
           memory_resource_double_buffered_max_used_bytes, memory_resource_double_buffered->GetBufferSizeInByte(), static_cast<float>(memory_resource_double_buffered_max_used_bytes) / memory_resource_double_buffered->GetBufferSizeInByte() * 100.0f);
 }
+// TODO uav barrier
