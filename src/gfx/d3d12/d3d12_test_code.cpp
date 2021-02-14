@@ -616,6 +616,53 @@ PassBarrierInfoSet MergeBarriers(PassBarrierInfoSet&& a, PassBarrierInfoSet&& b)
   }
   return a;
 }
+std::tuple<ID3D12RootSignature*, ID3D12PipelineState*> CreateVsPsPipelineStateObject(LPCWSTR vs, LPCWSTR ps, DXGI_FORMAT dxgi_format, illuminate::core::EnableDisable enable_depth_stencil, D3d12Device* device, ShaderCompiler* shader_compiler, std::pmr::memory_resource* memory_resource) {
+  auto shader_result_vs = shader_compiler->Compile(vs, ShaderType::kVs, memory_resource);
+  auto shader_result_ps = shader_compiler->Compile(ps, ShaderType::kPs, memory_resource);
+  auto root_signature_blob = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_ps, DXC_OUT_ROOT_SIGNATURE);
+  ID3D12RootSignature* root_signature = nullptr;
+  auto hr = device->CreateRootSignature(0, root_signature_blob->GetBufferPointer(), root_signature_blob->GetBufferSize(), IID_PPV_ARGS(&root_signature));
+  if (FAILED(hr)) {
+    root_signature_blob->Release();
+    shader_result_ps->Release();
+    shader_result_vs->Release();
+    return {};
+  }
+  auto shader_object_vs = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_vs, DXC_OUT_OBJECT);
+  auto shader_object_ps = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_ps, DXC_OUT_OBJECT);
+  struct {
+    CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE root_signature;
+    CD3DX12_PIPELINE_STATE_STREAM_VS vs;
+    CD3DX12_PIPELINE_STATE_STREAM_PS ps;
+    CD3DX12_PIPELINE_STATE_STREAM_RENDER_TARGET_FORMATS render_target_formats;
+    CD3DX12_PIPELINE_STATE_STREAM_PRIMITIVE_TOPOLOGY topology;
+    CD3DX12_PIPELINE_STATE_STREAM_DEPTH_STENCIL depth_stencil;
+  } desc_local {
+    root_signature,
+    D3D12_SHADER_BYTECODE{shader_object_vs->GetBufferPointer(), shader_object_vs->GetBufferSize()},
+    D3D12_SHADER_BYTECODE{shader_object_ps->GetBufferPointer(), shader_object_ps->GetBufferSize()},
+    {{{dxgi_format}, 1}},
+    D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+  };
+  if (enable_depth_stencil == illuminate::core::EnableDisable::kDisabled) {
+    ((CD3DX12_DEPTH_STENCIL_DESC&)(desc_local.depth_stencil)).DepthEnable = false;
+  }
+  D3D12_PIPELINE_STATE_STREAM_DESC desc{sizeof(desc_local), &desc_local};
+  ID3D12PipelineState* pipeline_state = nullptr;
+  hr = device->CreatePipelineState(&desc, IID_PPV_ARGS(&pipeline_state));
+  if (FAILED(hr)) {
+    pipeline_state->Release();
+    pipeline_state = nullptr;
+    root_signature->Release();
+    root_signature = nullptr;
+  }
+  shader_object_ps->Release();
+  shader_object_vs->Release();
+  root_signature_blob->Release();
+  shader_result_ps->Release();
+  shader_result_vs->Release();
+  return {root_signature, pipeline_state};
+}
 }
 TEST_CASE("d3d12/render") {
   using namespace illuminate;
@@ -694,47 +741,9 @@ TEST_CASE("d3d12/render") {
           memory_resource.get()
         }
                                           ));
-    ID3D12RootSignature* copy_root_signature = nullptr;
-    ID3D12PipelineState* copy_pipeline_state = nullptr;
-    {
-      auto memory_resource_tmp = std::make_shared<PmrLinearAllocator>(buffer_tmp, buffer_tmp_size_in_bytes);
-      auto shader_result_vs = shader_compiler.Compile(L"shader/test/fullscreen-triangle.vs.hlsl", ShaderType::kVs, memory_resource_tmp.get());
-      CHECK(shader_result_vs);
-      auto shader_result_ps = shader_compiler.Compile(L"shader/test/copysrv.ps.hlsl", ShaderType::kPs, memory_resource_tmp.get());
-      CHECK(shader_result_ps);
-      auto root_signature_blob = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_ps, DXC_OUT_ROOT_SIGNATURE);
-      CHECK(root_signature_blob);
-      auto hr = device.Get()->CreateRootSignature(0, root_signature_blob->GetBufferPointer(), root_signature_blob->GetBufferSize(), IID_PPV_ARGS(&copy_root_signature));
-      CHECK(SUCCEEDED(hr));
-      CHECK(copy_root_signature);
-      auto shader_object_vs = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_vs, DXC_OUT_OBJECT);
-      CHECK(shader_object_vs);
-      auto shader_object_ps = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_ps, DXC_OUT_OBJECT);
-      CHECK(shader_object_ps);
-      struct {
-        CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE root_signature;
-        CD3DX12_PIPELINE_STATE_STREAM_VS vs;
-        CD3DX12_PIPELINE_STATE_STREAM_PS ps;
-        CD3DX12_PIPELINE_STATE_STREAM_RENDER_TARGET_FORMATS render_target_formats;
-        CD3DX12_PIPELINE_STATE_STREAM_PRIMITIVE_TOPOLOGY topology;
-        CD3DX12_PIPELINE_STATE_STREAM_DEPTH_STENCIL depth_stencil;
-      } desc_local {
-        copy_root_signature,
-        D3D12_SHADER_BYTECODE{shader_object_vs->GetBufferPointer(), shader_object_vs->GetBufferSize()},
-        D3D12_SHADER_BYTECODE{shader_object_ps->GetBufferPointer(), shader_object_ps->GetBufferSize()},
-        {{{swapchain.GetDxgiFormat()}, 1}},
-        D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-      };
-      ((CD3DX12_DEPTH_STENCIL_DESC&)(desc_local.depth_stencil)).DepthEnable = false;
-      D3D12_PIPELINE_STATE_STREAM_DESC desc{sizeof(desc_local), &desc_local};
-      hr = device.Get()->CreatePipelineState(&desc, IID_PPV_ARGS(&copy_pipeline_state));
-      CHECK(SUCCEEDED(hr));
-      CHECK(copy_pipeline_state);
-      shader_object_ps->Release();
-      shader_object_vs->Release();
-      shader_result_ps->Release();
-      shader_result_vs->Release();
-    }
+    auto [copy_root_signature, copy_pipeline_state] = CreateVsPsPipelineStateObject(L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/copysrv.ps.hlsl", swapchain.GetDxgiFormat(), illuminate::core::EnableDisable::kDisabled, device.Get(), &shader_compiler, std::make_shared<PmrLinearAllocator>(buffer_tmp, buffer_tmp_size_in_bytes).get());
+    CHECK(copy_root_signature);
+    CHECK(copy_pipeline_state);
     render_functions.insert({StrId("mainpass"), [](D3d12CommandList* const command_list, const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, ID3D12Resource** resource){
       const UINT clear_color[4]{255,255,0,255};
       command_list->ClearUnorderedAccessViewUint(gpu_handle, cpu_handle[0], resource[0], clear_color, 0, nullptr);
