@@ -663,6 +663,38 @@ std::tuple<ID3D12RootSignature*, ID3D12PipelineState*> CreateVsPsPipelineStateOb
   shader_result_vs->Release();
   return {root_signature, pipeline_state};
 }
+std::tuple<ID3D12RootSignature*, ID3D12PipelineState*> CreateCsPipelineStateObject(LPCWSTR cs, D3d12Device* device, ShaderCompiler* shader_compiler, std::pmr::memory_resource* memory_resource) {
+  auto shader_result_cs = shader_compiler->Compile(cs, ShaderType::kCs, memory_resource);
+  auto root_signature_blob = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_cs, DXC_OUT_ROOT_SIGNATURE);
+  ID3D12RootSignature* root_signature = nullptr;
+  auto hr = device->CreateRootSignature(0, root_signature_blob->GetBufferPointer(), root_signature_blob->GetBufferSize(), IID_PPV_ARGS(&root_signature));
+  if (FAILED(hr)) {
+    root_signature_blob->Release();
+    shader_result_cs->Release();
+    return {};
+  }
+  auto shader_object_cs = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_cs, DXC_OUT_OBJECT);
+  struct {
+    CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE root_signature;
+    CD3DX12_PIPELINE_STATE_STREAM_CS cs;
+  } desc_local {
+    root_signature,
+    D3D12_SHADER_BYTECODE{shader_object_cs->GetBufferPointer(), shader_object_cs->GetBufferSize()},
+  };
+  D3D12_PIPELINE_STATE_STREAM_DESC desc{sizeof(desc_local), &desc_local};
+  ID3D12PipelineState* pipeline_state = nullptr;
+  hr = device->CreatePipelineState(&desc, IID_PPV_ARGS(&pipeline_state));
+  if (FAILED(hr)) {
+    pipeline_state->Release();
+    pipeline_state = nullptr;
+    root_signature->Release();
+    root_signature = nullptr;
+  }
+  shader_object_cs->Release();
+  root_signature_blob->Release();
+  shader_result_cs->Release();
+  return {root_signature, pipeline_state};
+}
 }
 TEST_CASE("d3d12/render") {
   using namespace illuminate;
@@ -741,13 +773,13 @@ TEST_CASE("d3d12/render") {
           memory_resource.get()
         }
                                           ));
-    auto [copy_root_signature, copy_pipeline_state] = CreateVsPsPipelineStateObject(L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/copysrv.ps.hlsl", swapchain.GetDxgiFormat(), illuminate::core::EnableDisable::kDisabled, device.Get(), &shader_compiler, std::make_shared<PmrLinearAllocator>(buffer_tmp, buffer_tmp_size_in_bytes).get());
-    CHECK(copy_root_signature);
-    CHECK(copy_pipeline_state);
     render_functions.insert({StrId("mainpass"), [](D3d12CommandList* const command_list, const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, ID3D12Resource** resource){
       const UINT clear_color[4]{255,255,0,255};
       command_list->ClearUnorderedAccessViewUint(gpu_handle, cpu_handle[0], resource[0], clear_color, 0, nullptr);
     }});
+    auto [copy_root_signature, copy_pipeline_state] = CreateVsPsPipelineStateObject(L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/copysrv.ps.hlsl", swapchain.GetDxgiFormat(), illuminate::core::EnableDisable::kDisabled, device.Get(), &shader_compiler, std::make_shared<PmrLinearAllocator>(buffer_tmp, buffer_tmp_size_in_bytes).get());
+    CHECK(copy_root_signature);
+    CHECK(copy_pipeline_state);
     render_functions.insert({StrId("copy"), [copy_root_signature, copy_pipeline_state, width = swapchain_size.width, height = swapchain_size.height](D3d12CommandList* const command_list, const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, [[maybe_unused]]ID3D12Resource** resource){
       command_list->SetGraphicsRootSignature(copy_root_signature);
       D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), D3D12_MIN_DEPTH, D3D12_MAX_DEPTH};
@@ -757,7 +789,6 @@ TEST_CASE("d3d12/render") {
       command_list->SetPipelineState(copy_pipeline_state);
       command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
       command_list->SetGraphicsRootDescriptorTable(0, gpu_handle);
-      const FLOAT clear_color[4] = {0.0f,1.0f,1.0f,1.0f};
       command_list->OMSetRenderTargets(1, cpu_handle, true, nullptr);
       command_list->DrawInstanced(3, 1, 0, 0);
     }});
@@ -766,10 +797,55 @@ TEST_CASE("d3d12/render") {
       copy_pipeline_state->Release();
     };
   }
+  SUBCASE("fill uav with shader@compute queue and copy to swapchain buffer") {
+    render_pass_list.push_back(RenderPass(
+        StrId("mainpass"),
+        {
+          {
+            BufferConfig(StrId("mainbuffer"), BufferStateType::kUav),
+          },
+          memory_resource.get()
+        }
+                                          ).CommandQueueTypeCompute());
+    render_pass_list.push_back(RenderPass(
+        StrId("copy"),
+        {
+          {
+            BufferConfig(StrId("mainbuffer"), BufferStateType::kSrvPsOnly),
+            BufferConfig(StrId("swapchain"), BufferStateType::kRtv),
+          },
+          memory_resource.get()
+        }
+                                          ));
+    auto [mainpass_root_signature, mainpass_pipeline_state] = CreateCsPipelineStateObject(L"shader/test/fill-screen.cs.hlsl", device.Get(), &shader_compiler, std::make_shared<PmrLinearAllocator>(buffer_tmp, buffer_tmp_size_in_bytes).get());
+    render_functions.insert({StrId("mainpass"), [mainpass_root_signature, mainpass_pipeline_state, width = mainbuffer_size.width, height = mainbuffer_size.height](D3d12CommandList* const command_list, const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, [[maybe_unused]]const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, [[maybe_unused]]ID3D12Resource** resource){
+      command_list->SetComputeRootSignature(mainpass_root_signature);
+      command_list->SetPipelineState(mainpass_pipeline_state);
+      command_list->SetComputeRootDescriptorTable(0, gpu_handle);
+      command_list->Dispatch(width, height, 1);
+    }});
+    auto [copy_root_signature, copy_pipeline_state] = CreateVsPsPipelineStateObject(L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/copysrv.ps.hlsl", swapchain.GetDxgiFormat(), illuminate::core::EnableDisable::kDisabled, device.Get(), &shader_compiler, std::make_shared<PmrLinearAllocator>(buffer_tmp, buffer_tmp_size_in_bytes).get());
+    render_functions.insert({StrId("copy"), [copy_root_signature, copy_pipeline_state, width = swapchain_size.width, height = swapchain_size.height](D3d12CommandList* const command_list, const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, [[maybe_unused]]ID3D12Resource** resource){
+      command_list->SetGraphicsRootSignature(copy_root_signature);
+      D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), D3D12_MIN_DEPTH, D3D12_MAX_DEPTH};
+      command_list->RSSetViewports(1, &viewport);
+      D3D12_RECT scissor_rect{0L, 0L, static_cast<LONG>(width), static_cast<LONG>(height)};
+      command_list->RSSetScissorRects(1, &scissor_rect);
+      command_list->SetPipelineState(copy_pipeline_state);
+      command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+      command_list->SetGraphicsRootDescriptorTable(0, gpu_handle);
+      command_list->OMSetRenderTargets(1, cpu_handle, true, nullptr);
+      command_list->DrawInstanced(3, 1, 0, 0);
+    }});
+    term_func = [mainpass_root_signature, mainpass_pipeline_state, copy_root_signature, copy_pipeline_state]() {
+      mainpass_root_signature->Release();
+      mainpass_pipeline_state->Release();
+      copy_root_signature->Release();
+      copy_pipeline_state->Release();
+    };
+  }
 #if 0
   // TODO
-  SUBCASE("fill uav with shader@compute queue and copy to swapchain buffer") {
-  }
   SUBCASE("clear + draw triangle to swapchain w/dsv") {
   }
   SUBCASE("clear + draw moving triangle to swapchain w/dsv") {
@@ -779,6 +855,8 @@ TEST_CASE("d3d12/render") {
   SUBCASE("transfer texture from cpu and use@graphics queue") {
   }
   SUBCASE("imgui") {
+  }
+  SUBCASE("dynamic resolution") {
   }
 #endif
   auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
@@ -826,7 +904,7 @@ TEST_CASE("d3d12/render") {
                                   &shader_visible_descriptor_heap,
                                   memory_resource.get()); // TODO refactor
   }
-  const uint32_t kFrameNumToTest = 100;
+  const uint32_t kFrameNumToTest = 25;
   std::pmr::unordered_map<CommandQueueType, uint64_t> pass_signal_val{memory_resource.get()};
   std::pmr::vector<std::unordered_map<CommandQueueType, uint64_t>> frame_wait_signal{memory_resource.get()};
   frame_wait_signal.resize(buffer_num);
