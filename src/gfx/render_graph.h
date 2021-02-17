@@ -115,6 +115,7 @@ class RenderPass {
   constexpr RenderPass& CommandQueueTypeTransfer() { command_queue_type = CommandQueueType::kTransfer; return *this; }
   constexpr RenderPass& Mandatory(const bool b = true) { mandatory_pass = b; return *this; }
   constexpr RenderPass& AsyncComputeGroup(StrId&& group_name) { async_compute_group = std::move(group_name); return EnableAsyncCompute(); }
+  constexpr RenderPass& AsyncComputeGroup(const StrId& group_name) { async_compute_group = group_name; return EnableAsyncCompute(); }
   constexpr RenderPass& EnableAsyncCompute() { async_compute_enabled = AsyncComputeEnabled::kEnabled; return *this; }
   StrId name;
   BufferConfigList buffer_list;
@@ -229,10 +230,10 @@ std::tuple<std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>, std::pmr:
 std::pmr::unordered_map<BufferId, uint32_t> GetPhysicalBufferAddressOffset(const RenderPassOrder& render_pass_order, const std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>& physical_buffer_lifetime_begin_pass, const std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>& physical_buffer_lifetime_end_pass, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_size_in_byte, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, std::pmr::memory_resource* memory_resource);
 using BatchInfoList = std::pmr::vector<std::pmr::vector<StrId>>;
 enum class AsyncComputeBatchPairType : uint8_t { kCurrentFrame = 0, kPairComputeWithNextFrameGraphics, };
-using AsyncComputePairInfo = std::pmr::unordered_map<StrId, AsyncComputeBatchPairType>;
+using AsyncComputePairInfo = std::pmr::unordered_map<StrId/*groupname*/, AsyncComputeBatchPairType>;
 std::tuple<BatchInfoList, RenderPassOrder> ConfigureAsyncComputeBatching(const RenderPassIdMap& render_pass_id_map, RenderPassOrder&& current_render_pass_order, RenderPassOrder&& prev_render_pass_order, const AsyncComputePairInfo& async_group_info, std::pmr::memory_resource* memory_resource);
 using PassSignalInfo = std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>;
-PassSignalInfo ConfigureBufferResourceDependency(const RenderPassIdMap& render_pass_id_map, const BatchInfoList& src_batch, const ConsumerProducerRenderPassMap& consumer_producer_render_pass_map, std::pmr::memory_resource* memory_resource);
+PassSignalInfo ConfigureBufferResourceDependency(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const ConsumerProducerRenderPassMap& consumer_producer_render_pass_map, std::pmr::memory_resource* memory_resource);
 // barrier
 using BufferStateList = std::pmr::unordered_map<uint32_t, BufferStateFlags>;
 enum class BarrierSplitType : uint8_t { kNone = 0, kBegin, kEnd, };

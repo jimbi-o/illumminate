@@ -328,38 +328,32 @@ std::tuple<BatchInfoList, RenderPassOrder> ConfigureAsyncComputeBatching(const R
   }
   return {batch_info, render_pass_unprocessed};
 }
-PassSignalInfo ConfigureBufferResourceDependency(const RenderPassIdMap& render_pass_id_map, const BatchInfoList& src_batch, const ConsumerProducerRenderPassMap& consumer_producer_render_pass_map, std::pmr::memory_resource* memory_resource) {
+PassSignalInfo ConfigureBufferResourceDependency(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const ConsumerProducerRenderPassMap& consumer_producer_render_pass_map, std::pmr::memory_resource* memory_resource) {
   PassSignalInfo pass_signal_info{memory_resource};
   std::pmr::unordered_map<StrId, uint32_t> producer_pass_signal_list{memory_resource};
   std::pmr::unordered_set<StrId> signal_consumed_producers{memory_resource};
   std::pmr::unordered_map<CommandQueueType, uint64_t> next_signal_val{memory_resource};
   std::pmr::unordered_map<CommandQueueType, std::pmr::unordered_map<CommandQueueType, uint64_t>> max_waiting_signal_val{memory_resource};
-  for (auto& batch : src_batch) {
-    for (auto& consumer_pass_name : batch) {
-      auto consumer_command_queue_type = render_pass_id_map.at(consumer_pass_name).command_queue_type;
-      if (!next_signal_val.contains(consumer_command_queue_type)) {
-        next_signal_val.insert({consumer_command_queue_type, 1});
+  for (auto& consumer_pass_name : render_pass_order) {
+    auto consumer_command_queue_type = render_pass_id_map.at(consumer_pass_name).command_queue_type;
+    producer_pass_signal_list.insert({consumer_pass_name, ++next_signal_val[consumer_command_queue_type]});
+    if (!consumer_producer_render_pass_map.contains(consumer_pass_name)) continue;
+    for (auto& producer_pass_name : consumer_producer_render_pass_map.at(consumer_pass_name)) {
+      if (!producer_pass_signal_list.contains(producer_pass_name)) continue;
+      auto producer_command_queue_type = render_pass_id_map.at(producer_pass_name).command_queue_type;
+      if (producer_command_queue_type == consumer_command_queue_type) continue;
+      if (max_waiting_signal_val.contains(consumer_command_queue_type)
+          && max_waiting_signal_val.at(consumer_command_queue_type).contains(producer_command_queue_type)
+          && producer_pass_signal_list.at(producer_pass_name) <= max_waiting_signal_val.at(consumer_command_queue_type).at(producer_command_queue_type)) continue;
+      if (!max_waiting_signal_val.contains(consumer_command_queue_type)) {
+        max_waiting_signal_val.insert({consumer_command_queue_type, std::pmr::unordered_map<CommandQueueType, uint64_t>{memory_resource}});
       }
-      producer_pass_signal_list.insert({consumer_pass_name, next_signal_val.at(consumer_command_queue_type)});
-      next_signal_val[consumer_command_queue_type]++;
-      if (!consumer_producer_render_pass_map.contains(consumer_pass_name)) continue;
-      for (auto& producer_pass_name : consumer_producer_render_pass_map.at(consumer_pass_name)) {
-        if (!producer_pass_signal_list.contains(producer_pass_name)) continue;
-        auto producer_command_queue_type = render_pass_id_map.at(producer_pass_name).command_queue_type;
-        if (producer_command_queue_type == consumer_command_queue_type) continue;
-        if (max_waiting_signal_val.contains(consumer_command_queue_type)
-            && max_waiting_signal_val.at(consumer_command_queue_type).contains(producer_command_queue_type)
-            && producer_pass_signal_list.at(producer_pass_name) <= max_waiting_signal_val.at(consumer_command_queue_type).at(producer_command_queue_type)) continue;
-        if (!max_waiting_signal_val.contains(consumer_command_queue_type)) {
-          max_waiting_signal_val.insert({consumer_command_queue_type, std::pmr::unordered_map<CommandQueueType, uint64_t>{memory_resource}});
-        }
-        max_waiting_signal_val.at(consumer_command_queue_type)[producer_command_queue_type] = producer_pass_signal_list.at(producer_pass_name);
-        signal_consumed_producers.insert(producer_pass_name);
-        if (!pass_signal_info.contains(producer_pass_name)) {
-          pass_signal_info.insert({producer_pass_name, std::pmr::unordered_set<StrId>{memory_resource}});
-        }
-        pass_signal_info.at(producer_pass_name).insert(consumer_pass_name);
+      max_waiting_signal_val.at(consumer_command_queue_type)[producer_command_queue_type] = producer_pass_signal_list.at(producer_pass_name);
+      signal_consumed_producers.insert(producer_pass_name);
+      if (!pass_signal_info.contains(producer_pass_name)) {
+        pass_signal_info.insert({producer_pass_name, std::pmr::unordered_set<StrId>{memory_resource}});
       }
+      pass_signal_info.at(producer_pass_name).insert(consumer_pass_name);
     }
   }
   return pass_signal_info;
@@ -391,6 +385,7 @@ PassSignalInfo ConvertBatchToSignalInfo(const BatchInfoList& batch_info_list, co
   return pass_signal_wait_info;
 }
 PassSignalInfo MergePassSignalInfo(PassSignalInfo&& a, PassSignalInfo&& b) {
+  // TODO check redundant signals
   auto&& dst = std::move(a);
   while (!b.empty()) {
     dst[b.begin()->first].insert(std::make_move_iterator(b.begin()->second.begin()), std::make_move_iterator(b.begin()->second.end()));
@@ -2013,7 +2008,7 @@ TEST_CASE("ConfigureResourceDependencyBatching") {
   consumer_producer_render_pass_map.at(StrId("F")).insert(StrId("C"));
   consumer_producer_render_pass_map.insert({StrId("G"), std::pmr::unordered_set<StrId>{}});
   consumer_producer_render_pass_map.at(StrId("G")).insert(StrId("C"));
-  auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, async_compute_batching, consumer_producer_render_pass_map, memory_resource.get());
+  auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, ConvertBatchInfoBackToRenderPassOrder(std::move(async_compute_batching), memory_resource.get()), consumer_producer_render_pass_map, memory_resource.get());
   CHECK(pass_signal_info.size() == 2);
   CHECK(pass_signal_info.contains(StrId("A")));
   CHECK(pass_signal_info.at(StrId("A")).size() == 1);
@@ -2083,7 +2078,7 @@ TEST_CASE("AsyncComputeInterFrame") {
   CHECK(render_pass_unprocessed[1] == StrId("deferredshadow-pcss"));
   CHECK(render_pass_unprocessed[2] == StrId("lighting"));
   CHECK(render_pass_unprocessed[3] == StrId("postprocess"));
-  auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, async_compute_batching, consumer_producer_render_pass_map, memory_resource.get());
+  auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, ConvertBatchInfoBackToRenderPassOrder(std::move(async_compute_batching), memory_resource.get()), consumer_producer_render_pass_map, memory_resource.get());
   render_pass_list = CreateRenderPassListAsyncComputeInterFrame(memory_resource.get());
   std::tie(render_pass_id_map, render_pass_order) = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
   std::tie(async_compute_batching, render_pass_unprocessed) = ConfigureAsyncComputeBatching(render_pass_id_map, std::move(render_pass_order), std::move(render_pass_unprocessed), async_group_info, memory_resource.get());
@@ -2101,7 +2096,7 @@ TEST_CASE("AsyncComputeInterFrame") {
   CHECK(render_pass_unprocessed[1] == StrId("deferredshadow-pcss"));
   CHECK(render_pass_unprocessed[2] == StrId("lighting"));
   CHECK(render_pass_unprocessed[3] == StrId("postprocess"));
-  pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, async_compute_batching, consumer_producer_render_pass_map, memory_resource.get());
+  pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, ConvertBatchInfoBackToRenderPassOrder(std::move(async_compute_batching), memory_resource.get()), consumer_producer_render_pass_map, memory_resource.get());
   std::tie(async_compute_batching, render_pass_unprocessed) = ConfigureAsyncComputeBatching(render_pass_id_map, {}, std::move(render_pass_unprocessed), async_group_info, memory_resource.get());
   CHECK(async_compute_batching.size() == 1);
   CHECK(async_compute_batching[0].size() == 4);
@@ -2110,7 +2105,7 @@ TEST_CASE("AsyncComputeInterFrame") {
   CHECK(async_compute_batching[0][2] == StrId("lighting"));
   CHECK(async_compute_batching[0][3] == StrId("postprocess"));
   CHECK(render_pass_unprocessed.empty());
-  pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, async_compute_batching, consumer_producer_render_pass_map, memory_resource.get());
+  pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, ConvertBatchInfoBackToRenderPassOrder(std::move(async_compute_batching), memory_resource.get()), consumer_producer_render_pass_map, memory_resource.get());
 }
 TEST_CASE("CountSetBitNum") {
   using namespace illuminate::core;
@@ -3204,12 +3199,12 @@ TEST_CASE("barrier") {
     auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, batch_info_list.back(), buffer_id_list, memory_resource.get());
     auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
-    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, batch_info_list, consumer_producer_render_pass_map, memory_resource.get());
+    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
+    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, render_pass_order, consumer_producer_render_pass_map, memory_resource.get());
     CHECK(pass_signal_info.size() == 1);
     CHECK(pass_signal_info.contains(StrId("A")));
     CHECK(pass_signal_info.at(StrId("A")).size() == 1);
     CHECK(pass_signal_info.at(StrId("A")).contains(StrId("B")));
-    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagUav});
     auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
@@ -3235,12 +3230,12 @@ TEST_CASE("barrier") {
     auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, batch_info_list.back(), buffer_id_list, memory_resource.get());
     auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
-    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, batch_info_list, consumer_producer_render_pass_map, memory_resource.get());
+    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
+    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, render_pass_order, consumer_producer_render_pass_map, memory_resource.get());
     CHECK(pass_signal_info.size() == 1);
     CHECK(pass_signal_info.contains(StrId("A")));
     CHECK(pass_signal_info.at(StrId("A")).size() == 1);
     CHECK(pass_signal_info.at(StrId("A")).contains(StrId("B")));
-    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagUav});
     auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
@@ -3271,12 +3266,12 @@ TEST_CASE("barrier") {
     auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, batch_info_list.back(), buffer_id_list, memory_resource.get());
     auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
-    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, batch_info_list, consumer_producer_render_pass_map, memory_resource.get());
+    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
+    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, render_pass_order, consumer_producer_render_pass_map, memory_resource.get());
     CHECK(pass_signal_info.size() == 1);
     CHECK(pass_signal_info.contains(StrId("A")));
     CHECK(pass_signal_info.at(StrId("A")).size() == 1);
     CHECK(pass_signal_info.at(StrId("A")).contains(StrId("C")));
-    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagUav});
     buffer_state_before_render_pass_list.insert({1, kBufferStateFlagRtv});
@@ -3307,12 +3302,12 @@ TEST_CASE("barrier") {
     auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, batch_info_list.back(), buffer_id_list, memory_resource.get());
     auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
-    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, batch_info_list, consumer_producer_render_pass_map, memory_resource.get());
+    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
+    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, render_pass_order, consumer_producer_render_pass_map, memory_resource.get());
     CHECK(pass_signal_info.size() == 1);
     CHECK(pass_signal_info.contains(StrId("A")));
     CHECK(pass_signal_info.at(StrId("A")).size() == 1);
     CHECK(pass_signal_info.at(StrId("A")).contains(StrId("C")));
-    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagUav});
     buffer_state_before_render_pass_list.insert({1, kBufferStateFlagRtv});
@@ -3381,12 +3376,12 @@ TEST_CASE("barrier") {
     auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, batch_info_list.back(), buffer_id_list, memory_resource.get());
     auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
-    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, batch_info_list, consumer_producer_render_pass_map, memory_resource.get());
+    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
+    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, render_pass_order, consumer_producer_render_pass_map, memory_resource.get());
     CHECK(pass_signal_info.size() == 1);
     CHECK(pass_signal_info.contains(StrId("A")));
     CHECK(pass_signal_info.at(StrId("A")).size() == 1);
     CHECK(pass_signal_info.at(StrId("A")).contains(StrId("B")));
-    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagRtv});
     auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
@@ -3414,12 +3409,12 @@ TEST_CASE("barrier") {
     auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, batch_info_list.back(), buffer_id_list, memory_resource.get());
     auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
-    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, batch_info_list, consumer_producer_render_pass_map, memory_resource.get());
+    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
+    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, render_pass_order, consumer_producer_render_pass_map, memory_resource.get());
     CHECK(pass_signal_info.size() == 1);
     CHECK(pass_signal_info.contains(StrId("A")));
     CHECK(pass_signal_info.at(StrId("A")).size() == 1);
     CHECK(pass_signal_info.at(StrId("A")).contains(StrId("C")));
-    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagRtv});
     buffer_state_before_render_pass_list.insert({1, kBufferStateFlagSrvNonPs});
@@ -3517,12 +3512,12 @@ TEST_CASE("barrier") {
     auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, batch_info_list.back(), buffer_id_list, memory_resource.get());
     auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
-    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, batch_info_list, consumer_producer_render_pass_map, memory_resource.get());
+    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
+    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, render_pass_order, consumer_producer_render_pass_map, memory_resource.get());
     CHECK(pass_signal_info.size() == 1);
     CHECK(pass_signal_info.contains(StrId("A")));
     CHECK(pass_signal_info.at(StrId("A")).size() == 1);
     CHECK(pass_signal_info.at(StrId("A")).contains(StrId("C")));
-    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagRtv});
     buffer_state_before_render_pass_list.insert({1, kBufferStateFlagSrvNonPs});
@@ -3551,12 +3546,12 @@ TEST_CASE("barrier") {
     auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, batch_info_list.back(), buffer_id_list, memory_resource.get());
     auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
-    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, batch_info_list, consumer_producer_render_pass_map, memory_resource.get());
+    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
+    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, render_pass_order, consumer_producer_render_pass_map, memory_resource.get());
     CHECK(pass_signal_info.size() == 1);
     CHECK(pass_signal_info.contains(StrId("A")));
     CHECK(pass_signal_info.at(StrId("A")).size() == 1);
     CHECK(pass_signal_info.at(StrId("A")).contains(StrId("B")));
-    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagCopyDst});
     auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
@@ -3582,12 +3577,12 @@ TEST_CASE("barrier") {
     auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, batch_info_list.back(), buffer_id_list, memory_resource.get());
     auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
-    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, batch_info_list, consumer_producer_render_pass_map, memory_resource.get());
+    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
+    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, render_pass_order, consumer_producer_render_pass_map, memory_resource.get());
     CHECK(pass_signal_info.size() == 1);
     CHECK(pass_signal_info.contains(StrId("A")));
     CHECK(pass_signal_info.at(StrId("A")).size() == 1);
     CHECK(pass_signal_info.at(StrId("A")).contains(StrId("B")));
-    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagRtv});
     auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
@@ -3613,12 +3608,12 @@ TEST_CASE("barrier") {
     auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, batch_info_list.back(), buffer_id_list, memory_resource.get());
     auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
-    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, batch_info_list, consumer_producer_render_pass_map, memory_resource.get());
+    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
+    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, render_pass_order, consumer_producer_render_pass_map, memory_resource.get());
     CHECK(pass_signal_info.size() == 1);
     CHECK(pass_signal_info.contains(StrId("A")));
     CHECK(pass_signal_info.at(StrId("A")).size() == 1);
     CHECK(pass_signal_info.at(StrId("A")).contains(StrId("B")));
-    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagCopyDst});
     auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
@@ -3644,12 +3639,12 @@ TEST_CASE("barrier") {
     auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, batch_info_list.back(), buffer_id_list, memory_resource.get());
     auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
-    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, batch_info_list, consumer_producer_render_pass_map, memory_resource.get());
+    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
+    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, render_pass_order, consumer_producer_render_pass_map, memory_resource.get());
     CHECK(pass_signal_info.size() == 1);
     CHECK(pass_signal_info.contains(StrId("A")));
     CHECK(pass_signal_info.at(StrId("A")).size() == 1);
     CHECK(pass_signal_info.at(StrId("A")).contains(StrId("B")));
-    auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagUav});
     auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffer_state_before_render_pass_list, {}, memory_resource.get());
@@ -3679,8 +3674,8 @@ TEST_CASE("barrier") {
     auto buffer_id_list = CreateBufferIdList(batch_info_list, render_pass_id_map, memory_resource.get());
     auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, batch_info_list.back(), buffer_id_list, memory_resource.get());
     auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
-    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, batch_info_list, consumer_producer_render_pass_map, memory_resource.get());
     auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource.get());
+    auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, render_pass_order, consumer_producer_render_pass_map, memory_resource.get());
     BufferStateList buffer_state_before_render_pass_list{memory_resource.get()};
     buffer_state_before_render_pass_list.insert({0, kBufferStateFlagDsvWrite});
     buffer_state_before_render_pass_list.insert({1, kBufferStateFlagRtv});
