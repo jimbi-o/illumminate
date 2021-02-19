@@ -330,26 +330,12 @@ std::tuple<BatchInfoList, RenderPassOrder> ConfigureAsyncComputeBatching(const R
 }
 PassSignalInfo ConfigureBufferResourceDependency(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const ConsumerProducerRenderPassMap& consumer_producer_render_pass_map, std::pmr::memory_resource* memory_resource) {
   PassSignalInfo pass_signal_info{memory_resource};
-  std::pmr::unordered_map<StrId, uint32_t> producer_pass_signal_list{memory_resource};
-  std::pmr::unordered_set<StrId> signal_consumed_producers{memory_resource};
-  std::pmr::unordered_map<CommandQueueType, uint64_t> next_signal_val{memory_resource};
-  std::pmr::unordered_map<CommandQueueType, std::pmr::unordered_map<CommandQueueType, uint64_t>> max_waiting_signal_val{memory_resource};
   for (auto& consumer_pass_name : render_pass_order) {
-    auto consumer_command_queue_type = render_pass_id_map.at(consumer_pass_name).command_queue_type;
-    producer_pass_signal_list.insert({consumer_pass_name, ++next_signal_val[consumer_command_queue_type]});
     if (!consumer_producer_render_pass_map.contains(consumer_pass_name)) continue;
     for (auto& producer_pass_name : consumer_producer_render_pass_map.at(consumer_pass_name)) {
-      if (!producer_pass_signal_list.contains(producer_pass_name)) continue;
+      auto consumer_command_queue_type = render_pass_id_map.at(consumer_pass_name).command_queue_type;
       auto producer_command_queue_type = render_pass_id_map.at(producer_pass_name).command_queue_type;
       if (producer_command_queue_type == consumer_command_queue_type) continue;
-      if (max_waiting_signal_val.contains(consumer_command_queue_type)
-          && max_waiting_signal_val.at(consumer_command_queue_type).contains(producer_command_queue_type)
-          && producer_pass_signal_list.at(producer_pass_name) <= max_waiting_signal_val.at(consumer_command_queue_type).at(producer_command_queue_type)) continue;
-      if (!max_waiting_signal_val.contains(consumer_command_queue_type)) {
-        max_waiting_signal_val.insert({consumer_command_queue_type, std::pmr::unordered_map<CommandQueueType, uint64_t>{memory_resource}});
-      }
-      max_waiting_signal_val.at(consumer_command_queue_type)[producer_command_queue_type] = producer_pass_signal_list.at(producer_pass_name);
-      signal_consumed_producers.insert(producer_pass_name);
       if (!pass_signal_info.contains(producer_pass_name)) {
         pass_signal_info.insert({producer_pass_name, std::pmr::unordered_set<StrId>{memory_resource}});
       }
@@ -385,13 +371,56 @@ PassSignalInfo ConvertBatchToSignalInfo(const BatchInfoList& batch_info_list, co
   return pass_signal_wait_info;
 }
 PassSignalInfo MergePassSignalInfo(PassSignalInfo&& a, PassSignalInfo&& b) {
-  // TODO check redundant signals
   auto&& dst = std::move(a);
   while (!b.empty()) {
     dst[b.begin()->first].insert(std::make_move_iterator(b.begin()->second.begin()), std::make_move_iterator(b.begin()->second.end()));
     b.erase(b.begin());
   }
   return std::move(dst);
+}
+PassSignalInfo RemoveRedundantPassSignalInfo(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, PassSignalInfo&& pass_signal_info, std::pmr::memory_resource* memory_resource) {
+  std::pmr::unordered_map<StrId, std::pmr::unordered_map<CommandQueueType, std::pmr::unordered_set<StrId>>> waiting_pass{memory_resource};
+  std::pmr::unordered_map<StrId, uint32_t> pass_index{memory_resource};
+  std::pmr::unordered_map<CommandQueueType, std::pmr::unordered_map<CommandQueueType, uint32_t>> max_processed_signal{memory_resource};
+  for (uint32_t i = 0; i < render_pass_order.size(); i++) {
+    auto& signal_pass = render_pass_order[i];
+    pass_index.insert({signal_pass, i});
+    if (pass_signal_info.contains(signal_pass)) {
+      auto& signal_queue = render_pass_id_map.at(signal_pass).command_queue_type;
+      for (auto& wait_pass : pass_signal_info.at(signal_pass)) {
+        auto& wait_queue = render_pass_id_map.at(wait_pass).command_queue_type;
+        if (wait_queue == signal_queue) continue;
+        if (!waiting_pass.contains(wait_pass)) {
+          waiting_pass.insert({wait_pass, std::pmr::unordered_map<CommandQueueType, std::pmr::unordered_set<StrId>>{memory_resource}});
+        }
+        if (!waiting_pass.at(wait_pass).contains(signal_queue)) {
+          waiting_pass.at(wait_pass).insert({signal_queue, std::pmr::unordered_set<StrId>{memory_resource}});
+        }
+        waiting_pass.at(wait_pass).at(signal_queue).insert(signal_pass);
+      }
+    }
+    auto& wait_pass = signal_pass;
+    if (!waiting_pass.contains(wait_pass)) continue;
+    auto& wait_queue = render_pass_id_map.at(wait_pass).command_queue_type;
+    for (auto& [signal_queue, signal_pass_list] : waiting_pass.at(wait_pass)) {
+      if (wait_queue == signal_queue) continue;
+      for (auto& signal_pass : signal_pass_list) {
+        auto& signal_pass_index = pass_index.at(signal_pass);
+        if (max_processed_signal.contains(wait_queue) && max_processed_signal.at(wait_queue).contains(signal_queue) && max_processed_signal.at(wait_queue).at(signal_queue) >= signal_pass_index) {
+          pass_signal_info.at(signal_pass).erase(wait_pass);
+          if (pass_signal_info.at(signal_pass).empty()) {
+            pass_signal_info.erase(signal_pass);
+          }
+          continue;
+        }
+        if (!max_processed_signal.contains(wait_queue)) {
+          max_processed_signal.insert({wait_queue, std::pmr::unordered_map<CommandQueueType, uint32_t>{memory_resource}});
+        }
+        max_processed_signal.at(wait_queue).insert_or_assign(signal_queue, signal_pass_index);
+      }
+    }
+  }
+  return std::move(pass_signal_info);
 }
 RenderPassOrder ConvertBatchInfoBackToRenderPassOrder(BatchInfoList&& batch_info_list, std::pmr::memory_resource* memory_resource) {
   RenderPassOrder render_pass_order{memory_resource};
@@ -2008,7 +2037,9 @@ TEST_CASE("ConfigureResourceDependencyBatching") {
   consumer_producer_render_pass_map.at(StrId("F")).insert(StrId("C"));
   consumer_producer_render_pass_map.insert({StrId("G"), std::pmr::unordered_set<StrId>{}});
   consumer_producer_render_pass_map.at(StrId("G")).insert(StrId("C"));
-  auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, ConvertBatchInfoBackToRenderPassOrder(std::move(async_compute_batching), memory_resource.get()), consumer_producer_render_pass_map, memory_resource.get());
+  auto render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(async_compute_batching), memory_resource.get());
+  auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, render_pass_order, consumer_producer_render_pass_map, memory_resource.get());
+  pass_signal_info = RemoveRedundantPassSignalInfo(render_pass_id_map, render_pass_order, std::move(pass_signal_info), memory_resource.get());
   CHECK(pass_signal_info.size() == 2);
   CHECK(pass_signal_info.contains(StrId("A")));
   CHECK(pass_signal_info.at(StrId("A")).size() == 1);
