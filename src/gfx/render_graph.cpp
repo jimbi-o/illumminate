@@ -383,23 +383,26 @@ PassSignalInfo RemoveRedundantPassSignalInfo(const RenderPassIdMap& render_pass_
   std::pmr::unordered_map<StrId, uint32_t> pass_index{memory_resource};
   std::pmr::unordered_map<CommandQueueType, std::pmr::unordered_map<CommandQueueType, uint32_t>> max_processed_signal{memory_resource};
   for (uint32_t i = 0; i < render_pass_order.size(); i++) {
-    auto& signal_pass = render_pass_order[i];
-    pass_index.insert({signal_pass, i});
-    if (pass_signal_info.contains(signal_pass)) {
-      auto& signal_queue = render_pass_id_map.at(signal_pass).command_queue_type;
-      for (auto& wait_pass : pass_signal_info.at(signal_pass)) {
-        auto& wait_queue = render_pass_id_map.at(wait_pass).command_queue_type;
-        if (wait_queue == signal_queue) continue;
-        if (!waiting_pass.contains(wait_pass)) {
-          waiting_pass.insert({wait_pass, std::pmr::unordered_map<CommandQueueType, std::pmr::unordered_set<StrId>>{memory_resource}});
+    auto& pass_name = render_pass_order[i];
+    {
+      auto& signal_pass = pass_name;
+      pass_index.insert({signal_pass, i});
+      if (pass_signal_info.contains(signal_pass)) {
+        auto& signal_queue = render_pass_id_map.at(signal_pass).command_queue_type;
+        for (auto& wait_pass : pass_signal_info.at(signal_pass)) {
+          auto& wait_queue = render_pass_id_map.at(wait_pass).command_queue_type;
+          if (wait_queue == signal_queue) continue;
+          if (!waiting_pass.contains(wait_pass)) {
+            waiting_pass.insert({wait_pass, std::pmr::unordered_map<CommandQueueType, std::pmr::unordered_set<StrId>>{memory_resource}});
+          }
+          if (!waiting_pass.at(wait_pass).contains(signal_queue)) {
+            waiting_pass.at(wait_pass).insert({signal_queue, std::pmr::unordered_set<StrId>{memory_resource}});
+          }
+          waiting_pass.at(wait_pass).at(signal_queue).insert(signal_pass);
         }
-        if (!waiting_pass.at(wait_pass).contains(signal_queue)) {
-          waiting_pass.at(wait_pass).insert({signal_queue, std::pmr::unordered_set<StrId>{memory_resource}});
-        }
-        waiting_pass.at(wait_pass).at(signal_queue).insert(signal_pass);
       }
     }
-    auto& wait_pass = signal_pass;
+    auto& wait_pass = pass_name;
     if (!waiting_pass.contains(wait_pass)) continue;
     auto& wait_queue = render_pass_id_map.at(wait_pass).command_queue_type;
     for (auto& [signal_queue, signal_pass_list] : waiting_pass.at(wait_pass)) {
@@ -791,7 +794,7 @@ std::tuple<PassBarrierInfoSet, PassBarrierInfoSet> ConfigureBarrierForNextFrame(
     }
     for (auto& begin_pass_cand : next_frame_cands) {
       for (auto& end_pass_cand : next_frame_cands) {
-        if (auto distance = inter_pass_distance_map.at(begin_pass_cand).at(end_pass_cand); (!!begin_pass || (distance >= 0 && max_distance < distance))) {
+        if (auto distance = inter_pass_distance_map.at(begin_pass_cand).at(end_pass_cand); (!begin_pass || (distance >= 0 && max_distance < distance))) {
           max_distance = distance;
           begin_pass = begin_pass_cand;
           end_pass = end_pass_cand;
@@ -2377,6 +2380,7 @@ TEST_CASE("barrier") {
     CHECK(current_frame_barriers.barrier_after_pass.contains(StrId("B")));
     CHECK(current_frame_barriers.barrier_after_pass.at(StrId("B"))[0].state_flag_before_pass == kBufferStateFlagDsvRead);
     CHECK(current_frame_barriers.barrier_after_pass.at(StrId("B"))[0].state_flag_after_pass == kBufferStateFlagDsvWrite);
+    CHECK(current_frame_barriers.barrier_after_pass.at(StrId("B"))[0].split_type == BarrierSplitType::kNone);
     CHECK(next_frame_barriers.barrier_before_pass.empty());
     CHECK(next_frame_barriers.barrier_after_pass.empty());
   }

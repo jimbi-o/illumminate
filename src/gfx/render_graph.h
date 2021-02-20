@@ -246,6 +246,7 @@ struct BarrierConfig {
 };
 PassSignalInfo ConvertBatchToSignalInfo(const BatchInfoList& batch_info_list, const RenderPassIdMap& render_pass_id_map, std::pmr::memory_resource* memory_resource);
 PassSignalInfo MergePassSignalInfo(PassSignalInfo&&, PassSignalInfo&&);
+PassSignalInfo RemoveRedundantPassSignalInfo(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, PassSignalInfo&& pass_signal_info, std::pmr::memory_resource* memory_resource);
 RenderPassOrder ConvertBatchInfoBackToRenderPassOrder(BatchInfoList&& batch_info_list, std::pmr::memory_resource* memory_resource);
 BufferStateList CreateBufferCreationStateList(const BufferCreationDescList& buffer_creation_descs, std::pmr::memory_resource* memory_resource);
 struct BufferStateChangeInfo {
