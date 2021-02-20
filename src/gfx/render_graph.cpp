@@ -11,26 +11,41 @@ std::tuple<RenderPassIdMap, RenderPassOrder> FormatRenderPassList(RenderPassList
   }
   return {render_pass_id_map, render_pass_order};
 }
-BufferIdList CreateBufferIdList(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, std::pmr::memory_resource* memory_resource) {
+std::tuple<BufferIdList, BufferIdList> MergeBufferIdListFromPrevFrame(BufferIdList&& prev_frame_buffer_id_list, const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, std::pmr::memory_resource* memory_resource) {
+  std::pmr::unordered_set<BufferId> used_ids{memory_resource};
+  for (auto& [pass_name, buffers] : prev_frame_buffer_id_list) {
+    for (auto& buffer_id : buffers) {
+      used_ids.insert(buffer_id);
+    }
+  }
   BufferIdList buffer_id_list{memory_resource};
   buffer_id_list.reserve(render_pass_order.size());
   BufferId new_id = 0;
   std::pmr::unordered_map<StrId, BufferId> known_buffer{memory_resource};
   for (auto& pass_name : render_pass_order) {
+    if (prev_frame_buffer_id_list.contains(pass_name)) {
+      buffer_id_list.insert({pass_name, std::move(prev_frame_buffer_id_list.at(pass_name))});
+      prev_frame_buffer_id_list.erase(pass_name);
+      continue;
+    }
     auto& pass_buffer_ids = buffer_id_list.insert({pass_name, PassBufferIdList{memory_resource}}).first->second;
     auto& pass = render_pass_id_map.at(pass_name);
     pass_buffer_ids.reserve(pass.buffer_list.size());
     for (auto& buffer : pass.buffer_list) {
       if (buffer.load_op_type == BufferLoadOpType::kDontCare || buffer.load_op_type == BufferLoadOpType::kClear || !known_buffer.contains(buffer.name)) {
+        while (used_ids.contains(new_id)) new_id++;
+        used_ids.insert(new_id);
         pass_buffer_ids.push_back(new_id);
         known_buffer.insert({buffer.name, new_id});
-        new_id++;
       } else {
         pass_buffer_ids.push_back(known_buffer.at(buffer.name));
       }
     }
   }
-  return buffer_id_list;
+  return {buffer_id_list, prev_frame_buffer_id_list};
+}
+BufferIdList CreateBufferIdList(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, std::pmr::memory_resource* memory_resource) {
+  return std::get<0>(MergeBufferIdListFromPrevFrame({}, render_pass_id_map, render_pass_order, memory_resource));
 }
 BufferIdList ApplyBufferNameAlias(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, BufferIdList&& buffer_id_list, const BufferNameAliasList& alias_list, std::pmr::memory_resource* memory_resource) {
   std::pmr::unordered_map<StrId, BufferId> buffer_name_to_id(memory_resource);
