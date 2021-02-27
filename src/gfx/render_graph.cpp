@@ -364,6 +364,28 @@ BatchInfoList ConfigureIntraFrameAsyncComputeBatching(const RenderPassIdMap& ren
   }
   return batch_info_list;
 }
+std::tuple<RenderPassOrder, RenderPassOrder> SeparateRenderPassOrderToCurrentAndNextFrame(RenderPassOrder&& render_pass_order_master, const SyncGroupInfoList& sync_group_info_list, const SyncGroupIndexList& sync_group_index_list, std::pmr::memory_resource* memory_resource) {
+  auto next_begin = render_pass_order_master.begin();
+  while (next_begin != render_pass_order_master.end()) {
+    if (sync_group_index_list.contains(*next_begin)) break;
+    next_begin++;
+  }
+  auto& sync_group = sync_group_info_list[sync_group_index_list.at(*next_begin)];
+  next_begin++;
+  while (next_begin != render_pass_order_master.end()) {
+    if (sync_group.contains(*next_begin)) break;
+    next_begin++;
+  }
+  if (next_begin == render_pass_order_master.end()) {
+    return {render_pass_order_master, RenderPassOrder{memory_resource}};
+  }
+  RenderPassOrder next{memory_resource};
+  next.assign(std::make_move_iterator(next_begin), std::make_move_iterator(render_pass_order_master.end()));
+  render_pass_order_master.erase(next_begin, render_pass_order_master.end());
+  return {render_pass_order_master, next};
+}
+std::tuple<BatchInfoList, RenderPassOrder> ConfigureInterFrameAsyncComputeBatching(const RenderPassIdMap& render_pass_id_map, RenderPassOrder&& render_pass_order_current, RenderPassOrder&& render_pass_order_leftover, const SyncGroupInfoList& sync_group_info_list, const SyncGroupIndexList& sync_group_index_list, std::pmr::memory_resource* memory_resource) {
+}
 PassSignalInfo ConfigureBufferResourceDependency(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const ConsumerProducerRenderPassMap& consumer_producer_render_pass_map, std::pmr::memory_resource* memory_resource) {
   PassSignalInfo pass_signal_info{memory_resource};
   for (auto& consumer_pass_name : render_pass_order) {
