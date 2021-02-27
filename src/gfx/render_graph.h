@@ -225,8 +225,10 @@ std::pmr::unordered_map<BufferId, uint32_t> GetPhysicalBufferAddressOffset(const
 using SyncGroupInfoList = std::pmr::vector<std::pmr::unordered_set<StrId>>;
 using SyncGroupIndexList = std::pmr::unordered_map<StrId, uint32_t>;
 SyncGroupIndexList GetSyncGroupIndexList(const SyncGroupInfoList& sync_group_info_list, std::pmr::memory_resource* memory_resource);
+SyncGroupIndexList GetSyncGroupIndexList(const SyncGroupInfoList& sync_group_info_list, std::pmr::memory_resource* memory_resource);
+SyncGroupIndexList RemoveUnusedPassFromSyncGroupIndexList(const RenderPassOrder& render_pass_order, SyncGroupIndexList&& list);
 using BatchInfoList = std::pmr::vector<std::pmr::vector<StrId>>;
-std::tuple<BatchInfoList, RenderPassOrder> ConfigureAsyncComputeBatching(const RenderPassIdMap& render_pass_id_map, RenderPassOrder&& render_pass_order_master, RenderPassOrder&& render_pass_order_leftover, SyncGroupInfoList&& sync_group_info_list, std::pmr::memory_resource* memory_resource);
+BatchInfoList ConfigureIntraFrameAsyncComputeBatching(const RenderPassIdMap& render_pass_id_map, RenderPassOrder&& render_pass_order_master, const SyncGroupInfoList& sync_group_info_list, const SyncGroupIndexList& sync_group_index_list, std::pmr::memory_resource* memory_resource);
 RenderPassOrder ConvertBatchInfoBackToRenderPassOrder(BatchInfoList&& batch_info_list, std::pmr::memory_resource* memory_resource);
 using PassSignalInfo = std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>;
 PassSignalInfo ConvertBatchToSignalInfo(const BatchInfoList& batch_info_list, const RenderPassIdMap& render_pass_id_map, std::pmr::memory_resource* memory_resource);
