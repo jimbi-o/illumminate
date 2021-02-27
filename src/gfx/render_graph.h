@@ -95,35 +95,27 @@ constexpr uint32_t GetPhysicalBufferHeight(const BufferConfig& config, const Buf
   return GetPhysicalBufferSize(config.size_type, config.height, mainbuffer.height, swapchain.height);
 }
 using BufferConfigList = std::pmr::vector<BufferConfig>;
-using AsyncComputeEnabled = illuminate::core::EnableDisable;
 class RenderPass {
  public:
   RenderPass()
       : command_queue_type(CommandQueueType::kGraphics),
-        mandatory_pass(false),
-        async_compute_enabled(AsyncComputeEnabled::kDisabled)
+        mandatory_pass(false)
   {}
   RenderPass(StrId&& pass_name, BufferConfigList&& buffer_config_list)
       : name(std::move(pass_name)),
         buffer_list(std::move(buffer_config_list)),
         command_queue_type(CommandQueueType::kGraphics),
-        mandatory_pass(false),
-        async_compute_enabled(AsyncComputeEnabled::kDisabled)
+        mandatory_pass(false)
   {}
   constexpr RenderPass& CommandQueueTypeGraphics() { command_queue_type = CommandQueueType::kGraphics; return *this; }
   constexpr RenderPass& CommandQueueTypeCompute() { command_queue_type = CommandQueueType::kCompute; return *this; }
   constexpr RenderPass& CommandQueueTypeTransfer() { command_queue_type = CommandQueueType::kTransfer; return *this; }
   constexpr RenderPass& Mandatory(const bool b = true) { mandatory_pass = b; return *this; }
-  constexpr RenderPass& AsyncComputeGroup(StrId&& group_name) { async_compute_group = std::move(group_name); return EnableAsyncCompute(); }
-  constexpr RenderPass& AsyncComputeGroup(const StrId& group_name) { async_compute_group = group_name; return EnableAsyncCompute(); }
-  constexpr RenderPass& EnableAsyncCompute() { async_compute_enabled = AsyncComputeEnabled::kEnabled; return *this; }
   StrId name;
   BufferConfigList buffer_list;
   CommandQueueType command_queue_type;
   bool mandatory_pass;
-  AsyncComputeEnabled async_compute_enabled;
-  std::byte _pad[5];
-  StrId async_compute_group;
+  std::byte _pad[6]{};
 };
 using RenderPassList = std::pmr::vector<RenderPass>;
 using RenderPassIdMap = std::pmr::unordered_map<StrId, RenderPass>;
@@ -230,10 +222,11 @@ std::tuple<std::pmr::unordered_map<BufferId, uint32_t>, std::pmr::unordered_map<
 std::tuple<std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>, std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>> CalculatePhysicalBufferLiftime(const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, std::pmr::memory_resource* memory_resource);
 std::pmr::unordered_map<BufferId, uint32_t> GetPhysicalBufferAddressOffset(const RenderPassOrder& render_pass_order, const std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>& physical_buffer_lifetime_begin_pass, const std::pmr::unordered_map<StrId, std::pmr::vector<BufferId>>& physical_buffer_lifetime_end_pass, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_size_in_byte, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, std::pmr::memory_resource* memory_resource);
 // queue signals and waits
+using SyncGroupInfoList = std::pmr::vector<std::pmr::unordered_set<StrId>>;
+using SyncGroupIndexList = std::pmr::unordered_map<StrId, uint32_t>;
+SyncGroupIndexList GetSyncGroupIndexList(const SyncGroupInfoList& sync_group_info_list, std::pmr::memory_resource* memory_resource);
 using BatchInfoList = std::pmr::vector<std::pmr::vector<StrId>>;
-enum class AsyncComputeBatchPairType : uint8_t { kCurrentFrame = 0, kPairComputeWithNextFrameGraphics, };
-using AsyncComputePairInfo = std::pmr::unordered_map<StrId/*groupname*/, AsyncComputeBatchPairType>;
-std::tuple<BatchInfoList, RenderPassOrder> ConfigureAsyncComputeBatching(const RenderPassIdMap& render_pass_id_map, RenderPassOrder&& current_render_pass_order, RenderPassOrder&& prev_render_pass_order, const AsyncComputePairInfo& async_group_info, std::pmr::memory_resource* memory_resource);
+std::tuple<BatchInfoList, RenderPassOrder> ConfigureAsyncComputeBatching(const RenderPassIdMap& render_pass_id_map, RenderPassOrder&& render_pass_order_master, RenderPassOrder&& render_pass_order_leftover, SyncGroupInfoList&& sync_group_info_list, std::pmr::memory_resource* memory_resource);
 RenderPassOrder ConvertBatchInfoBackToRenderPassOrder(BatchInfoList&& batch_info_list, std::pmr::memory_resource* memory_resource);
 using PassSignalInfo = std::pmr::unordered_map<StrId, std::pmr::unordered_set<StrId>>;
 PassSignalInfo ConvertBatchToSignalInfo(const BatchInfoList& batch_info_list, const RenderPassIdMap& render_pass_id_map, std::pmr::memory_resource* memory_resource);

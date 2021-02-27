@@ -283,65 +283,86 @@ std::pmr::unordered_map<BufferId, uint32_t> GetPhysicalBufferAddressOffset(const
   }
   return physical_buffer_address_offset;
 }
-std::tuple<BatchInfoList, RenderPassOrder> ConfigureAsyncComputeBatching(const RenderPassIdMap& render_pass_id_map, RenderPassOrder&& current_render_pass_order, RenderPassOrder&& prev_render_pass_order, const AsyncComputePairInfo& async_group_info, std::pmr::memory_resource* memory_resource) {
-  BatchInfoList batch_info{memory_resource};
-  batch_info.push_back(std::pmr::vector<StrId>{memory_resource});
-  RenderPassOrder render_pass_unprocessed{memory_resource};
-  std::pmr::unordered_map<StrId, uint32_t> async_group_batch_index{memory_resource};
-  auto pass_name_it = prev_render_pass_order.begin();
-  while (pass_name_it != prev_render_pass_order.end()) {
-    auto&& current_pass_name = std::move(*pass_name_it);
-    auto& pass = render_pass_id_map.at(current_pass_name);
-    auto batch_index = batch_info.size() - 1;
-    for (auto& [group_name, pair_type] : async_group_info) {
-      if (group_name != pass.async_compute_group) continue;
-      if (pair_type == AsyncComputeBatchPairType::kPairComputeWithNextFrameGraphics && pass.command_queue_type == CommandQueueType::kCompute) {
-        if (!async_group_batch_index.contains(group_name)) {
-          if (!batch_info.back().empty()) {
-            batch_info.push_back(std::pmr::vector<StrId>{memory_resource});
-          }
-          async_group_batch_index.insert({group_name, batch_info.size() - 1});
-        }
-        batch_index = async_group_batch_index.at(group_name);
-      }
-      break;
+SyncGroupIndexList GetSyncGroupIndexList(const SyncGroupInfoList& sync_group_info_list, std::pmr::memory_resource* memory_resource) {
+  SyncGroupIndexList sync_group_index_list{memory_resource};
+  for (uint32_t index = 0; auto& pass_list : sync_group_info_list) {
+    for (auto& pass : pass_list) {
+      sync_group_index_list.insert({pass, index});
     }
-    batch_info[batch_index].push_back(std::move(current_pass_name));
-    pass_name_it = prev_render_pass_order.erase(pass_name_it);
+    index++;
   }
-  pass_name_it = current_render_pass_order.begin();
-  while (pass_name_it != current_render_pass_order.end()) {
-    auto&& current_pass_name = std::move(*pass_name_it);
-    auto& pass = render_pass_id_map.at(current_pass_name);
-    auto batch_index = batch_info.size() - 1;
-    for (auto& [group_name, pair_type] : async_group_info) {
-      if (group_name != pass.async_compute_group) {
-        if (render_pass_unprocessed.empty()) continue;
-        if (pass.command_queue_type != CommandQueueType::kCompute) continue;
-        batch_index = ~0u;
-        break;
-      }
-      if (pair_type == AsyncComputeBatchPairType::kPairComputeWithNextFrameGraphics && pass.command_queue_type == CommandQueueType::kCompute) {
-        batch_index = ~0u;
-        break;
-      }
-      if (!async_group_batch_index.contains(group_name)) {
-        if (!batch_info.back().empty()) {
-          batch_info.push_back(std::pmr::vector<StrId>{memory_resource});
-        }
-        async_group_batch_index.insert({group_name, batch_info.size() - 1});
-      }
-      batch_index = async_group_batch_index.at(group_name);
-      break;
+  return sync_group_index_list;
+}
+SyncGroupIndexList RemoveUnusedPassFromSyncGroupIndexList(const RenderPassOrder& render_pass_order, SyncGroupIndexList&& list) {
+  std::pmr::unordered_map<uint32_t, uint32_t> group_count{list.get_allocator()};
+  auto it = list.begin();
+  while (it != list.end()) {
+    auto& [pass, index] = *it;
+    if (!group_count.contains(index)) {
+      group_count.insert({index, 0});
     }
-    if (batch_index == ~0u) {
-      render_pass_unprocessed.push_back(std::move(current_pass_name));
+    if (IsContaining(render_pass_order, pass)) {
+      group_count[index]++;
+      it++;
     } else {
-      batch_info[batch_index].push_back(std::move(current_pass_name));
+      it = list.erase(it);
     }
-    pass_name_it = current_render_pass_order.erase(pass_name_it);
   }
-  return {batch_info, render_pass_unprocessed};
+  it = list.begin();
+  while (it != list.end()) {
+    if (group_count.at(it->second) > 1) {
+      it++;
+    } else {
+      it = list.erase(it);
+    }
+  }
+  return std::move(list);
+}
+BatchInfoList ConfigureIntraFrameAsyncComputeBatching(const RenderPassIdMap& render_pass_id_map, RenderPassOrder&& render_pass_order_master, const SyncGroupInfoList& sync_group_info_list, const SyncGroupIndexList& sync_group_index_list, std::pmr::memory_resource* memory_resource) {
+  BatchInfoList batch_info_list{memory_resource};
+  batch_info_list.push_back(std::pmr::vector<StrId>{memory_resource});
+  while (!render_pass_order_master.empty()) {
+    auto&& pass_name = render_pass_order_master[0];
+    if (!sync_group_index_list.contains(pass_name)) {
+      batch_info_list.back().push_back(std::move(pass_name));
+      render_pass_order_master.erase(render_pass_order_master.begin());
+      continue;
+    }
+    auto& sync_group = sync_group_info_list[sync_group_index_list.at(pass_name)];
+    for (auto& sync_pass : sync_group) {
+      if (sync_pass == pass_name) {
+        continue;
+      }
+      auto& sync_pass_command_queue_type = render_pass_id_map.at(sync_pass).command_queue_type;
+      auto it = render_pass_order_master.begin();
+      it++;
+      while (*it != sync_pass) {
+        if (render_pass_id_map.at(*it).command_queue_type == sync_pass_command_queue_type) {
+          batch_info_list.back().push_back(std::move(*it));
+          it = render_pass_order_master.erase(it);
+        } else {
+          it++;
+        }
+      }
+    }
+    if (!batch_info_list.back().empty()) {
+      batch_info_list.push_back(std::pmr::vector<StrId>{memory_resource});
+    }
+    batch_info_list.back().push_back(std::move(pass_name));
+    render_pass_order_master.erase(render_pass_order_master.begin());
+    auto it = render_pass_order_master.begin();
+    uint32_t sync_pass_count = 1;
+    while (sync_pass_count < sync_group.size()) {
+      if (sync_group.contains(*it)) {
+        batch_info_list.back().push_back(std::move(*it));
+        it = render_pass_order_master.erase(it);
+        sync_pass_count++;
+      } else {
+        it++;
+      }
+    }
+  }
+  return batch_info_list;
 }
 PassSignalInfo ConfigureBufferResourceDependency(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const ConsumerProducerRenderPassMap& consumer_producer_render_pass_map, std::pmr::memory_resource* memory_resource) {
   PassSignalInfo pass_signal_info{memory_resource};
@@ -1078,11 +1099,11 @@ auto CreateRenderPassListCombined(std::pmr::memory_resource* memory_resource) {
   render_pass_list.insert(std::find_if(render_pass_list.begin(), render_pass_list.end(), [](const RenderPass& pass) { return pass.name == StrId("postprocess"); }), CreateRenderPassTransparent(memory_resource));
   return InsertRenderPassListSkyboxCreation(std::move(render_pass_list), memory_resource);
 }
-auto CreateRenderPassListAsyncComputeIntraFrame(std::pmr::memory_resource* memory_resource) {
+auto CreateRenderPassListAsyncCompute(std::pmr::memory_resource* memory_resource) {
   RenderPassList render_pass_list{memory_resource};
   render_pass_list.push_back(CreateRenderPassPrez(memory_resource));
-  render_pass_list.push_back(CreateRenderPassShadowMap(memory_resource).AsyncComputeGroup(StrId("shadowmap")));
-  render_pass_list.push_back(CreateRenderPassAo(memory_resource).CommandQueueTypeCompute().AsyncComputeGroup(StrId("shadowmap")));
+  render_pass_list.push_back(CreateRenderPassShadowMap(memory_resource));
+  render_pass_list.push_back(CreateRenderPassAo(memory_resource).CommandQueueTypeCompute());
   render_pass_list.push_back(CreateRenderPassGBuffer(memory_resource));
   render_pass_list.push_back(CreateRenderPassDeferredShadowPcss(memory_resource));
   render_pass_list.push_back(RenderPass(
@@ -1102,45 +1123,6 @@ auto CreateRenderPassListAsyncComputeIntraFrame(std::pmr::memory_resource* memor
   ).CommandQueueTypeCompute());
   render_pass_list.push_back(CreateRenderPassPostProcess(memory_resource).CommandQueueTypeCompute());
   return render_pass_list;
-}
-auto CreateRenderPassListAsyncComputeInterFrame(std::pmr::memory_resource* memory_resource) {
-  RenderPassList render_pass_list{memory_resource};
-  render_pass_list.push_back(CreateRenderPassPrez(memory_resource).AsyncComputeGroup(StrId("prez")));
-  render_pass_list.push_back(CreateRenderPassShadowMap(memory_resource));
-  render_pass_list.push_back(CreateRenderPassAo(memory_resource).CommandQueueTypeCompute().AsyncComputeGroup(StrId("prez")));
-  render_pass_list.push_back(CreateRenderPassGBuffer(memory_resource));
-  render_pass_list.push_back(RenderPass(
-    StrId("deferredshadow-pcss"),
-    {
-      {
-        BufferConfig(StrId("shadowmap"), BufferStateType::kSrvPsOnly),
-        BufferConfig(StrId("shadowtex-pcss"), BufferStateType::kUav),
-      },
-      memory_resource
-    }
-  ).CommandQueueTypeCompute().EnableAsyncCompute());
-  render_pass_list.push_back(RenderPass(
-    StrId("lighting"),
-    {
-      {
-        BufferConfig(StrId("depth"), BufferStateType::kSrvPsOnly),
-        BufferConfig(StrId("gbuffer0"), BufferStateType::kSrvPsOnly),
-        BufferConfig(StrId("gbuffer1"), BufferStateType::kSrvPsOnly),
-        BufferConfig(StrId("gbuffer2"), BufferStateType::kSrvPsOnly),
-        BufferConfig(StrId("shadowtex"), BufferStateType::kSrvPsOnly),
-        BufferConfig(StrId("ao"), BufferStateType::kUav).LoadOpType(BufferLoadOpType::kLoadReadOnly),
-        BufferConfig(StrId("mainbuffer"), BufferStateType::kUav),
-      },
-      memory_resource
-    }
-  ).CommandQueueTypeCompute().EnableAsyncCompute());
-  render_pass_list.push_back(CreateRenderPassPostProcess(memory_resource).CommandQueueTypeCompute().EnableAsyncCompute());
-  return render_pass_list;
-}
-auto CreateAsyncComputeGroupInfo(StrId&& group_name, const AsyncComputeBatchPairType pair_type, std::pmr::memory_resource* memory_resource) {
-  AsyncComputePairInfo async_compute_pair_info{memory_resource};
-  async_compute_pair_info.insert({std::move(group_name), pair_type});
-  return async_compute_pair_info;
 }
 BufferIdList CreateBufferIdList(const BatchInfoList& batch_info_list, const RenderPassIdMap& render_pass_id_map, std::pmr::memory_resource* memory_resource) {
   BufferIdList buffer_id_list{memory_resource};
@@ -2066,20 +2048,95 @@ TEST_CASE("ConfigureResourceDependencyBatching") {
   CHECK(pass_signal_info.at(StrId("D")).size() == 1);
   CHECK(pass_signal_info.at(StrId("D")).contains(StrId("E")));
 }
+TEST_CASE("ConfigureAsyncComputeBatching-simple") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
+  RenderPassIdMap render_pass_id_map{memory_resource.get()};
+  render_pass_id_map.insert({StrId("A"), RenderPass()});
+  render_pass_id_map.insert({StrId("B"), RenderPass().CommandQueueTypeCompute()});
+  render_pass_id_map.insert({StrId("C"), RenderPass()});
+  RenderPassOrder render_pass_order{memory_resource.get()};
+  render_pass_order.push_back(StrId("A"));
+  render_pass_order.push_back(StrId("B"));
+  render_pass_order.push_back(StrId("C"));
+  RenderPassOrder prev_render_pass_order{memory_resource.get()};
+  prev_render_pass_order.push_back(StrId("B"));
+  SyncGroupInfoList sync_group_info_list{memory_resource.get()};
+  sync_group_info_list.push_back(std::pmr::unordered_set<StrId>{memory_resource.get()});
+  sync_group_info_list.back().insert(StrId("A"));
+  sync_group_info_list.back().insert(StrId("B"));
+#if 0
+  // TODO comment-in
+  auto [batch_info_list, render_pass_not_used] = ConfigureInterFrameAsyncComputeBatching(render_pass_id_map, std::move(render_pass_order), std::move(prev_render_pass_order), sync_group_info_list, memory_resource.get());
+  CHECK(batch_info_list.size() == 1);
+  CHECK(batch_info_list[0].size() == 3);
+  CHECK(batch_info_list[0][0] == StrId("B"));
+  CHECK(batch_info_list[0][1] == StrId("A"));
+  CHECK(batch_info_list[0][2] == StrId("C"));
+  CHECK(render_pass_not_used.size() == 1);
+  CHECK(render_pass_not_used[0] == StrId("B"));
+#endif
+}
+TEST_CASE("ConfigureAsyncComputeBatching-multiple groups") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
+  RenderPassIdMap render_pass_id_map{memory_resource.get()};
+  render_pass_id_map.insert({StrId("A"), RenderPass()});
+  render_pass_id_map.insert({StrId("B"), RenderPass().CommandQueueTypeCompute()});
+  render_pass_id_map.insert({StrId("C"), RenderPass().CommandQueueTypeCompute()});
+  render_pass_id_map.insert({StrId("D"), RenderPass()});
+  render_pass_id_map.insert({StrId("E"), RenderPass()});
+  RenderPassOrder render_pass_order{memory_resource.get()};
+  render_pass_order.push_back(StrId("A"));
+  render_pass_order.push_back(StrId("B"));
+  render_pass_order.push_back(StrId("C"));
+  render_pass_order.push_back(StrId("D"));
+  render_pass_order.push_back(StrId("E"));
+  RenderPassOrder prev_render_pass_order{memory_resource.get()};
+  prev_render_pass_order.push_back(StrId("B"));
+  prev_render_pass_order.push_back(StrId("E"));
+  SyncGroupInfoList sync_group_info_list{memory_resource.get()};
+  sync_group_info_list.push_back(std::pmr::unordered_set<StrId>{memory_resource.get()});
+  sync_group_info_list.back().insert(StrId("A"));
+  sync_group_info_list.back().insert(StrId("B"));
+  sync_group_info_list.push_back(std::pmr::unordered_set<StrId>{memory_resource.get()});
+  sync_group_info_list.back().insert(StrId("C"));
+  sync_group_info_list.back().insert(StrId("E"));
+#if 0
+  // TODO comment-in
+  auto [batch_info_list, render_pass_not_used] = ConfigureAsyncComputeBatching(render_pass_id_map, std::move(render_pass_order), std::move(prev_render_pass_order), sync_group_info_list, memory_resource.get());
+  CHECK(batch_info_list.size() == 2);
+  CHECK(batch_info_list[0].size() == 3);
+  CHECK(batch_info_list[0][0] == StrId("B"));
+  CHECK(batch_info_list[0][1] == StrId("A"));
+  CHECK(batch_info_list[0][2] == StrId("D"));
+  CHECK(batch_info_list[1].size() == 2);
+  CHECK(batch_info_list[1][0] == StrId("E"));
+  CHECK(batch_info_list[1][1] == StrId("C"));
+  CHECK(render_pass_not_used.size() == 2);
+  CHECK(render_pass_not_used[0] == StrId("B"));
+  CHECK(render_pass_not_used[1] == StrId("E"));
+#endif
+}
 TEST_CASE("AsyncComputeIntraFrame") {
   using namespace illuminate;
   using namespace illuminate::gfx;
   auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
-  auto render_pass_list = CreateRenderPassListAsyncComputeIntraFrame(memory_resource.get());
+  auto render_pass_list = CreateRenderPassListAsyncCompute(memory_resource.get());
   auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
   auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
   auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, memory_resource.get());
   auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
-  BatchInfoList async_compute_batching;
-  RenderPassOrder render_pass_unprocessed;
-  SUBCASE("with group name") {
-    auto async_group_info = CreateAsyncComputeGroupInfo(StrId("shadowmap"), AsyncComputeBatchPairType::kCurrentFrame, memory_resource.get());
-    std::tie(async_compute_batching, render_pass_unprocessed) = ConfigureAsyncComputeBatching(render_pass_id_map, std::move(render_pass_order), {}, async_group_info, memory_resource.get());
+  SUBCASE("with group") {
+    SyncGroupInfoList sync_group_info_list{memory_resource.get()};
+    sync_group_info_list.push_back(std::pmr::unordered_set<StrId>{memory_resource.get()});
+    sync_group_info_list.back().insert(StrId("shadowmap"));
+    sync_group_info_list.back().insert(StrId("ao"));
+    auto sync_group_index_list = GetSyncGroupIndexList(sync_group_info_list, memory_resource.get());
+    sync_group_index_list = RemoveUnusedPassFromSyncGroupIndexList(render_pass_order, std::move(sync_group_index_list));
+    auto async_compute_batching = ConfigureIntraFrameAsyncComputeBatching(render_pass_id_map, std::move(render_pass_order), sync_group_info_list, sync_group_index_list, memory_resource.get());
     CHECK(async_compute_batching.size() == 2);
     CHECK(async_compute_batching[0].size() == 1);
     CHECK(async_compute_batching[0][0] == StrId("prez"));
@@ -2090,10 +2147,9 @@ TEST_CASE("AsyncComputeIntraFrame") {
     CHECK(async_compute_batching[1][3] == StrId("deferredshadow-pcss"));
     CHECK(async_compute_batching[1][4] == StrId("lighting"));
     CHECK(async_compute_batching[1][5] == StrId("postprocess"));
-    CHECK(render_pass_unprocessed.empty());
   }
   SUBCASE("no group name") {
-    std::tie(async_compute_batching, render_pass_unprocessed) = ConfigureAsyncComputeBatching(render_pass_id_map, std::move(render_pass_order), {}, {}, memory_resource.get());
+    auto async_compute_batching = ConfigureIntraFrameAsyncComputeBatching(render_pass_id_map, std::move(render_pass_order), {}, {}, memory_resource.get());
     CHECK(async_compute_batching.size() == 1);
     CHECK(async_compute_batching[0].size() == 7);
     CHECK(async_compute_batching[0][0] == StrId("prez"));
@@ -2103,20 +2159,24 @@ TEST_CASE("AsyncComputeIntraFrame") {
     CHECK(async_compute_batching[0][4] == StrId("deferredshadow-pcss"));
     CHECK(async_compute_batching[0][5] == StrId("lighting"));
     CHECK(async_compute_batching[0][6] == StrId("postprocess"));
-    CHECK(render_pass_unprocessed.empty());
   }
 }
 TEST_CASE("AsyncComputeInterFrame") {
   using namespace illuminate;
   using namespace illuminate::gfx;
   auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
-  auto render_pass_list = CreateRenderPassListAsyncComputeInterFrame(memory_resource.get());
+  auto render_pass_list = CreateRenderPassListAsyncCompute(memory_resource.get());
   auto [render_pass_id_map, render_pass_order] = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
   auto buffer_id_list = CreateBufferIdList(render_pass_id_map, render_pass_order, memory_resource.get());
   auto render_pass_adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, memory_resource.get());
   auto consumer_producer_render_pass_map = CreateConsumerProducerMap(render_pass_adjacency_graph, memory_resource.get());
-  auto async_group_info = CreateAsyncComputeGroupInfo(StrId("prez"), AsyncComputeBatchPairType::kPairComputeWithNextFrameGraphics, memory_resource.get());
-  auto [async_compute_batching, render_pass_unprocessed] = ConfigureAsyncComputeBatching(render_pass_id_map, std::move(render_pass_order), {}, async_group_info, memory_resource.get());
+  SyncGroupInfoList sync_group_info_list{memory_resource.get()};
+  sync_group_info_list.push_back(std::pmr::unordered_set<StrId>{memory_resource.get()});
+  sync_group_info_list.back().insert(StrId("prez"));
+  sync_group_info_list.back().insert(StrId("ao"));
+#if 0
+  // TODO comment-in
+  auto [async_compute_batching, render_pass_unprocessed] = ConfigureAsyncComputeBatching(render_pass_id_map, std::move(render_pass_order), {}, sync_group_info_list, memory_resource.get());
   CHECK(async_compute_batching.size() == 1);
   CHECK(async_compute_batching[0].size() == 3);
   CHECK(async_compute_batching[0][0] == StrId("prez"));
@@ -2128,9 +2188,9 @@ TEST_CASE("AsyncComputeInterFrame") {
   CHECK(render_pass_unprocessed[2] == StrId("lighting"));
   CHECK(render_pass_unprocessed[3] == StrId("postprocess"));
   auto pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, ConvertBatchInfoBackToRenderPassOrder(std::move(async_compute_batching), memory_resource.get()), consumer_producer_render_pass_map, memory_resource.get());
-  render_pass_list = CreateRenderPassListAsyncComputeInterFrame(memory_resource.get());
+  render_pass_list = CreateRenderPassListAsyncCompute(memory_resource.get());
   std::tie(render_pass_id_map, render_pass_order) = FormatRenderPassList(std::move(render_pass_list), memory_resource.get());
-  std::tie(async_compute_batching, render_pass_unprocessed) = ConfigureAsyncComputeBatching(render_pass_id_map, std::move(render_pass_order), std::move(render_pass_unprocessed), async_group_info, memory_resource.get());
+  std::tie(async_compute_batching, render_pass_unprocessed) = ConfigureAsyncComputeBatching(render_pass_id_map, std::move(render_pass_order), std::move(render_pass_unprocessed), sync_group_info_list, memory_resource.get());
   CHECK(async_compute_batching.size() == 1);
   CHECK(async_compute_batching[0].size() == 7);
   CHECK(async_compute_batching[0][0] == StrId("ao"));
@@ -2146,7 +2206,7 @@ TEST_CASE("AsyncComputeInterFrame") {
   CHECK(render_pass_unprocessed[2] == StrId("lighting"));
   CHECK(render_pass_unprocessed[3] == StrId("postprocess"));
   pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, ConvertBatchInfoBackToRenderPassOrder(std::move(async_compute_batching), memory_resource.get()), consumer_producer_render_pass_map, memory_resource.get());
-  std::tie(async_compute_batching, render_pass_unprocessed) = ConfigureAsyncComputeBatching(render_pass_id_map, {}, std::move(render_pass_unprocessed), async_group_info, memory_resource.get());
+  std::tie(async_compute_batching, render_pass_unprocessed) = ConfigureAsyncComputeBatching(render_pass_id_map, {}, std::move(render_pass_unprocessed), sync_group_info_list, memory_resource.get());
   CHECK(async_compute_batching.size() == 1);
   CHECK(async_compute_batching[0].size() == 4);
   CHECK(async_compute_batching[0][0] == StrId("ao"));
@@ -2155,6 +2215,7 @@ TEST_CASE("AsyncComputeInterFrame") {
   CHECK(async_compute_batching[0][3] == StrId("postprocess"));
   CHECK(render_pass_unprocessed.empty());
   pass_signal_info = ConfigureBufferResourceDependency(render_pass_id_map, ConvertBatchInfoBackToRenderPassOrder(std::move(async_compute_batching), memory_resource.get()), consumer_producer_render_pass_map, memory_resource.get());
+#endif
 }
 TEST_CASE("CountSetBitNum") {
   using namespace illuminate::core;
