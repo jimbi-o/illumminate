@@ -321,44 +321,46 @@ SyncGroupIndexList RemoveUnusedPassFromSyncGroupIndexList(const RenderPassOrder&
 BatchInfoList ConfigureIntraFrameAsyncComputeBatching(const RenderPassIdMap& render_pass_id_map, RenderPassOrder&& render_pass_order_master, const SyncGroupInfoList& sync_group_info_list, const SyncGroupIndexList& sync_group_index_list, std::pmr::memory_resource* memory_resource) {
   BatchInfoList batch_info_list{memory_resource};
   batch_info_list.push_back(std::pmr::vector<StrId>{memory_resource});
-  while (!render_pass_order_master.empty()) {
-    auto&& pass_name = render_pass_order_master[0];
-    if (!sync_group_index_list.contains(pass_name)) {
-      batch_info_list.back().push_back(std::move(pass_name));
-      render_pass_order_master.erase(render_pass_order_master.begin());
-      continue;
+  while (true) {
+    auto master_it = render_pass_order_master.begin();
+    while (true) {
+      if (master_it == render_pass_order_master.end()) break;
+      if (sync_group_index_list.contains(*master_it)) break;
+      master_it++;
     }
+    batch_info_list.back().insert(batch_info_list.back().end(), std::make_move_iterator(render_pass_order_master.begin()), std::make_move_iterator(master_it));
+    render_pass_order_master.erase(render_pass_order_master.begin(), master_it);
+    if (render_pass_order_master.empty()) break;
+    auto& pass_name = render_pass_order_master[0];
     auto& sync_group = sync_group_info_list[sync_group_index_list.at(pass_name)];
     for (auto& sync_pass : sync_group) {
       if (sync_pass == pass_name) {
         continue;
       }
       auto& sync_pass_command_queue_type = render_pass_id_map.at(sync_pass).command_queue_type;
-      auto it = render_pass_order_master.begin();
-      it++;
-      while (*it != sync_pass) {
-        if (render_pass_id_map.at(*it).command_queue_type == sync_pass_command_queue_type) {
-          batch_info_list.back().push_back(std::move(*it));
-          it = render_pass_order_master.erase(it);
+      master_it = render_pass_order_master.begin();
+      master_it++;
+      while (*master_it != sync_pass) {
+        if (render_pass_id_map.at(*master_it).command_queue_type == sync_pass_command_queue_type) {
+          batch_info_list.back().push_back(std::move(*master_it));
+          master_it = render_pass_order_master.erase(master_it);
         } else {
-          it++;
+          master_it++;
         }
       }
     }
     if (!batch_info_list.back().empty()) {
       batch_info_list.push_back(std::pmr::vector<StrId>{memory_resource});
     }
-    batch_info_list.back().push_back(std::move(pass_name));
-    render_pass_order_master.erase(render_pass_order_master.begin());
-    auto it = render_pass_order_master.begin();
-    uint32_t sync_pass_count = 1;
+    master_it = render_pass_order_master.begin();
+    uint32_t sync_pass_count = 0;
     while (sync_pass_count < sync_group.size()) {
-      if (sync_group.contains(*it)) {
-        batch_info_list.back().push_back(std::move(*it));
-        it = render_pass_order_master.erase(it);
+      if (sync_group.contains(*master_it)) {
+        batch_info_list.back().push_back(std::move(*master_it));
+        master_it = render_pass_order_master.erase(master_it);
         sync_pass_count++;
       } else {
-        it++;
+        master_it++;
       }
     }
   }
