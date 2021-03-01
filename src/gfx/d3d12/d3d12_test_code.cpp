@@ -740,7 +740,8 @@ TEST_CASE("d3d12/render") {
   const uint32_t buffer_tmp_size_in_bytes = 32 * 1024;
   std::byte buffer_tmp[buffer_tmp_size_in_bytes]{};
   std::function<void()> term_func;
-  AsyncComputePairInfo async_group_info{memory_resource.get()};
+  SyncGroupInfoList sync_group_info_list{memory_resource.get()};
+  bool inter_frame_async_compute = false;
   SUBCASE("clear swapchain rtv@graphics queue") {
     render_pass_list.push_back(RenderPass(
         StrId("mainpass"),
@@ -848,13 +849,13 @@ TEST_CASE("d3d12/render") {
       copy_pipeline_state->Release();
     };
     SUBCASE("no async") {
-      async_group_info.clear(); // should be empty though.
+      sync_group_info_list.clear(); // should be empty though.
     }
     SUBCASE("inter-frame async compute") {
-      auto group_name = StrId("async-group0");
-      async_group_info.insert({group_name, AsyncComputeBatchPairType::kPairComputeWithNextFrameGraphics});
-      render_pass_list[0].AsyncComputeGroup(group_name);
-      render_pass_list[1].AsyncComputeGroup(group_name);
+      inter_frame_async_compute = true;
+      sync_group_info_list.push_back(std::pmr::unordered_set<StrId>{memory_resource.get()});
+      sync_group_info_list.back().insert(StrId("mainpass"));
+      sync_group_info_list.back().insert(StrId("copy"));
     }
   }
 #if 0
@@ -887,10 +888,12 @@ TEST_CASE("d3d12/render") {
     render_pass_order = CullUnusedRenderPass(std::move(render_pass_order), used_render_pass_list, render_pass_id_map);
   }
   auto render_pass_order_master = render_pass_order;
+  auto sync_group_index_list = GetSyncGroupIndexList(sync_group_info_list, memory_resource.get());
+  sync_group_index_list = RemoveUnusedPassFromSyncGroupIndexList(render_pass_order, std::move(sync_group_index_list));
   std::pmr::unordered_map<CommandQueueType, uint64_t> pass_signal_val{memory_resource.get()};
   std::pmr::vector<std::unordered_map<CommandQueueType, uint64_t>> frame_wait_signal{memory_resource.get()};
   frame_wait_signal.resize(buffer_num);
-  RenderPassOrder prev_render_pass_order;
+  RenderPassOrder render_pass_order_leftover;
   BufferIdList prev_buffer_id_list;
   BufferInfoSet buffers;
   PassBarrierInfoSet barriers;
@@ -908,8 +911,14 @@ TEST_CASE("d3d12/render") {
     {
       // queue signal, wait info
       render_pass_order = render_pass_order_master;
-      auto [batch_info_list, unprocessed_render_pass] = ConfigureAsyncComputeBatching(render_pass_id_map, std::move(render_pass_order), std::move(prev_render_pass_order), async_group_info, memory_resource_double_buffered.get());
-      prev_render_pass_order = std::move(unprocessed_render_pass);
+      BatchInfoList batch_info_list;
+      if (inter_frame_async_compute) {
+        auto [render_pass_order_current, render_pass_order_next] = SeparateRenderPassOrderToCurrentAndNextFrame(std::move(render_pass_order), sync_group_info_list, sync_group_index_list, memory_resource_double_buffered.get());
+        batch_info_list = ConfigureInterFrameAsyncComputeBatching(render_pass_id_map, std::move(render_pass_order_current), std::move(render_pass_order_leftover), sync_group_info_list, sync_group_index_list, memory_resource_double_buffered.get());
+        render_pass_order_leftover = render_pass_order_next;
+      } else {
+        batch_info_list = ConfigureIntraFrameAsyncComputeBatching(render_pass_id_map, std::move(render_pass_order), sync_group_info_list, sync_group_index_list, memory_resource_tmp.get());
+      }
       auto pass_signal_info_batch = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource_tmp.get());
       render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource_tmp.get());
       std::tie(buffer_id_list, prev_buffer_id_list) = MergeBufferIdListFromPrevFrame(std::move(prev_buffer_id_list), render_pass_id_map, render_pass_order, memory_resource_double_buffered.get());

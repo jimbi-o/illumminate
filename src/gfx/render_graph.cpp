@@ -367,10 +367,16 @@ BatchInfoList ConfigureIntraFrameAsyncComputeBatching(const RenderPassIdMap& ren
   return batch_info_list;
 }
 std::tuple<RenderPassOrder, RenderPassOrder> SeparateRenderPassOrderToCurrentAndNextFrame(RenderPassOrder&& render_pass_order_master, const SyncGroupInfoList& sync_group_info_list, const SyncGroupIndexList& sync_group_index_list, std::pmr::memory_resource* memory_resource) {
+  if (sync_group_index_list.empty()) {
+    return {render_pass_order_master, RenderPassOrder{memory_resource}};
+  }
   auto next_begin = render_pass_order_master.begin();
   while (next_begin != render_pass_order_master.end()) {
     if (sync_group_index_list.contains(*next_begin)) break;
     next_begin++;
+  }
+  if (next_begin == render_pass_order_master.end()) {
+    return {render_pass_order_master, RenderPassOrder{memory_resource}};
   }
   auto& sync_group = sync_group_info_list[sync_group_index_list.at(*next_begin)];
   next_begin++;
