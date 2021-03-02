@@ -915,7 +915,7 @@ TEST_CASE("d3d12/render") {
       if (inter_frame_async_compute) {
         auto [render_pass_order_current, render_pass_order_next] = SeparateRenderPassOrderToCurrentAndNextFrame(std::move(render_pass_order), sync_group_info_list, sync_group_index_list, memory_resource_double_buffered.get());
         batch_info_list = ConfigureInterFrameAsyncComputeBatching(render_pass_id_map, std::move(render_pass_order_current), std::move(render_pass_order_leftover), sync_group_info_list, sync_group_index_list, memory_resource_double_buffered.get());
-        render_pass_order_leftover = render_pass_order_next;
+        render_pass_order_leftover = std::move(render_pass_order_next);
       } else {
         batch_info_list = ConfigureIntraFrameAsyncComputeBatching(render_pass_id_map, std::move(render_pass_order), sync_group_info_list, sync_group_index_list, memory_resource_tmp.get());
       }
