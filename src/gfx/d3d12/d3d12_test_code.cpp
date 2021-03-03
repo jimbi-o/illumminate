@@ -171,19 +171,6 @@ std::pair<D3D12MA::Allocation*, ID3D12Resource*> CreatePhysicalBufferOnHeap(cons
   logerror("CreateResource failed. {} {}", hr, heap_type);
   return {nullptr, nullptr};
 }
-using PhysicalBufferList = std::pmr::unordered_map<BufferId, ID3D12Resource*>;
-using PhysicalAllocationList = std::pmr::unordered_map<BufferId, D3D12MA::Allocation*>;
-std::pair<PhysicalAllocationList, PhysicalBufferList> CreatePhysicalBuffers(const BufferCreationDescList& buffer_creation_descs, [[maybe_unused]]const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_size_in_byte, [[maybe_unused]]const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_alignment, [[maybe_unused]]const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_address_offset, [[maybe_unused]]PhysicalBufferList&& physical_buffer, D3D12MA::Allocator* const allocator, std::pmr::memory_resource* memory_resource) {
-  // TODO resource aliasing (available in library?)
-  PhysicalAllocationList physical_allocation{memory_resource};
-  for (auto& [id, desc] : buffer_creation_descs) {
-    if (physical_buffer.contains(id)) continue;
-    auto pair = CreatePhysicalBufferOnHeap(D3D12_HEAP_TYPE_DEFAULT, desc, allocator);
-    physical_allocation.insert({id, pair.first});
-    physical_buffer.insert({id, pair.second});
-  }
-  return {physical_allocation, std::move(physical_buffer)};
-}
 D3D12MA::Allocator* CreateMemoryHeapAllocator(D3d12Device* const device, DxgiAdapter* const adapter) {
   D3D12MA::Allocator* allocator = nullptr;
   D3D12MA::ALLOCATOR_DESC desc = {};
@@ -425,71 +412,123 @@ constexpr D3D12_DEPTH_STENCIL_VIEW_DESC GetD3d12DepthStencilViewDesc(const Buffe
   }
   return view_desc;
 }
-using CpuHandleListPerBuffer = std::pmr::unordered_map<BufferId, std::pmr::unordered_map<BufferStateType, D3D12_CPU_DESCRIPTOR_HANDLE>>;
-struct BufferInfoSet {
-  BufferInfoSet()
-      : physical_buffer_allocator(nullptr) {}
-  BufferInfoSet(D3D12MA::Allocator* const allocator, std::pmr::memory_resource* memory_resource)
-      : physical_buffer_allocator(allocator)
-      , physical_buffer(memory_resource)
-      , physical_allocation(memory_resource)
-      , cpu_descriptor_handles_per_buffer(memory_resource)
-      , gpu_descriptor_handles(memory_resource)
-      , cpu_descriptor_handles(memory_resource)
-      , pass_resources(memory_resource) {}
-  D3D12MA::Allocator* physical_buffer_allocator;
-  PhysicalBufferList physical_buffer;
-  PhysicalAllocationList physical_allocation;
-  CpuHandleListPerBuffer cpu_descriptor_handles_per_buffer;
-  std::pmr::unordered_map<StrId, D3D12_GPU_DESCRIPTOR_HANDLE> gpu_descriptor_handles; // cbv, srv, uav
-  std::pmr::unordered_map<StrId, std::pmr::vector<D3D12_CPU_DESCRIPTOR_HANDLE>> cpu_descriptor_handles; // uav, dsv, rtv
-  std::pmr::unordered_map<StrId, std::pmr::vector<ID3D12Resource*>> pass_resources; // uav, copy_src, copy_dst
-  BufferStateList current_buffer_state_list;
-};
-BufferInfoSet CreateBufferInfoSet(D3d12Device* const device, DxgiAdapter* const adapter,
-                                  const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list,
-                                  const BufferSize2d& mainbuffer_size, const BufferSize2d& swapchain_size,
-                                  PhysicalBufferList&& external_buffers, CpuHandleListPerBuffer&& external_cpu_handles,
-                                  DescriptorHeap* const descriptor_heap_buffers, DescriptorHeap* const descriptor_heap_rtv, DescriptorHeap* const descriptor_heap_dsv,
-                                  ShaderVisibleDescriptorHeap* const shader_visible_descriptor_heap,
-                                  std::pmr::memory_resource* memory_resource) {
-  BufferInfoSet set(CreateMemoryHeapAllocator(device, adapter), memory_resource);
-  // prepare physical buffers
-  auto buffer_creation_descs = ConfigureBufferCreationDescs(render_pass_id_map, render_pass_order, buffer_id_list, mainbuffer_size, swapchain_size, memory_resource);
-  auto [physical_buffer_size_in_byte, physical_buffer_alignment] = GetPhysicalBufferSizes(buffer_creation_descs, device, memory_resource);
-  {
-    // TODO aliasing barrier
-    auto [physical_buffer_lifetime_begin_pass, physical_buffer_lifetime_end_pass] = CalculatePhysicalBufferLiftime(render_pass_order, buffer_id_list, memory_resource);
-    auto physical_buffer_address_offset = GetPhysicalBufferAddressOffset(render_pass_order, physical_buffer_lifetime_begin_pass, physical_buffer_lifetime_end_pass, physical_buffer_size_in_byte, physical_buffer_alignment, memory_resource);
-    std::tie(set.physical_allocation, set.physical_buffer) = CreatePhysicalBuffers(buffer_creation_descs, physical_buffer_size_in_byte, physical_buffer_alignment, physical_buffer_address_offset, std::move(external_buffers), set.physical_buffer_allocator, memory_resource);
+using PhysicalBufferList = std::pmr::unordered_map<BufferId, ID3D12Resource*>;
+using PhysicalAllocationList = std::pmr::unordered_map<BufferId, D3D12MA::Allocation*>;
+BufferCreationDescList GatherBufferCreationInfo(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list,
+                                                const BufferSize2d& mainbuffer_size, const BufferSize2d& swapchain_size,
+                                                const PhysicalBufferList& physical_buffer,
+                                                std::pmr::memory_resource* memory_resource) {
+  BufferCreationDescList buffer_creation_descs{memory_resource};
+  std::pmr::unordered_set<BufferId> merge_failed_buffers{memory_resource};
+  for (auto& pass_name : render_pass_order) {
+    auto& pass = render_pass_id_map.at(pass_name);
+    auto& pass_buffer_ids = buffer_id_list.at(pass_name);
+    for (uint32_t buffer_index = 0; auto& buffer : pass.buffer_list) {
+      auto buffer_id = pass_buffer_ids[buffer_index];
+      buffer_index++;
+      if (physical_buffer.contains(buffer_id)) continue;
+      if (!buffer_creation_descs.contains(buffer_id)) {
+        buffer_creation_descs.insert({buffer_id, BufferCreationDesc(buffer, mainbuffer_size, swapchain_size)});
+      }
+      auto& desc = buffer_creation_descs.at(buffer_id);
+      auto new_flag = GetBufferStateFlag(buffer.state_type, buffer.load_op_type);
+      if (!merge_failed_buffers.contains(buffer_id)) {
+        if (IsBufferStateFlagMergeable(desc.initial_state_flag, new_flag)) {
+          desc.initial_state_flag = static_cast<BufferStateFlags>(desc.initial_state_flag | new_flag);
+        } else {
+          merge_failed_buffers.insert(buffer_id);
+        }
+      }
+      desc.state_flags = static_cast<BufferStateFlags>(new_flag | desc.state_flags);
+    }
   }
-  // prepare pass buffer handles and resources
-  auto& physical_buffer = set.physical_buffer;
-  auto& gpu_descriptor_handles = set.gpu_descriptor_handles;
-  auto& cpu_descriptor_handles = set.cpu_descriptor_handles;
-  auto& pass_resources = set.pass_resources;
-  auto& cpu_descriptor_handles_per_buffer = set.cpu_descriptor_handles_per_buffer;
-  cpu_descriptor_handles_per_buffer = std::move(external_cpu_handles);
+  return buffer_creation_descs;
+}
+void AllocateMissingPhysicalBuffers(D3D12MA::Allocator* const allocator, const BufferCreationDescList& buffer_creation_descs, PhysicalBufferList* const physical_buffer, PhysicalAllocationList* const physical_allocation) {
+#if 0
+  // TODO resource aliasing (available in library?) + barrier
+  auto [physical_buffer_size_in_byte, physical_buffer_alignment] = GetPhysicalBufferSizes(buffer_creation_descs, device, memory_resource);
+  auto [physical_buffer_lifetime_begin_pass, physical_buffer_lifetime_end_pass] = CalculatePhysicalBufferLiftime(render_pass_order, buffer_id_list, memory_resource);
+  auto physical_buffer_address_offset = GetPhysicalBufferAddressOffset(render_pass_order, physical_buffer_lifetime_begin_pass, physical_buffer_lifetime_end_pass, physical_buffer_size_in_byte, physical_buffer_alignment, memory_resource);
+#endif
+  for (auto& [id, desc] : buffer_creation_descs) {
+    auto [allocation, resource] = CreatePhysicalBufferOnHeap(D3D12_HEAP_TYPE_DEFAULT, desc, allocator);
+    physical_allocation->insert({id, allocation});
+    physical_buffer->insert({id, resource});
+  }
+}
+using CpuHandleListPerBuffer = std::pmr::unordered_map<BufferId, std::pmr::unordered_map<BufferStateType, D3D12_CPU_DESCRIPTOR_HANDLE>>;
+void CreateMissingCpuDescriptors(D3d12Device* const device,
+                                 const RenderPassIdMap& render_pass_id_map, const BufferIdList& buffer_id_list,
+                                 const PhysicalBufferList& physical_buffer, const std::pmr::unordered_map<BufferId, uint32_t>& physical_buffer_size_in_byte,
+                                 DescriptorHeap* const descriptor_heap_buffers, DescriptorHeap* const descriptor_heap_rtv, DescriptorHeap* const descriptor_heap_dsv,
+                                 CpuHandleListPerBuffer* const cpu_descriptor_handles_per_buffer, std::pmr::memory_resource* const memory_resource) {
+  for (auto& [pass_name, buffer_ids] : buffer_id_list) {
+    auto& pass = render_pass_id_map.at(pass_name);
+    for (uint32_t i = 0; i < buffer_ids.size(); i++) {
+      auto& buffer_id = buffer_ids[i];
+      if (!cpu_descriptor_handles_per_buffer->contains(buffer_id)) {
+        cpu_descriptor_handles_per_buffer->insert({buffer_id, std::pmr::unordered_map<BufferStateType, D3D12_CPU_DESCRIPTOR_HANDLE>{memory_resource}});
+      }
+      auto state_type = pass.buffer_list[i].state_type;
+      if (cpu_descriptor_handles_per_buffer->at(buffer_id).contains(state_type)) continue;
+      auto descriptor_heap = descriptor_heap_buffers;
+      if (state_type == BufferStateType::kRtv) {
+        descriptor_heap = descriptor_heap_rtv;
+      } else if (state_type == BufferStateType::kDsv) {
+        descriptor_heap = descriptor_heap_dsv;
+      }
+      auto cpu_handle = descriptor_heap->RetainHandle();
+      cpu_descriptor_handles_per_buffer->at(buffer_id).insert({state_type, cpu_handle});
+      auto& resource = physical_buffer.at(buffer_id);
+      auto& buffer_config = pass.buffer_list[i];
+      switch (state_type) {
+        case BufferStateType::kCbv: {
+          D3D12_CONSTANT_BUFFER_VIEW_DESC desc{resource->GetGPUVirtualAddress(), physical_buffer_size_in_byte.at(buffer_id)};
+          device->CreateConstantBufferView(&desc, cpu_handle);
+          break;
+        }
+        case BufferStateType::kSrvPsOnly:
+        case BufferStateType::kSrvNonPs:
+        case BufferStateType::kSrvAll: {
+          auto desc = GetD3d12ShaderResourceViewDesc(buffer_config, resource);
+          device->CreateShaderResourceView(resource, &desc, cpu_handle);
+          break;
+        }
+        case BufferStateType::kUav: {
+          auto desc = GetD3d12UnorderedAccessViewDesc(buffer_config);
+          device->CreateUnorderedAccessView(resource, nullptr, &desc, cpu_handle);
+          break;
+        }
+        case BufferStateType::kRtv: {
+          auto desc = GetD3d12RenderTargetViewDesc(buffer_config);
+          device->CreateRenderTargetView(resource, &desc, cpu_handle);
+          break;
+        }
+        case BufferStateType::kDsv: {
+          auto desc = GetD3d12DepthStencilViewDesc(buffer_config);
+          device->CreateDepthStencilView(resource, &desc, cpu_handle);
+          break;
+        }
+        case BufferStateType::kCopySrc:
+        case BufferStateType::kCopyDst:
+        case BufferStateType::kPresent: {
+          break;
+        }
+      }
+    }
+  }
+}
+std::tuple<std::pmr::unordered_map<StrId, D3D12_GPU_DESCRIPTOR_HANDLE>, std::pmr::unordered_map<StrId, std::pmr::vector<D3D12_CPU_DESCRIPTOR_HANDLE>>, std::pmr::unordered_map<StrId, std::pmr::vector<ID3D12Resource*>>> SetupResourceHandlesPerPass(D3d12Device* const device, const RenderPassIdMap& render_pass_id_map, const BufferIdList& buffer_id_list, const CpuHandleListPerBuffer& cpu_descriptor_handles_per_buffer, const PhysicalBufferList& physical_buffer, ShaderVisibleDescriptorHeap* const shader_visible_descriptor_heap, std::pmr::memory_resource* memory_resource) {
+  std::pmr::unordered_map<StrId, D3D12_GPU_DESCRIPTOR_HANDLE> gpu_descriptor_handles{memory_resource};
+  std::pmr::unordered_map<StrId, std::pmr::vector<D3D12_CPU_DESCRIPTOR_HANDLE>> cpu_descriptor_handles{memory_resource};
+  std::pmr::unordered_map<StrId, std::pmr::vector<ID3D12Resource*>> pass_resources{memory_resource};
   for (auto& [pass_name, buffer_ids] : buffer_id_list) {
     auto& pass = render_pass_id_map.at(pass_name);
     std::pmr::vector<D3D12_CPU_DESCRIPTOR_HANDLE> handles_to_copy_to_gpu{memory_resource};
     for (uint32_t i = 0; i < buffer_ids.size(); i++) {
       auto& buffer_id = buffer_ids[i];
-      if (!cpu_descriptor_handles_per_buffer.contains(buffer_id)) {
-        cpu_descriptor_handles_per_buffer.insert({buffer_id, std::pmr::unordered_map<BufferStateType, D3D12_CPU_DESCRIPTOR_HANDLE>{memory_resource}});
-      }
       auto state_type = pass.buffer_list[i].state_type;
-      auto create_handle = !cpu_descriptor_handles_per_buffer.at(buffer_id).contains(state_type);
-      if (create_handle) {
-        auto descriptor_heap = descriptor_heap_buffers;
-        if (state_type == BufferStateType::kRtv) {
-          descriptor_heap = descriptor_heap_rtv;
-        } else if (state_type == BufferStateType::kDsv) {
-          descriptor_heap = descriptor_heap_dsv;
-        }
-        auto handle = descriptor_heap->RetainHandle();
-        cpu_descriptor_handles_per_buffer.at(buffer_id).insert({state_type, handle});
-      }
       auto& cpu_handle = cpu_descriptor_handles_per_buffer.at(buffer_id).at(state_type);
       auto& resource = physical_buffer.at(buffer_id);
       auto& buffer_config = pass.buffer_list[i];
@@ -498,46 +537,26 @@ BufferInfoSet CreateBufferInfoSet(D3d12Device* const device, DxgiAdapter* const 
       bool push_back_resource = false;
       switch (state_type) {
         case BufferStateType::kCbv: {
-          if (create_handle) {
-            D3D12_CONSTANT_BUFFER_VIEW_DESC desc{resource->GetGPUVirtualAddress(), physical_buffer_size_in_byte.at(buffer_id)};
-            device->CreateConstantBufferView(&desc, cpu_handle);
-          }
           push_back_gpu_handle = true;
           break;
         }
         case BufferStateType::kSrvPsOnly:
         case BufferStateType::kSrvNonPs:
         case BufferStateType::kSrvAll: {
-          if (create_handle) {
-            auto desc = GetD3d12ShaderResourceViewDesc(buffer_config, resource);
-            device->CreateShaderResourceView(resource, &desc, cpu_handle);
-          }
           push_back_gpu_handle = true;
           break;
         }
         case BufferStateType::kUav: {
-          if (create_handle) {
-            auto desc = GetD3d12UnorderedAccessViewDesc(buffer_config);
-            device->CreateUnorderedAccessView(resource, nullptr, &desc, cpu_handle);
-          }
           push_back_cpu_handle = true;
           push_back_gpu_handle = true;
           push_back_resource = true;
           break;
         }
         case BufferStateType::kRtv: {
-          if (create_handle) {
-            auto desc = GetD3d12RenderTargetViewDesc(buffer_config);
-            device->CreateRenderTargetView(resource, &desc, cpu_handle);
-          }
           push_back_cpu_handle = true;
           break;
         }
         case BufferStateType::kDsv: {
-          if (create_handle) {
-            auto desc = GetD3d12DepthStencilViewDesc(buffer_config);
-            device->CreateDepthStencilView(resource, &desc, cpu_handle);
-          }
           push_back_cpu_handle = true;
           break;
         }
@@ -565,35 +584,7 @@ BufferInfoSet CreateBufferInfoSet(D3d12Device* const device, DxgiAdapter* const 
       gpu_descriptor_handles.insert({pass_name, gpu_handle});
     }
   }
-  // barrier configuration
-  set.current_buffer_state_list = CreateBufferCreationStateList(buffer_creation_descs, memory_resource);
-  return set;
-}
-void UpdateExternalBufferPointers(const PhysicalBufferList& external_buffers, const CpuHandleListPerBuffer& external_handles, const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, const BufferIdList& buffer_id_list, BufferInfoSet* const dst) {
-  for (auto& [buffer_id , resource] : external_buffers) {
-    dst->physical_buffer.insert_or_assign(buffer_id, resource);
-  }
-  for (auto& pass_name: render_pass_order) {
-    auto& pass = render_pass_id_map.at(pass_name);
-    auto& buffers = buffer_id_list.at(pass_name);
-    for (uint32_t buffer_index = 0; buffer_index < buffers.size(); buffer_index++) {
-      auto& buffer_id = buffers[buffer_index];
-      if (external_handles.contains(buffer_id)) {
-        auto& buffer_config = pass.buffer_list[buffer_index];
-        if (buffer_config.state_type == BufferStateType::kRtv && external_handles.at(buffer_id).contains(BufferStateType::kRtv)) {
-          uint32_t buffer_index_in_cpu_descritors = 0;
-          for (uint32_t check_buffer_index = 0; check_buffer_index < buffer_index; check_buffer_index++) {
-            if (auto& state_type = pass.buffer_list[check_buffer_index].state_type; state_type == BufferStateType::kUav ||  state_type == BufferStateType::kRtv ||  state_type == BufferStateType::kDsv) {
-              buffer_index_in_cpu_descritors++;
-            }
-          }
-          dst->cpu_descriptor_handles.at(pass_name)[buffer_index_in_cpu_descritors] = external_handles.at(buffer_id).at(BufferStateType::kRtv);
-        } else {
-          ASSERT(false);
-        }
-      }
-    }
-  }
+  return {gpu_descriptor_handles, cpu_descriptor_handles, pass_resources};
 }
 void RetainCommandList(const CommandQueueType pass_queue_type, CommandAllocator* command_allocator, std::pmr::unordered_map<CommandQueueType, D3d12CommandList**>* command_lists, CommandList* command_list_pool, ShaderVisibleDescriptorHeap* shader_visible_descriptor_heap, std::pmr::vector<std::pmr::vector<ID3D12CommandAllocator**>>* allocators) {
   if (command_lists->contains(pass_queue_type)) return;
@@ -703,7 +694,7 @@ TEST_CASE("d3d12/render") {
   using namespace illuminate;
   using namespace illuminate::gfx;
   using namespace illuminate::gfx::d3d12;
-  const uint32_t buffer_size_in_bytes = 4 * 1024;
+  const uint32_t buffer_size_in_bytes = 16 * 1024;
   std::byte buffer[buffer_size_in_bytes]{};
   auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
   const uint32_t buffer_num = 2;
@@ -734,6 +725,10 @@ TEST_CASE("d3d12/render") {
   CHECK(descriptor_heap_buffers.Init(device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, descriptor_handle_num));
   CHECK(descriptor_heap_rtv.Init(device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, descriptor_handle_num));
   CHECK(descriptor_heap_dsv.Init(device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_DSV, descriptor_handle_num));
+  auto physical_buffer_allocator = CreateMemoryHeapAllocator(device.Get(), dxgi_core.GetAdapter());
+  PhysicalBufferList physical_buffers{memory_resource.get()};
+  PhysicalAllocationList physical_allocations{memory_resource.get()};
+  CpuHandleListPerBuffer cpu_descriptor_handles_per_buffer{memory_resource.get()};
   RenderPassList render_pass_list{memory_resource.get()};
   using RenderFunction = std::function<void(D3d12CommandList* const, const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, ID3D12Resource** resource)>;
   std::pmr::unordered_map<StrId, RenderFunction> render_functions{memory_resource.get()};
@@ -895,8 +890,8 @@ TEST_CASE("d3d12/render") {
   frame_wait_signal.resize(buffer_num);
   RenderPassOrder render_pass_order_leftover;
   BufferIdList prev_buffer_id_list;
-  BufferInfoSet buffers;
   PassBarrierInfoSet barriers;
+  BufferStateList current_buffer_state_list;
   const uint32_t buffer_double_buffered_size_in_bytes = 32 * 1024;
   std::byte buffer_double_buffered[buffer_double_buffered_size_in_bytes * 2]{};
   auto memory_resource_double_buffered = std::make_shared<PmrDoubleBufferedAllocator>(buffer_double_buffered, &buffer_double_buffered[buffer_double_buffered_size_in_bytes], buffer_double_buffered_size_in_bytes);
@@ -931,37 +926,35 @@ TEST_CASE("d3d12/render") {
     command_queue.WaitOnCpu(std::move(frame_wait_signal[frame_index]));
     std::optional<BufferId> swapchain_buffer_id;
     {
-      auto external_buffers = std::move(buffers.physical_buffer);
-      auto external_handles = std::move(buffers.cpu_descriptor_handles_per_buffer);
       MandatoryOutputBufferNameList named_buffer_list{memory_resource_tmp.get()};
       named_buffer_list.insert(StrId("swapchain"));
       auto named_buffers = IdentifyMandatoryOutputBufferId(render_pass_id_map, render_pass_order, buffer_id_list, named_buffer_list, memory_resource_tmp.get());
       if (named_buffers.contains(StrId("swapchain"))) {
         swapchain_buffer_id = named_buffers.at(StrId("swapchain"));
         swapchain.UpdateBackBufferIndex();
-        external_buffers.insert_or_assign(*swapchain_buffer_id, swapchain.GetResource());
-        if (!external_handles.contains(*swapchain_buffer_id)) {
-          external_handles.insert({*swapchain_buffer_id, std::pmr::unordered_map<BufferStateType, D3D12_CPU_DESCRIPTOR_HANDLE>{memory_resource_double_buffered.get()}});
+        physical_buffers.insert_or_assign(*swapchain_buffer_id, swapchain.GetResource());
+        if (!cpu_descriptor_handles_per_buffer.contains(*swapchain_buffer_id)) {
+          cpu_descriptor_handles_per_buffer.insert({*swapchain_buffer_id, std::pmr::unordered_map<BufferStateType, D3D12_CPU_DESCRIPTOR_HANDLE>{memory_resource.get()}});
         }
-        external_handles.at(*swapchain_buffer_id).insert_or_assign(BufferStateType::kRtv, swapchain.GetRtvHandle());
+        cpu_descriptor_handles_per_buffer.at(*swapchain_buffer_id).insert_or_assign(BufferStateType::kRtv, swapchain.GetRtvHandle());
       }
-      buffers = CreateBufferInfoSet(device.Get(), dxgi_core.GetAdapter(),
-                                    render_pass_id_map, render_pass_order, buffer_id_list,
-                                    mainbuffer_size, swapchain_size,
-                                    std::move(external_buffers), std::move(external_handles),
-                                    &descriptor_heap_buffers, &descriptor_heap_rtv, &descriptor_heap_dsv,
-                                    &shader_visible_descriptor_heap,
-                                    memory_resource_double_buffered.get());
+      auto buffer_creation_descs = GatherBufferCreationInfo(render_pass_id_map, render_pass_order, buffer_id_list, mainbuffer_size, swapchain_size, physical_buffers, memory_resource_tmp.get());
+      AllocateMissingPhysicalBuffers(physical_buffer_allocator, buffer_creation_descs, &physical_buffers, &physical_allocations);
+      auto physical_buffer_size_in_byte = std::get<0>(GetPhysicalBufferSizes(buffer_creation_descs, device.Get(), memory_resource_tmp.get()));
+      CreateMissingCpuDescriptors(device.Get(), render_pass_id_map, buffer_id_list, physical_buffers, physical_buffer_size_in_byte, &descriptor_heap_buffers, &descriptor_heap_rtv, &descriptor_heap_dsv, &cpu_descriptor_handles_per_buffer, memory_resource.get());
+      auto buffer_creation_state_list = CreateBufferCreationStateList(buffer_creation_descs, memory_resource.get());
+      current_buffer_state_list.insert(std::make_move_iterator(buffer_creation_state_list.begin()), std::make_move_iterator(buffer_creation_state_list.end()));
     }
+    auto [gpu_descriptor_handles, cpu_descriptor_handles, pass_resources] = SetupResourceHandlesPerPass(device.Get(), render_pass_id_map, buffer_id_list, cpu_descriptor_handles_per_buffer, physical_buffers, &shader_visible_descriptor_heap, memory_resource_tmp.get());
     BufferStateList buffer_state_after_render_pass_list{memory_resource_tmp.get()};
     if (swapchain_buffer_id) {
-      buffers.current_buffer_state_list.insert_or_assign(*swapchain_buffer_id, kBufferStateFlagPresent);
+      current_buffer_state_list.insert_or_assign(*swapchain_buffer_id, kBufferStateFlagPresent);
       buffer_state_after_render_pass_list.insert({*swapchain_buffer_id, kBufferStateFlagPresent});
     }
-    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, buffers.current_buffer_state_list, buffer_state_after_render_pass_list, memory_resource_tmp.get());
+    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, current_buffer_state_list, buffer_state_after_render_pass_list, memory_resource_tmp.get());
     auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource_tmp.get());
     barriers = MergeBarriers(std::move(barriers), ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource_tmp.get()));
-    auto [current_frame_barriers, next_frame_barriers] = ConfigureBarrierForNextFrame(render_pass_id_map, render_pass_order, buffers.current_buffer_state_list, buffer_state_after_render_pass_list, inter_pass_distance_map, buffer_state_change_list, memory_resource_double_buffered.get());
+    auto [current_frame_barriers, next_frame_barriers] = ConfigureBarrierForNextFrame(render_pass_id_map, render_pass_order, current_buffer_state_list, buffer_state_after_render_pass_list, inter_pass_distance_map, buffer_state_change_list, memory_resource_double_buffered.get());
     barriers = MergeBarriers(std::move(barriers), std::move(current_frame_barriers));
     {
       for (auto a : allocators.front()) {
@@ -988,18 +981,18 @@ TEST_CASE("d3d12/render") {
       }
       if (barriers.barrier_before_pass.contains(pass_name)) {
         RetainCommandList(pass_queue_type, &command_allocator, &command_lists, &command_list_pool, &shader_visible_descriptor_heap, &allocators);
-        ExecuteBarrier(barriers.barrier_before_pass.at(pass_name), buffers.physical_buffer, command_lists.at(pass_queue_type)[0], &buffers.current_buffer_state_list, memory_resource_tmp.get());
+        ExecuteBarrier(barriers.barrier_before_pass.at(pass_name), physical_buffers, command_lists.at(pass_queue_type)[0], &current_buffer_state_list, memory_resource_tmp.get());
       }
       {
         RetainCommandList(pass_queue_type, &command_allocator, &command_lists, &command_list_pool, &shader_visible_descriptor_heap, &allocators);
-        auto gpu_handle_ptr = buffers.gpu_descriptor_handles.contains(pass_name) ? buffers.gpu_descriptor_handles.at(pass_name) : D3D12_GPU_DESCRIPTOR_HANDLE{};
-        auto cpu_handle_ptr = buffers.cpu_descriptor_handles.contains(pass_name) ? buffers.cpu_descriptor_handles.at(pass_name).data() : nullptr;
-        auto resource_ptr   = buffers.pass_resources.contains(pass_name) ? buffers.pass_resources.at(pass_name).data() : nullptr;
+        auto gpu_handle_ptr = gpu_descriptor_handles.contains(pass_name) ? gpu_descriptor_handles.at(pass_name) : D3D12_GPU_DESCRIPTOR_HANDLE{};
+        auto cpu_handle_ptr = cpu_descriptor_handles.contains(pass_name) ? cpu_descriptor_handles.at(pass_name).data() : nullptr;
+        auto resource_ptr   = pass_resources.contains(pass_name) ? pass_resources.at(pass_name).data() : nullptr;
         render_functions.at(pass_name)(command_lists.at(pass_queue_type)[0], gpu_handle_ptr, cpu_handle_ptr, resource_ptr);
       }
       if (barriers.barrier_after_pass.contains(pass_name)) {
         RetainCommandList(pass_queue_type, &command_allocator, &command_lists, &command_list_pool, &shader_visible_descriptor_heap, &allocators);
-        ExecuteBarrier(barriers.barrier_after_pass.at(pass_name), buffers.physical_buffer, command_lists.at(pass_queue_type)[0], &buffers.current_buffer_state_list, memory_resource_tmp.get());
+        ExecuteBarrier(barriers.barrier_after_pass.at(pass_name), physical_buffers, command_lists.at(pass_queue_type)[0], &current_buffer_state_list, memory_resource_tmp.get());
       }
       if (pass_signal_info.contains(pass_name)) {
         ExecuteCommandList(command_lists.at(pass_queue_type), 1, command_queue.Get(pass_queue_type), &command_list_pool);
@@ -1038,12 +1031,12 @@ TEST_CASE("d3d12/render") {
   }
   command_queue.WaitAll();
   if (term_func) term_func();
-  for (auto& [buffer_id, allocation] : buffers.physical_allocation) {
+  for (auto& [buffer_id, allocation] : physical_allocations) {
     if (allocation == nullptr) continue;
     allocation->Release();
-    buffers.physical_buffer.at(buffer_id)->Release();
+    physical_buffers.at(buffer_id)->Release();
   }
-  buffers.physical_buffer_allocator->Release();
+  physical_buffer_allocator->Release();
   while (!allocators.empty()) {
     for (auto a : allocators.back()) {
       command_allocator.ReturnCommandAllocator(a);
