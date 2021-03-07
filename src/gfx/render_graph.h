@@ -125,7 +125,7 @@ using BufferId = uint32_t;
 using PassBufferIdList = std::pmr::vector<BufferId>;
 using BufferIdList = std::pmr::unordered_map<StrId, PassBufferIdList>;
 BufferIdList CreateBufferIdList(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, std::pmr::memory_resource* memory_resource);
-std::tuple<BufferIdList, BufferIdList> MergeBufferIdListFromPrevFrame(BufferIdList&& prev_frame_buffer_id_list, const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, std::pmr::memory_resource* memory_resource);
+std::tuple<BufferIdList, BufferIdList> MergeBufferIdListFromPrevFrame(BufferIdList&& buffer_id_list_leftover, const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order_next_frame, const RenderPassOrder& render_pass_order, std::pmr::memory_resource* memory_resource);
 using BufferNameAliasList = std::pmr::unordered_map<StrId, StrId>;
 BufferIdList ApplyBufferNameAlias(const RenderPassIdMap& render_pass_id_map, const RenderPassOrder& render_pass_order, BufferIdList&& buffer_id_list, const BufferNameAliasList& alias_list, std::pmr::memory_resource* memory_resource);
 class RenderPassAdjacencyGraph {

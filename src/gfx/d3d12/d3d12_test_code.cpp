@@ -64,7 +64,7 @@ constexpr D3D12_RESOURCE_STATES ConvertToD3d12ResourceState(const BufferStateFla
   }
   return state;
 }
-void ExecuteBarrier(const std::pmr::vector<BarrierConfig>& barrier_info_list, const std::pmr::unordered_map<BufferId, ID3D12Resource*>& physical_buffer, D3d12CommandList* const command_list, BufferStateList* const current_buffer_state_list, std::pmr::memory_resource* memory_resource) {
+void ExecuteBarrier(const std::pmr::vector<BarrierConfig>& barrier_info_list, const std::pmr::unordered_map<BufferId, ID3D12Resource*>& physical_buffer, D3d12CommandList* const command_list, std::pmr::memory_resource* memory_resource) {
   const auto barrier_num = static_cast<uint32_t>(barrier_info_list.size());
   std::pmr::vector<D3D12_RESOURCE_BARRIER> barriers{memory_resource};
   barriers.reserve(barrier_num);
@@ -77,7 +77,6 @@ void ExecuteBarrier(const std::pmr::vector<BarrierConfig>& barrier_info_list, co
     barrier.Transition.pResource   = physical_buffer.at(barrier_info.buffer_id);
     barrier.Transition.StateBefore = ConvertToD3d12ResourceState(barrier_info.state_flag_before_pass);
     barrier.Transition.StateAfter  = ConvertToD3d12ResourceState(barrier_info.state_flag_after_pass);
-    current_buffer_state_list->insert_or_assign(barrier_info.buffer_id, barrier_info.state_flag_after_pass);
   }
   command_list->ResourceBarrier(barrier_num, barriers.data());
 }
@@ -728,6 +727,7 @@ TEST_CASE("d3d12/render") {
   auto physical_buffer_allocator = CreateMemoryHeapAllocator(device.Get(), dxgi_core.GetAdapter());
   PhysicalBufferList physical_buffers{memory_resource.get()};
   PhysicalAllocationList physical_allocations{memory_resource.get()};
+  BufferStateList current_buffer_state_list{memory_resource.get()};
   CpuHandleListPerBuffer cpu_descriptor_handles_per_buffer{memory_resource.get()};
   RenderPassList render_pass_list{memory_resource.get()};
   using RenderFunction = std::function<void(D3d12CommandList* const, const D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, ID3D12Resource** resource)>;
@@ -889,9 +889,8 @@ TEST_CASE("d3d12/render") {
   std::pmr::vector<std::unordered_map<CommandQueueType, uint64_t>> frame_wait_signal{memory_resource.get()};
   frame_wait_signal.resize(buffer_num);
   RenderPassOrder render_pass_order_leftover;
-  BufferIdList prev_buffer_id_list;
-  PassBarrierInfoSet barriers;
-  BufferStateList current_buffer_state_list;
+  BufferIdList buffer_id_list_leftover;
+  PassBarrierInfoSet barriers_leftover;
   const uint32_t buffer_double_buffered_size_in_bytes = 32 * 1024;
   std::byte buffer_double_buffered[buffer_double_buffered_size_in_bytes * 2]{};
   auto memory_resource_double_buffered = std::make_shared<PmrDoubleBufferedAllocator>(buffer_double_buffered, &buffer_double_buffered[buffer_double_buffered_size_in_bytes], buffer_double_buffered_size_in_bytes);
@@ -916,7 +915,7 @@ TEST_CASE("d3d12/render") {
       }
       auto pass_signal_info_batch = ConvertBatchToSignalInfo(batch_info_list, render_pass_id_map, memory_resource_tmp.get());
       render_pass_order = ConvertBatchInfoBackToRenderPassOrder(std::move(batch_info_list), memory_resource_tmp.get());
-      std::tie(buffer_id_list, prev_buffer_id_list) = MergeBufferIdListFromPrevFrame(std::move(prev_buffer_id_list), render_pass_id_map, render_pass_order, memory_resource_double_buffered.get());
+      std::tie(buffer_id_list, buffer_id_list_leftover) = MergeBufferIdListFromPrevFrame(std::move(buffer_id_list_leftover), render_pass_id_map, render_pass_order_leftover, render_pass_order_master, memory_resource_double_buffered.get());
       auto adjacency_graph = CreateRenderPassAdjacencyGraph(render_pass_id_map, render_pass_order, buffer_id_list, memory_resource_tmp.get());
       auto consumer_producer_render_pass_map = CreateConsumerProducerMap(adjacency_graph, memory_resource_tmp.get());
       auto pass_signal_info_resource = ConfigureBufferResourceDependency(render_pass_id_map, render_pass_order, consumer_producer_render_pass_map, memory_resource_tmp.get());
@@ -946,16 +945,32 @@ TEST_CASE("d3d12/render") {
       current_buffer_state_list.insert(std::make_move_iterator(buffer_creation_state_list.begin()), std::make_move_iterator(buffer_creation_state_list.end()));
     }
     auto [gpu_descriptor_handles, cpu_descriptor_handles, pass_resources] = SetupResourceHandlesPerPass(device.Get(), render_pass_id_map, buffer_id_list, cpu_descriptor_handles_per_buffer, physical_buffers, &shader_visible_descriptor_heap, memory_resource_tmp.get());
-    BufferStateList buffer_state_after_render_pass_list{memory_resource_tmp.get()};
-    if (swapchain_buffer_id) {
-      current_buffer_state_list.insert_or_assign(*swapchain_buffer_id, kBufferStateFlagPresent);
-      buffer_state_after_render_pass_list.insert({*swapchain_buffer_id, kBufferStateFlagPresent});
+    PassBarrierInfoSet barriers;
+    {
+      BufferStateList buffer_state_after_render_pass_list{memory_resource_tmp.get()};
+      if (swapchain_buffer_id) {
+        current_buffer_state_list.insert_or_assign(*swapchain_buffer_id, kBufferStateFlagPresent);
+        buffer_state_after_render_pass_list.insert({*swapchain_buffer_id, kBufferStateFlagPresent});
+      }
+      // barriers for this frame buffers
+      auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, current_buffer_state_list, buffer_state_after_render_pass_list, memory_resource_tmp.get());
+      auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource_tmp.get());
+      barriers = MergeBarriers(std::move(barriers), ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource_tmp.get()));
+      // barriers for succeeding frame buffers
+      if (inter_frame_async_compute) {
+        ASSERT(false);
+#if 0
+        auto buffer_state_at_frame_end = MergeFrameEndBufferState(std::move(buffer_state_after_render_pass_list), buffer_state_change_list);
+        auto [current_frame_barriers, next_frame_barriers] = ConfigureBarrierForNextFrameForInterFrameAsyncCompute(render_pass_id_map, render_pass_order, buffer_state_at_frame_end, current_buffer_state_list, memory_resource_tmp.get(), memory_resource_double_buffered.get());
+        barriers = MergeBarriers(std::move(barriers), std::move(current_frame_barriers));
+        barriers_leftover = std::move(next_frame_barriers);
+#endif
+      } else {
+        auto [current_frame_barriers, next_frame_barriers] = ConfigureBarrierForNextFrame(render_pass_id_map, render_pass_order, current_buffer_state_list, buffer_state_after_render_pass_list, inter_pass_distance_map, buffer_state_change_list, memory_resource_double_buffered.get());
+        barriers = MergeBarriers(std::move(barriers), std::move(current_frame_barriers));
+        barriers_leftover = std::move(next_frame_barriers);
+      }
     }
-    auto buffer_state_change_list = GatherBufferStateChangeInfo(render_pass_id_map, render_pass_order, buffer_id_list, current_buffer_state_list, buffer_state_after_render_pass_list, memory_resource_tmp.get());
-    auto inter_pass_distance_map = CreateInterPassDistanceMap(render_pass_id_map, render_pass_order, pass_signal_info, memory_resource_tmp.get());
-    barriers = MergeBarriers(std::move(barriers), ConfigureBarrier(render_pass_id_map, buffer_state_change_list, inter_pass_distance_map, memory_resource_tmp.get()));
-    auto [current_frame_barriers, next_frame_barriers] = ConfigureBarrierForNextFrame(render_pass_id_map, render_pass_order, current_buffer_state_list, buffer_state_after_render_pass_list, inter_pass_distance_map, buffer_state_change_list, memory_resource_double_buffered.get());
-    barriers = MergeBarriers(std::move(barriers), std::move(current_frame_barriers));
     {
       for (auto a : allocators.front()) {
         command_allocator.ReturnCommandAllocator(a);
@@ -981,7 +996,7 @@ TEST_CASE("d3d12/render") {
       }
       if (barriers.barrier_before_pass.contains(pass_name)) {
         RetainCommandList(pass_queue_type, &command_allocator, &command_lists, &command_list_pool, &shader_visible_descriptor_heap, &allocators);
-        ExecuteBarrier(barriers.barrier_before_pass.at(pass_name), physical_buffers, command_lists.at(pass_queue_type)[0], &current_buffer_state_list, memory_resource_tmp.get());
+        ExecuteBarrier(barriers.barrier_before_pass.at(pass_name), physical_buffers, command_lists.at(pass_queue_type)[0], memory_resource_tmp.get());
       }
       {
         RetainCommandList(pass_queue_type, &command_allocator, &command_lists, &command_list_pool, &shader_visible_descriptor_heap, &allocators);
@@ -992,7 +1007,7 @@ TEST_CASE("d3d12/render") {
       }
       if (barriers.barrier_after_pass.contains(pass_name)) {
         RetainCommandList(pass_queue_type, &command_allocator, &command_lists, &command_list_pool, &shader_visible_descriptor_heap, &allocators);
-        ExecuteBarrier(barriers.barrier_after_pass.at(pass_name), physical_buffers, command_lists.at(pass_queue_type)[0], &current_buffer_state_list, memory_resource_tmp.get());
+        ExecuteBarrier(barriers.barrier_after_pass.at(pass_name), physical_buffers, command_lists.at(pass_queue_type)[0], memory_resource_tmp.get());
       }
       if (pass_signal_info.contains(pass_name)) {
         ExecuteCommandList(command_lists.at(pass_queue_type), 1, command_queue.Get(pass_queue_type), &command_list_pool);
@@ -1023,7 +1038,6 @@ TEST_CASE("d3d12/render") {
       }
       used_queues.erase(used_queues.begin());
     }
-    barriers = std::move(next_frame_barriers);
     memory_resource_tmp_max_used_bytes = (memory_resource_tmp_max_used_bytes < memory_resource_tmp->GetOffset()) ? memory_resource_tmp->GetOffset() : memory_resource_tmp_max_used_bytes;
     memory_resource_tmp->Reset();
     memory_resource_double_buffered_max_used_bytes = (memory_resource_double_buffered_max_used_bytes < memory_resource_double_buffered->GetOffset()) ? memory_resource_double_buffered->GetOffset() : memory_resource_double_buffered_max_used_bytes;
@@ -1060,5 +1074,5 @@ TEST_CASE("d3d12/render") {
           memory_resource_tmp_max_used_bytes, memory_resource_tmp->GetBufferSizeInByte(), static_cast<float>(memory_resource_tmp_max_used_bytes) / memory_resource_tmp->GetBufferSizeInByte() * 100.0f,
           memory_resource_double_buffered_max_used_bytes, memory_resource_double_buffered->GetBufferSizeInByte(), static_cast<float>(memory_resource_double_buffered_max_used_bytes) / memory_resource_double_buffered->GetBufferSizeInByte() * 100.0f);
 }
-// TODO fix buffer_id_list merge bug(?)
+// TODO barriers for inter-frame barriers
 // TODO uav read/write for uav barrier
