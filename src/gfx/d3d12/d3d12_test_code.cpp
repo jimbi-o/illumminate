@@ -35,12 +35,18 @@ struct DeviceSet {
   }
 };
 struct SignalValues {
+  unordered_map<CommandQueueType, uint64_t> used_signal_val;
   vector<unordered_map<CommandQueueType, uint64_t>> frame_wait_signal;
   bool Init(std::pmr::memory_resource* memory_resource, const uint32_t frame_buffer_num) {
     frame_wait_signal = vector<unordered_map<CommandQueueType, uint64_t>>(frame_buffer_num, memory_resource);
     return true;
   }
 };
+void SignalQueueOnFrameEnd(CommandQueue* const command_queue, CommandQueueType command_queue_type, unordered_map<CommandQueueType, uint64_t>* const used_signal_val, unordered_map<CommandQueueType, uint64_t>* const frame_wait_signal) {
+  auto& signal_val = ++(*used_signal_val)[command_queue_type];
+  command_queue->RegisterSignal(command_queue_type, signal_val);
+  (*frame_wait_signal)[command_queue_type] = signal_val;
+}
 }
 #ifdef BUILD_WITH_TEST
 namespace {
@@ -72,9 +78,9 @@ TEST_CASE("clear swapchain buffer") {
   for (uint32_t frame_no = 0; frame_no < kTestFrameNum; frame_no++) {
     auto frame_index = frame_no % frame_buffer_num;
     devices.command_queue.WaitOnCpu(signal_values.frame_wait_signal[frame_index]);
-    signal_values.frame_wait_signal[frame_index].clear();
     devices.swapchain.UpdateBackBufferIndex();
     devices.swapchain.Present();
+    SignalQueueOnFrameEnd(&devices.command_queue, CommandQueueType::kGraphics, &signal_values.used_signal_val, &signal_values.frame_wait_signal[frame_index]);
   }
   devices.Term();
 }
