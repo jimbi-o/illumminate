@@ -71,5 +71,6 @@ enum BufferStateType : uint8_t { kCommon = 0, kCbv, kSrvPsOnly, kSrvNonPs, kSrvA
 enum BufferLoadOpType : uint8_t { kDontCare = 0, kClear, kLoadWrite, kLoadReadOnly, };
 enum BufferDimensionType : uint8_t { kBuffer = 0, k1d, k1dArray, k2d, k2dArray, k3d, kCube, kCubeArray, kAS, };
 enum ShaderType : uint8_t { kPs, kVs, kGs, kHs, kDs, kCs, kLib, kMs, kAs, };
+struct BufferSize2d { uint32_t width, height; };
 }
 #endif
