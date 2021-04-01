@@ -26,11 +26,19 @@ struct DeviceSet {
     return true;
   }
   void Term() {
+    command_queue.WaitAll();
     swapchain.Term();
     window.Term();
     command_queue.Term();
     device.Term();
     dxgi_core.Term();
+  }
+};
+struct SignalValues {
+  vector<unordered_map<CommandQueueType, uint64_t>> frame_wait_signal;
+  bool Init(std::pmr::memory_resource* memory_resource, const uint32_t frame_buffer_num) {
+    frame_wait_signal = vector<unordered_map<CommandQueueType, uint64_t>>(frame_buffer_num, memory_resource);
+    return true;
   }
 };
 }
@@ -45,6 +53,7 @@ const uint32_t buffer_size_in_bytes_frame = 4 * 1024;
 const uint32_t buffer_offset_in_bytes_work = buffer_offset_in_bytes_frame + buffer_size_in_bytes_frame;
 const uint32_t buffer_size_in_bytes_work = 4 * 1024;
 std::byte buffer[buffer_offset_in_bytes_work + buffer_size_in_bytes_work]{};
+const uint32_t kTestFrameNum = 10;
 }
 #endif
 #include "doctest/doctest.h"
@@ -57,6 +66,15 @@ TEST_CASE("clear swapchain buffer") {
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
   CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
-  devices.Term();
   PmrLinearAllocator memory_resource_persistant(&buffer[buffer_size_in_bytes_persistant], buffer_size_in_bytes_persistant);
+  SignalValues signal_values;
+  CHECK(signal_values.Init(&memory_resource_persistant, frame_buffer_num));
+  for (uint32_t frame_no = 0; frame_no < kTestFrameNum; frame_no++) {
+    auto frame_index = frame_no % frame_buffer_num;
+    devices.command_queue.WaitOnCpu(signal_values.frame_wait_signal[frame_index]);
+    signal_values.frame_wait_signal[frame_index].clear();
+    devices.swapchain.UpdateBackBufferIndex();
+    devices.swapchain.Present();
+  }
+  devices.Term();
 }
