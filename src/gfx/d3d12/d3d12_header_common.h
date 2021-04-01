@@ -22,6 +22,7 @@ constexpr inline D3D12_COMMAND_LIST_TYPE ConvertToD3d12CommandQueueType(const Co
     case CommandQueueType::kCompute:  return D3D12_COMMAND_LIST_TYPE_COMPUTE;
     case CommandQueueType::kTransfer: return D3D12_COMMAND_LIST_TYPE_COPY;
   }
+  return D3D12_COMMAND_LIST_TYPE_DIRECT;
 }
 constexpr inline DXGI_FORMAT GetDxgiFormat(const BufferFormat format) {
   switch(format) {
@@ -34,6 +35,7 @@ constexpr inline DXGI_FORMAT GetDxgiFormat(const BufferFormat format) {
     case BufferFormat::kUnknown:
       return DXGI_FORMAT_UNKNOWN;
   }
+  return DXGI_FORMAT_UNKNOWN;
 }
 }
 #endif

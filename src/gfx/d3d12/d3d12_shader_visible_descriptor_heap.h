@@ -28,7 +28,9 @@ class ShaderVisibleDescriptorHeap {
   uint32_t used_sampler_num_ = 0;
   uint32_t buffer_handle_increment_size_ = 0;
   uint32_t sampler_handle_increment_size_ = 0;
+#ifdef BUILD_WITH_TEST
 #include "d3d12_shader_visible_descriptor_heap_test.inl"
+#endif
 };
 }
 #endif

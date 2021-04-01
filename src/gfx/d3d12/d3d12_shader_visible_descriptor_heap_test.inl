@@ -1,6 +1,4 @@
-#ifdef BUILD_WITH_TEST
 TEST_CASE_CLASS("descriptor heap") {
-  using namespace illuminate::gfx::d3d12;
   DxgiCore dxgi_core;
   CHECK(dxgi_core.Init());
   Device device;
@@ -31,4 +29,3 @@ TEST_CASE_CLASS("descriptor heap") {
   CHECK(descriptor_heap.sampler_handle_increment_size_ == device.Get()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER));
   descriptor_heap.Term();
 }
-#endif

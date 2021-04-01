@@ -48,6 +48,7 @@ class DoubleBufferedAllocator {
   const size_t size_in_byte_;
   size_t offset_in_byte_;
   uint32_t head_index_;
+  [[maybe_unused]] std::byte _pad[4]{};
 };
 template<class Allocator>
 class PmrAllocator : public std::pmr::memory_resource {
