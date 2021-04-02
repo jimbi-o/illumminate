@@ -12,5 +12,6 @@ template <typename K, typename V>
 using unordered_map = std::pmr::unordered_map<K,V>;
 template <typename T>
 using vector = std::pmr::vector<T>;
+using PassId = StrId;
 }
 #endif

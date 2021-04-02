@@ -17,16 +17,19 @@ struct DeviceSet {
   CommandQueue command_queue;
   illuminate::gfx::win32::Window window;
   Swapchain swapchain;
+  CommandList command_list_pool;
   bool Init(const uint32_t frame_buffer_num, const illuminate::gfx::BufferSize2d& swapchain_size, const uint32_t swapchain_buffer_num) {
     if (!dxgi_core.Init()) return false;
     if (!device.Init(dxgi_core.GetAdapter())) return false;
     if (!command_queue.Init(device.Get())) return false;
     if (!window.Init("swapchain test", swapchain_size.width, swapchain_size.height)) return false;
     if (!swapchain.Init(dxgi_core.GetFactory(), command_queue.Get(CommandQueueType::kGraphics), device.Get(), window.GetHwnd(), swapchain_buffer_num, frame_buffer_num)) return false;
+    if (!command_list_pool.Init(device.Get())) return false;
     return true;
   }
   void Term() {
     command_queue.WaitAll();
+    command_list_pool.Term();
     swapchain.Term();
     window.Term();
     command_queue.Term();
