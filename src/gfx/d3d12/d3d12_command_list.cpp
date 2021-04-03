@@ -23,24 +23,14 @@ void CommandList::Term() {
 D3d12CommandList** CommandList::RetainCommandList(const CommandQueueType command_list_type, const uint32_t num, ID3D12CommandAllocator** const allocators) {
   auto d3d12_command_list_type = ConvertToD3d12CommandQueueType(command_list_type);
   if (pool_[command_list_type].size() < num) {
-    loginfo("command list creation. {}({})", num * 2, pool_[command_list_type].size());
-    while (pool_[command_list_type].size() < num * 2) {
+    loginfo("command list creation. {}({})", num, pool_[command_list_type].size());
+    while (pool_[command_list_type].size() < num) {
       D3d12CommandList* list = nullptr;
-#if 0
-      // somehow fails
       auto hr = device_->CreateCommandList1(0/*multi-GPU*/, d3d12_command_list_type, D3D12_COMMAND_LIST_FLAG_NONE, IID_PPV_ARGS(&list));
       if (FAILED(hr)) {
-        logerror("failed to create command list {} {} {} {}", hr, d3d12_command_list_type, num * 2, pool_[command_list_type].size());
+        logerror("failed to create command list {} {} {} {}", hr, d3d12_command_list_type, num, pool_[command_list_type].size());
         ASSERT(false && "CreateCommandList1 failed.");
       }
-#else
-      auto hr = device_->CreateCommandList(0/*multi-GPU*/, d3d12_command_list_type, allocators[0], nullptr, IID_PPV_ARGS(&list));
-      if (FAILED(hr)) {
-        logerror("failed to create command list {} {} {} {}", hr, d3d12_command_list_type, num * 2, pool_[command_list_type].size());
-        ASSERT(false && "CreateCommandList failed.");
-      }
-      list->Close();
-#endif
       SET_NAME(list, "commandlist", d3d12_command_list_type * 1000 + pool_[command_list_type].size());
       pool_[command_list_type].push_back(list);
     }
