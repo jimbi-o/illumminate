@@ -151,6 +151,38 @@ std::tuple<ID3D12RootSignature*, ID3D12PipelineState*> ShaderCompiler::CreateVsP
   shader_result_vs->Release();
   return {root_signature, pipeline_state};
 }
+std::tuple<ID3D12RootSignature*, ID3D12PipelineState*> ShaderCompiler::CreateCsPipelineStateObject(LPCWSTR cs_with_rootsig, std::pmr::memory_resource* memory_resource_work) {
+  auto shader_result_cs = Compile(cs_with_rootsig, ShaderType::kCs, memory_resource_work);
+  auto root_signature_blob = GetResultOutput<IDxcBlob>(shader_result_cs, DXC_OUT_ROOT_SIGNATURE);
+  ID3D12RootSignature* root_signature = nullptr;
+  auto hr = device_->CreateRootSignature(0, root_signature_blob->GetBufferPointer(), root_signature_blob->GetBufferSize(), IID_PPV_ARGS(&root_signature));
+  if (FAILED(hr)) {
+    root_signature_blob->Release();
+    shader_result_cs->Release();
+    return {};
+  }
+  auto shader_object_cs = GetResultOutput<IDxcBlob>(shader_result_cs, DXC_OUT_OBJECT);
+  struct {
+    CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE root_signature;
+    CD3DX12_PIPELINE_STATE_STREAM_CS cs;
+  } desc_local {
+    root_signature,
+    D3D12_SHADER_BYTECODE{shader_object_cs->GetBufferPointer(), shader_object_cs->GetBufferSize()},
+  };
+  D3D12_PIPELINE_STATE_STREAM_DESC desc{sizeof(desc_local), &desc_local};
+  ID3D12PipelineState* pipeline_state = nullptr;
+  hr = device_->CreatePipelineState(&desc, IID_PPV_ARGS(&pipeline_state));
+  if (FAILED(hr)) {
+    pipeline_state->Release();
+    pipeline_state = nullptr;
+    root_signature->Release();
+    root_signature = nullptr;
+  }
+  shader_object_cs->Release();
+  root_signature_blob->Release();
+  shader_result_cs->Release();
+  return {root_signature, pipeline_state};
+}
 }
 #include "doctest/doctest.h"
 #include "d3dx12.h"

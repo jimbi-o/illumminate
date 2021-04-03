@@ -23,6 +23,7 @@ class ShaderCompiler {
   void Term();
   IDxcResult* Compile(LPCWSTR filename, const ShaderType, std::pmr::memory_resource* memory_resource);
   std::tuple<ID3D12RootSignature*, ID3D12PipelineState*> CreateVsPsPipelineStateObject(LPCWSTR vs, LPCWSTR ps_with_rootsig, const DXGI_FORMAT* output_dxgi_format, const uint32_t output_dxgi_format_num, illuminate::core::EnableDisable enable_depth_stencil, std::pmr::memory_resource* memory_resource_work);
+  std::tuple<ID3D12RootSignature*, ID3D12PipelineState*> CreateCsPipelineStateObject(LPCWSTR cs_with_rootsig, std::pmr::memory_resource* memory_resource_work);
  private:
   D3d12Device* device_ = nullptr;
   IDxcUtils* utils_ = nullptr;
