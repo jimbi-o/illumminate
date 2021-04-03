@@ -186,3 +186,56 @@ TEST_CASE("clear swapchain buffer") {
   command_list_set.Term();
   devices.Term();
 }
+TEST_CASE("draw to swapchain buffer") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  using namespace illuminate::gfx::d3d12;
+  const BufferSize2d swapchain_size{1600, 900};
+  const uint32_t frame_buffer_num = 2;
+  const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
+  DeviceSet devices;
+  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
+  PmrLinearAllocator memory_resource_persistant(&buffer[buffer_size_in_bytes_persistant], buffer_size_in_bytes_persistant);
+  CommandListSet command_list_set(&memory_resource_persistant);
+  CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num));
+  SignalValues signal_values(&memory_resource_persistant, frame_buffer_num);
+  CHECK(signal_values.used_signal_val.empty());
+  CHECK(signal_values.frame_wait_signal.size() == frame_buffer_num);
+  for (auto& map : signal_values.frame_wait_signal) {
+    CHECK(map.empty());
+  }
+  for (uint32_t frame_no = 0; frame_no < kTestFrameNum; frame_no++) {
+    auto frame_index = frame_no % frame_buffer_num;
+    devices.command_queue.WaitOnCpu(signal_values.frame_wait_signal[frame_index]);
+    command_list_set.RotateCommandAllocators();
+    devices.swapchain.UpdateBackBufferIndex();
+    {
+      auto command_list = command_list_set.GetCommandList(CommandQueueType::kGraphics, 1)[0];
+      D3D12_RESOURCE_BARRIER barrier{};
+      {
+        barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barrier.Transition.pResource   = devices.swapchain.GetResource();
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
+      }
+      command_list->ResourceBarrier(1, &barrier);
+      {
+        const FLOAT clear_color[4] = {0.0f,1.0f,1.0f,1.0f};
+        command_list->ClearRenderTargetView(devices.swapchain.GetRtvHandle(), clear_color, 0, nullptr);
+      }
+      {
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
+      }
+      command_list->ResourceBarrier(1, &barrier);
+      command_list_set.ExecuteCommandLists(devices.GetCommandQueue(CommandQueueType::kGraphics), CommandQueueType::kGraphics);
+    }
+    devices.swapchain.Present();
+    SignalQueueOnFrameEnd(&devices.command_queue, CommandQueueType::kGraphics, &signal_values.used_signal_val, &signal_values.frame_wait_signal[frame_index]);
+  }
+  devices.WaitAll();
+  command_list_set.Term();
+  devices.Term();
+}
