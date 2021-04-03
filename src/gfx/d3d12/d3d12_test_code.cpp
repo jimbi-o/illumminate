@@ -19,9 +19,11 @@ class DeviceSet {
     if (!command_queue.Init(device.Get())) return false;
     if (!window.Init("swapchain test", swapchain_size.width, swapchain_size.height)) return false;
     if (!swapchain.Init(dxgi_core.GetFactory(), command_queue.Get(CommandQueueType::kGraphics), device.Get(), window.GetHwnd(), swapchain_buffer_num, frame_buffer_num)) return false;
+    if (!shader_compiler.Init(device.Get())) return false;
     return true;
   }
   void Term() {
+    shader_compiler.Term();
     swapchain.Term();
     window.Term();
     command_queue.Term();
@@ -36,6 +38,7 @@ class DeviceSet {
   CommandQueue command_queue;
   illuminate::gfx::win32::Window window;
   Swapchain swapchain;
+  ShaderCompiler shader_compiler;
 };
 class CommandListSet {
  public:
