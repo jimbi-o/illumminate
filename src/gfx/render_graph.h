@@ -13,5 +13,6 @@ using unordered_map = std::pmr::unordered_map<K,V>;
 template <typename T>
 using vector = std::pmr::vector<T>;
 using PassId = StrId;
+using BufferId = uint32_t;
 }
 #endif

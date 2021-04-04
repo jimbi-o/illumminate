@@ -1,3 +1,5 @@
+#include "D3D12MemAlloc.h"
+#include "d3dx12.h"
 #include "d3d12_command_allocator.h"
 #include "d3d12_command_list.h"
 #include "d3d12_command_queue.h"
@@ -8,7 +10,6 @@
 #include "d3d12_shader_compiler.h"
 #include "d3d12_shader_visible_descriptor_heap.h"
 #include "d3d12_swapchain.h"
-#include "d3dx12.h"
 #include "illuminate/gfx/win32/win32_window.h"
 #include "render_graph.h"
 namespace illuminate::gfx::d3d12 {
@@ -210,6 +211,49 @@ class ShaderResourceSet {
   unordered_map<StrId, ID3D12RootSignature*> rootsig_list_;
   vector<ID3D12PipelineState*> pso_list_;
 };
+class PhysicalBufferSet {
+ public:
+  PhysicalBufferSet(std::pmr::memory_resource* memory_resource)
+      : allocation_list_(memory_resource)
+      , resource_list_(memory_resource)
+  {
+  }
+  bool Init(D3d12Device* device, DxgiAdapter* const adapter) {
+    D3D12MA::ALLOCATOR_DESC desc = {};
+    desc.Flags = D3D12MA::ALLOCATOR_FLAG_NONE;
+    desc.pDevice = device;
+    desc.pAdapter = adapter;
+    auto hr = D3D12MA::CreateAllocator(&desc, &allocator_);
+    if (FAILED(hr)) return false;
+    return true;
+  }
+  void Term() {
+    for (auto& [buffer_id, allocation] : allocation_list_) {
+      resource_list_.at(buffer_id)->Release();
+      allocation->Release();
+    }
+    allocator_->Release();
+  }
+  ID3D12Resource* CreatePhysicalBuffer(const BufferId buffer_id, const D3D12_HEAP_TYPE heap_type, const D3D12_RESOURCE_STATES initial_state, const D3D12_RESOURCE_DESC& resource_desc, const D3D12_CLEAR_VALUE* clear_value) {
+    ASSERT(!resource_list_.contains(buffer_id));
+    D3D12MA::ALLOCATION_DESC allocation_desc{};
+    allocation_desc.HeapType = heap_type;
+    D3D12MA::Allocation* allocation = nullptr;
+    ID3D12Resource* resource = nullptr;
+    auto hr = allocator_->CreateResource(&allocation_desc, &resource_desc, initial_state, clear_value, &allocation, IID_PPV_ARGS(&resource));
+    if (FAILED(hr)) {
+      logerror("CreatePhysicalBuffer failed. {} {}", hr, heap_type);
+      return nullptr;
+    }
+    allocation_list_.insert_or_assign(buffer_id, allocation);
+    resource_list_.insert_or_assign(buffer_id, resource);
+    return resource;
+  }
+ private:
+  D3D12MA::Allocator* allocator_ = nullptr;
+  unordered_map<BufferId, D3D12MA::Allocation*> allocation_list_;
+  unordered_map<BufferId, ID3D12Resource*> resource_list_;
+};
 struct SignalValues {
   unordered_map<CommandQueueType, uint64_t> used_signal_val;
   vector<unordered_map<CommandQueueType, uint64_t>> frame_wait_signal;
@@ -384,3 +428,37 @@ TEST_CASE("draw to swapchain buffer") {
   command_list_set.Term();
   devices.Term();
 }
+TEST_CASE("create buffer") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  using namespace illuminate::gfx::d3d12;
+  const BufferSize2d swapchain_size{1600, 900};
+  const uint32_t frame_buffer_num = 2;
+  const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
+  DeviceSet devices;
+  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
+  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_size_in_bytes_persistent], buffer_size_in_bytes_persistent);
+  PhysicalBufferSet physical_buffers(&memory_resource_persistent);
+  CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter()));
+  D3D12_RESOURCE_DESC resource_desc{};
+  {
+    resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    resource_desc.Alignment = 0;
+    resource_desc.Width = swapchain_size.width;
+    resource_desc.Height = swapchain_size.height;
+    resource_desc.DepthOrArraySize = 1;
+    resource_desc.MipLevels = 1;
+    resource_desc.Format = devices.swapchain.GetDxgiFormat();
+    resource_desc.SampleDesc = {1, 0};
+    resource_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    resource_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+  }
+  D3D12_CLEAR_VALUE clear_value{.Format = resource_desc.Format, .Color = {1.0f,1.0f,1.0f,1.0f,}};
+  auto resource = physical_buffers.CreatePhysicalBuffer(0, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, resource_desc, &clear_value);
+  CHECK(resource);
+  physical_buffers.Term();
+  devices.Term();
+}
+TEST_CASE("draw to a created buffer") {
+}
+
