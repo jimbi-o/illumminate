@@ -8,6 +8,7 @@
 #include "d3d12_shader_compiler.h"
 #include "d3d12_shader_visible_descriptor_heap.h"
 #include "d3d12_swapchain.h"
+#include "d3dx12.h"
 #include "illuminate/gfx/win32/win32_window.h"
 #include "render_graph.h"
 namespace illuminate::gfx::d3d12 {
@@ -19,11 +20,9 @@ class DeviceSet {
     if (!command_queue.Init(device.Get())) return false;
     if (!window.Init("swapchain test", swapchain_size.width, swapchain_size.height)) return false;
     if (!swapchain.Init(dxgi_core.GetFactory(), command_queue.Get(CommandQueueType::kGraphics), device.Get(), window.GetHwnd(), swapchain_buffer_num, frame_buffer_num)) return false;
-    if (!shader_compiler.Init(device.Get())) return false;
     return true;
   }
   void Term() {
-    shader_compiler.Term();
     swapchain.Term();
     window.Term();
     command_queue.Term();
@@ -38,7 +37,6 @@ class DeviceSet {
   CommandQueue command_queue;
   illuminate::gfx::win32::Window window;
   Swapchain swapchain;
-  ShaderCompiler shader_compiler;
 };
 class CommandListSet {
  public:
@@ -101,11 +99,115 @@ class CommandListSet {
   }
   CommandAllocator allocator_;
   CommandList pool_;
-  uint32_t allocator_buffer_index_;
-  uint32_t allocator_buffer_len_;
+  uint32_t allocator_buffer_index_ = 0;
+  uint32_t allocator_buffer_len_ = 0;
   vector<vector<ID3D12CommandAllocator**>> allocator_buffer_;
   unordered_map<CommandQueueType, D3d12CommandList**> command_list_in_use_;
   unordered_map<CommandQueueType, uint32_t> command_list_num_in_use_;
+};
+class ShaderResourceSet {
+ public:
+  ShaderResourceSet(std::pmr::memory_resource* memory_resource)
+      : rootsig_list_(memory_resource)
+      , pso_list_(memory_resource)
+  {}
+  bool Init(D3d12Device* device) {
+    if (!shader_compiler_.Init(device)) return false;
+    return true;
+  }
+  void Term() {
+    for (auto& [key, rootsig] : rootsig_list_) {
+      rootsig->Release();
+    }
+    for (auto& pso : pso_list_) {
+      pso->Release();
+    }
+    shader_compiler_.Term();
+  }
+  std::tuple<ID3D12RootSignature*, ID3D12PipelineState*> CreateVsPsPipelineStateObject(D3d12Device* const device, LPCWSTR vs, LPCWSTR ps, const StrId& rootsig_id, D3D12_RT_FORMAT_ARRAY&& output_dxgi_format, illuminate::core::EnableDisable enable_depth_stencil, std::pmr::memory_resource* memory_resource_work) {
+    auto shader_result_ps = shader_compiler_.Compile(ps, ShaderType::kPs, memory_resource_work);
+    if (!rootsig_list_.contains(rootsig_id)) {
+      auto root_signature_blob = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_ps, DXC_OUT_ROOT_SIGNATURE);
+      ID3D12RootSignature* root_signature = nullptr;
+      auto hr = device->CreateRootSignature(0, root_signature_blob->GetBufferPointer(), root_signature_blob->GetBufferSize(), IID_PPV_ARGS(&root_signature));
+      root_signature_blob->Release();
+      if (FAILED(hr)) {
+        shader_result_ps->Release();
+        return {};
+      }
+      root_signature->SetName(L"rootsig-vsps");
+      rootsig_list_.insert({rootsig_id, root_signature});
+    }
+    auto root_signature = rootsig_list_.at(rootsig_id);
+    auto shader_result_vs = shader_compiler_.Compile(vs, ShaderType::kVs, memory_resource_work);
+    auto shader_object_vs = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_vs, DXC_OUT_OBJECT);
+    auto shader_object_ps = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_ps, DXC_OUT_OBJECT);
+    struct {
+      CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE root_signature;
+      CD3DX12_PIPELINE_STATE_STREAM_VS vs;
+      CD3DX12_PIPELINE_STATE_STREAM_PS ps;
+      CD3DX12_PIPELINE_STATE_STREAM_RENDER_TARGET_FORMATS render_target_formats;
+      CD3DX12_PIPELINE_STATE_STREAM_PRIMITIVE_TOPOLOGY topology;
+      CD3DX12_PIPELINE_STATE_STREAM_DEPTH_STENCIL depth_stencil;
+    } desc_local {
+      root_signature,
+      D3D12_SHADER_BYTECODE{shader_object_vs->GetBufferPointer(), shader_object_vs->GetBufferSize()},
+      D3D12_SHADER_BYTECODE{shader_object_ps->GetBufferPointer(), shader_object_ps->GetBufferSize()},
+      std::move(output_dxgi_format),
+      D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+    };
+    if (enable_depth_stencil == illuminate::core::EnableDisable::kDisabled) {
+      ((CD3DX12_DEPTH_STENCIL_DESC&)(desc_local.depth_stencil)).DepthEnable = false;
+    }
+    D3D12_PIPELINE_STATE_STREAM_DESC desc{sizeof(desc_local), &desc_local};
+    ID3D12PipelineState* pipeline_state = nullptr;
+    auto hr = device->CreatePipelineState(&desc, IID_PPV_ARGS(&pipeline_state));
+    shader_object_ps->Release();
+    shader_object_vs->Release();
+    shader_result_ps->Release();
+    shader_result_vs->Release();
+    if (FAILED(hr)) return {};
+    pipeline_state->SetName(L"pso-vsps");
+    pso_list_.push_back(pipeline_state);
+    return {root_signature, pipeline_state};
+  }
+  std::tuple<ID3D12RootSignature*, ID3D12PipelineState*> CreateCsPipelineStateObject(D3d12Device* const device, LPCWSTR cs, const StrId& rootsig_id, std::pmr::memory_resource* memory_resource_work) {
+    auto shader_result_cs = shader_compiler_.Compile(cs, ShaderType::kCs, memory_resource_work);
+    if (!rootsig_list_.contains(rootsig_id)) {
+      auto root_signature_blob = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_cs, DXC_OUT_ROOT_SIGNATURE);
+      ID3D12RootSignature* root_signature = nullptr;
+      auto hr = device->CreateRootSignature(0, root_signature_blob->GetBufferPointer(), root_signature_blob->GetBufferSize(), IID_PPV_ARGS(&root_signature));
+      root_signature_blob->Release();
+      if (FAILED(hr)) {
+        shader_result_cs->Release();
+        return {};
+      }
+      root_signature->SetName(L"rootsig-cs");
+      rootsig_list_.insert({rootsig_id, root_signature});
+    }
+    auto root_signature = rootsig_list_.at(rootsig_id);
+    auto shader_object_cs = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_cs, DXC_OUT_OBJECT);
+    struct {
+      CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE root_signature;
+      CD3DX12_PIPELINE_STATE_STREAM_CS cs;
+    } desc_local {
+      root_signature,
+      D3D12_SHADER_BYTECODE{shader_object_cs->GetBufferPointer(), shader_object_cs->GetBufferSize()},
+    };
+    D3D12_PIPELINE_STATE_STREAM_DESC desc{sizeof(desc_local), &desc_local};
+    ID3D12PipelineState* pipeline_state = nullptr;
+    auto hr = device->CreatePipelineState(&desc, IID_PPV_ARGS(&pipeline_state));
+    shader_object_cs->Release();
+    shader_result_cs->Release();
+    if (FAILED(hr)) return {};
+    pipeline_state->SetName(L"pso-cs");
+    pso_list_.push_back(pipeline_state);
+    return {root_signature, pipeline_state};
+  }
+ private:
+  ShaderCompiler shader_compiler_;
+  unordered_map<StrId, ID3D12RootSignature*> rootsig_list_;
+  vector<ID3D12PipelineState*> pso_list_;
 };
 struct SignalValues {
   unordered_map<CommandQueueType, uint64_t> used_signal_val;
@@ -123,9 +225,9 @@ void SignalQueueOnFrameEnd(CommandQueue* const command_queue, CommandQueueType c
 }
 #ifdef BUILD_WITH_TEST
 namespace {
-const uint32_t buffer_offset_in_bytes_persistant = 0;
-const uint32_t buffer_size_in_bytes_persistant = 4 * 1024;
-const uint32_t buffer_offset_in_bytes_scene = buffer_offset_in_bytes_persistant + buffer_size_in_bytes_persistant;
+const uint32_t buffer_offset_in_bytes_persistent = 0;
+const uint32_t buffer_size_in_bytes_persistent = 16 * 1024;
+const uint32_t buffer_offset_in_bytes_scene = buffer_offset_in_bytes_persistent + buffer_size_in_bytes_persistent;
 const uint32_t buffer_size_in_bytes_scene = 4 * 1024;
 const uint32_t buffer_offset_in_bytes_frame = buffer_offset_in_bytes_scene + buffer_size_in_bytes_scene;
 const uint32_t buffer_size_in_bytes_frame = 4 * 1024;
@@ -136,6 +238,30 @@ const uint32_t kTestFrameNum = 10;
 }
 #endif
 #include "doctest/doctest.h"
+TEST_CASE("create pso") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  using namespace illuminate::gfx::d3d12;
+  const BufferSize2d swapchain_size{1600, 900};
+  const uint32_t frame_buffer_num = 2;
+  const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
+  DeviceSet devices;
+  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
+  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_size_in_bytes_persistent], buffer_size_in_bytes_persistent);
+  ShaderResourceSet shader_resource_set(&memory_resource_persistent);
+  CHECK(shader_resource_set.Init(devices.GetDevice()));
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  D3D12_RT_FORMAT_ARRAY array{{devices.swapchain.GetDxgiFormat()}, 1};
+  auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(devices.GetDevice(), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/copysrv.ps.hlsl", StrId("rootsig_tmp"), {{devices.swapchain.GetDxgiFormat()}, 1}, illuminate::core::EnableDisable::kDisabled, &memory_resource_work);
+  CHECK(rootsig);
+  CHECK(pso);
+  memory_resource_work.Reset();
+  std::tie(rootsig, pso) = shader_resource_set.CreateCsPipelineStateObject(devices.GetDevice(), L"shader/test/fill-screen.cs.hlsl", StrId("rootsig_cs_tmp"), &memory_resource_work);
+  CHECK(rootsig);
+  CHECK(pso);
+  shader_resource_set.Term();
+  devices.Term();
+}
 TEST_CASE("clear swapchain buffer") {
   using namespace illuminate;
   using namespace illuminate::gfx;
@@ -145,10 +271,10 @@ TEST_CASE("clear swapchain buffer") {
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
   CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
-  PmrLinearAllocator memory_resource_persistant(&buffer[buffer_size_in_bytes_persistant], buffer_size_in_bytes_persistant);
-  CommandListSet command_list_set(&memory_resource_persistant);
+  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_size_in_bytes_persistent], buffer_size_in_bytes_persistent);
+  CommandListSet command_list_set(&memory_resource_persistent);
   CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num));
-  SignalValues signal_values(&memory_resource_persistant, frame_buffer_num);
+  SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
   CHECK(signal_values.used_signal_val.empty());
   CHECK(signal_values.frame_wait_signal.size() == frame_buffer_num);
   for (auto& map : signal_values.frame_wait_signal) {
@@ -198,10 +324,12 @@ TEST_CASE("draw to swapchain buffer") {
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
   CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
-  PmrLinearAllocator memory_resource_persistant(&buffer[buffer_size_in_bytes_persistant], buffer_size_in_bytes_persistant);
-  CommandListSet command_list_set(&memory_resource_persistant);
+  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_size_in_bytes_persistent], buffer_size_in_bytes_persistent);
+  CommandListSet command_list_set(&memory_resource_persistent);
   CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num));
-  SignalValues signal_values(&memory_resource_persistant, frame_buffer_num);
+  ShaderResourceSet shader_resource_set(&memory_resource_persistent);
+  shader_resource_set.Init(devices.GetDevice());
+  SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
   CHECK(signal_values.used_signal_val.empty());
   CHECK(signal_values.frame_wait_signal.size() == frame_buffer_num);
   for (auto& map : signal_values.frame_wait_signal) {
@@ -227,6 +355,7 @@ TEST_CASE("draw to swapchain buffer") {
       {
         const FLOAT clear_color[4] = {0.0f,1.0f,1.0f,1.0f};
         command_list->ClearRenderTargetView(devices.swapchain.GetRtvHandle(), clear_color, 0, nullptr);
+        // TODO draw
       }
       {
         barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
@@ -239,6 +368,7 @@ TEST_CASE("draw to swapchain buffer") {
     SignalQueueOnFrameEnd(&devices.command_queue, CommandQueueType::kGraphics, &signal_values.used_signal_val, &signal_values.frame_wait_signal[frame_index]);
   }
   devices.WaitAll();
+  shader_resource_set.Term();
   command_list_set.Term();
   devices.Term();
 }

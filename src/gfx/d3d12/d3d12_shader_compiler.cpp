@@ -2,7 +2,6 @@
 #include "d3d12_device.h"
 #include "d3d12_dxgi_core.h"
 #include "d3d12_minimal_for_cpp.h"
-#include "d3dx12.h"
 namespace illuminate::gfx::d3d12 {
 namespace {
 // https://simoncoenen.com/blog/programming/graphics/DxcRevised.html
@@ -103,85 +102,6 @@ IDxcResult* ShaderCompiler::Compile(const LPCWSTR filename, const ShaderType tar
     case ShaderType::kAs:  ret = CreateShaderResource(utils_, include_handler_, compiler_, filename, L"as_6_5", memory_resource); break;
   }
   return ret;
-}
-std::tuple<ID3D12RootSignature*, ID3D12PipelineState*> ShaderCompiler::CreateVsPsPipelineStateObject(LPCWSTR vs, LPCWSTR ps_with_rootsig, const DXGI_FORMAT* output_dxgi_format, const uint32_t output_dxgi_format_num, const illuminate::core::EnableDisable enable_depth_stencil, std::pmr::memory_resource* memory_resource_work) {
-  auto shader_result_vs = Compile(vs, ShaderType::kVs, memory_resource_work);
-  auto shader_result_ps = Compile(ps_with_rootsig, ShaderType::kPs, memory_resource_work);
-  auto root_signature_blob = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_ps, DXC_OUT_ROOT_SIGNATURE);
-  ID3D12RootSignature* root_signature = nullptr;
-  auto hr = device_->CreateRootSignature(0, root_signature_blob->GetBufferPointer(), root_signature_blob->GetBufferSize(), IID_PPV_ARGS(&root_signature));
-  if (FAILED(hr)) {
-    root_signature_blob->Release();
-    shader_result_ps->Release();
-    shader_result_vs->Release();
-    return {};
-  }
-  auto shader_object_vs = GetResultOutput<IDxcBlob>(shader_result_vs, DXC_OUT_OBJECT);
-  auto shader_object_ps = GetResultOutput<IDxcBlob>(shader_result_ps, DXC_OUT_OBJECT);
-  struct {
-    CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE root_signature;
-    CD3DX12_PIPELINE_STATE_STREAM_VS vs;
-    CD3DX12_PIPELINE_STATE_STREAM_PS ps;
-    CD3DX12_PIPELINE_STATE_STREAM_RENDER_TARGET_FORMATS render_target_formats;
-    CD3DX12_PIPELINE_STATE_STREAM_PRIMITIVE_TOPOLOGY topology;
-    CD3DX12_PIPELINE_STATE_STREAM_DEPTH_STENCIL depth_stencil;
-  } desc_local {
-    root_signature,
-    D3D12_SHADER_BYTECODE{shader_object_vs->GetBufferPointer(), shader_object_vs->GetBufferSize()},
-    D3D12_SHADER_BYTECODE{shader_object_ps->GetBufferPointer(), shader_object_ps->GetBufferSize()},
-    CD3DX12_RT_FORMAT_ARRAY(output_dxgi_format, output_dxgi_format_num),
-    D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-  };
-  if (enable_depth_stencil == illuminate::core::EnableDisable::kDisabled) {
-    ((CD3DX12_DEPTH_STENCIL_DESC&)(desc_local.depth_stencil)).DepthEnable = false;
-  }
-  D3D12_PIPELINE_STATE_STREAM_DESC desc{sizeof(desc_local), &desc_local};
-  ID3D12PipelineState* pipeline_state = nullptr;
-  hr = device_->CreatePipelineState(&desc, IID_PPV_ARGS(&pipeline_state));
-  if (FAILED(hr)) {
-    pipeline_state->Release();
-    pipeline_state = nullptr;
-    root_signature->Release();
-    root_signature = nullptr;
-  }
-  shader_object_ps->Release();
-  shader_object_vs->Release();
-  root_signature_blob->Release();
-  shader_result_ps->Release();
-  shader_result_vs->Release();
-  return {root_signature, pipeline_state};
-}
-std::tuple<ID3D12RootSignature*, ID3D12PipelineState*> ShaderCompiler::CreateCsPipelineStateObject(LPCWSTR cs_with_rootsig, std::pmr::memory_resource* memory_resource_work) {
-  auto shader_result_cs = Compile(cs_with_rootsig, ShaderType::kCs, memory_resource_work);
-  auto root_signature_blob = GetResultOutput<IDxcBlob>(shader_result_cs, DXC_OUT_ROOT_SIGNATURE);
-  ID3D12RootSignature* root_signature = nullptr;
-  auto hr = device_->CreateRootSignature(0, root_signature_blob->GetBufferPointer(), root_signature_blob->GetBufferSize(), IID_PPV_ARGS(&root_signature));
-  if (FAILED(hr)) {
-    root_signature_blob->Release();
-    shader_result_cs->Release();
-    return {};
-  }
-  auto shader_object_cs = GetResultOutput<IDxcBlob>(shader_result_cs, DXC_OUT_OBJECT);
-  struct {
-    CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE root_signature;
-    CD3DX12_PIPELINE_STATE_STREAM_CS cs;
-  } desc_local {
-    root_signature,
-    D3D12_SHADER_BYTECODE{shader_object_cs->GetBufferPointer(), shader_object_cs->GetBufferSize()},
-  };
-  D3D12_PIPELINE_STATE_STREAM_DESC desc{sizeof(desc_local), &desc_local};
-  ID3D12PipelineState* pipeline_state = nullptr;
-  hr = device_->CreatePipelineState(&desc, IID_PPV_ARGS(&pipeline_state));
-  if (FAILED(hr)) {
-    pipeline_state->Release();
-    pipeline_state = nullptr;
-    root_signature->Release();
-    root_signature = nullptr;
-  }
-  shader_object_cs->Release();
-  root_signature_blob->Release();
-  shader_result_cs->Release();
-  return {root_signature, pipeline_state};
 }
 }
 #include "doctest/doctest.h"
