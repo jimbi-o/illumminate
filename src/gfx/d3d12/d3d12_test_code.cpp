@@ -125,7 +125,7 @@ class ShaderResourceSet {
     }
     shader_compiler_.Term();
   }
-  std::tuple<ID3D12RootSignature*, ID3D12PipelineState*> CreateVsPsPipelineStateObject(D3d12Device* const device, LPCWSTR vs, LPCWSTR ps, const StrId& rootsig_id, D3D12_RT_FORMAT_ARRAY&& output_dxgi_format, DepthStencilEnableFlag enable_depth_stencil, std::pmr::memory_resource* memory_resource_work) {
+  std::tuple<ID3D12RootSignature*, ID3D12PipelineState*> CreateVsPsPipelineStateObject(D3d12Device* const device, const StrId& rootsig_id, LPCWSTR vs, LPCWSTR ps, D3D12_RT_FORMAT_ARRAY&& output_dxgi_format, DepthStencilEnableFlag enable_depth_stencil, std::pmr::memory_resource* memory_resource_work) {
     auto shader_result_ps = shader_compiler_.Compile(ps, ShaderType::kPs, memory_resource_work);
     if (!rootsig_list_.contains(rootsig_id)) {
       auto root_signature_blob = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_ps, DXC_OUT_ROOT_SIGNATURE);
@@ -172,7 +172,7 @@ class ShaderResourceSet {
     pso_list_.push_back(pipeline_state);
     return {root_signature, pipeline_state};
   }
-  std::tuple<ID3D12RootSignature*, ID3D12PipelineState*> CreateCsPipelineStateObject(D3d12Device* const device, LPCWSTR cs, const StrId& rootsig_id, std::pmr::memory_resource* memory_resource_work) {
+  std::tuple<ID3D12RootSignature*, ID3D12PipelineState*> CreateCsPipelineStateObject(D3d12Device* const device, const StrId& rootsig_id, LPCWSTR cs, std::pmr::memory_resource* memory_resource_work) {
     auto shader_result_cs = shader_compiler_.Compile(cs, ShaderType::kCs, memory_resource_work);
     if (!rootsig_list_.contains(rootsig_id)) {
       auto root_signature_blob = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_cs, DXC_OUT_ROOT_SIGNATURE);
@@ -253,11 +253,11 @@ TEST_CASE("create pso") {
   CHECK(shader_resource_set.Init(devices.GetDevice()));
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
   D3D12_RT_FORMAT_ARRAY array{{devices.swapchain.GetDxgiFormat()}, 1};
-  auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(devices.GetDevice(), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/copysrv.ps.hlsl", StrId("rootsig_tmp"), {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
+  auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(devices.GetDevice(), StrId("rootsig_tmp"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/copysrv.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
   CHECK(rootsig);
   CHECK(pso);
   memory_resource_work.Reset();
-  std::tie(rootsig, pso) = shader_resource_set.CreateCsPipelineStateObject(devices.GetDevice(), L"shader/test/fill-screen.cs.hlsl", StrId("rootsig_cs_tmp"), &memory_resource_work);
+  std::tie(rootsig, pso) = shader_resource_set.CreateCsPipelineStateObject(devices.GetDevice(), StrId("rootsig_cs_tmp"), L"shader/test/fill-screen.cs.hlsl", &memory_resource_work);
   CHECK(rootsig);
   CHECK(pso);
   shader_resource_set.Term();
@@ -337,7 +337,7 @@ TEST_CASE("draw to swapchain buffer") {
     CHECK(map.empty());
   }
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
-  auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(devices.GetDevice(), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test.ps.hlsl", StrId("rootsig_tmp"), {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
+  auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(devices.GetDevice(), StrId("rootsig_tmp"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
   for (uint32_t frame_no = 0; frame_no < kTestFrameNum; frame_no++) {
     auto frame_index = frame_no % frame_buffer_num;
     devices.command_queue.WaitOnCpu(signal_values.frame_wait_signal[frame_index]);
