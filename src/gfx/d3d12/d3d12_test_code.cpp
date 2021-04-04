@@ -107,6 +107,7 @@ class CommandListSet {
 };
 class ShaderResourceSet {
  public:
+  using DepthStencilEnableFlag = illuminate::core::EnableDisable;
   ShaderResourceSet(std::pmr::memory_resource* memory_resource)
       : rootsig_list_(memory_resource)
       , pso_list_(memory_resource)
@@ -124,7 +125,7 @@ class ShaderResourceSet {
     }
     shader_compiler_.Term();
   }
-  std::tuple<ID3D12RootSignature*, ID3D12PipelineState*> CreateVsPsPipelineStateObject(D3d12Device* const device, LPCWSTR vs, LPCWSTR ps, const StrId& rootsig_id, D3D12_RT_FORMAT_ARRAY&& output_dxgi_format, illuminate::core::EnableDisable enable_depth_stencil, std::pmr::memory_resource* memory_resource_work) {
+  std::tuple<ID3D12RootSignature*, ID3D12PipelineState*> CreateVsPsPipelineStateObject(D3d12Device* const device, LPCWSTR vs, LPCWSTR ps, const StrId& rootsig_id, D3D12_RT_FORMAT_ARRAY&& output_dxgi_format, DepthStencilEnableFlag enable_depth_stencil, std::pmr::memory_resource* memory_resource_work) {
     auto shader_result_ps = shader_compiler_.Compile(ps, ShaderType::kPs, memory_resource_work);
     if (!rootsig_list_.contains(rootsig_id)) {
       auto root_signature_blob = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_ps, DXC_OUT_ROOT_SIGNATURE);
@@ -156,7 +157,7 @@ class ShaderResourceSet {
       std::move(output_dxgi_format),
       D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
     };
-    if (enable_depth_stencil == illuminate::core::EnableDisable::kDisabled) {
+    if (enable_depth_stencil == DepthStencilEnableFlag::kDisabled) {
       ((CD3DX12_DEPTH_STENCIL_DESC&)(desc_local.depth_stencil)).DepthEnable = false;
     }
     D3D12_PIPELINE_STATE_STREAM_DESC desc{sizeof(desc_local), &desc_local};
@@ -252,7 +253,7 @@ TEST_CASE("create pso") {
   CHECK(shader_resource_set.Init(devices.GetDevice()));
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
   D3D12_RT_FORMAT_ARRAY array{{devices.swapchain.GetDxgiFormat()}, 1};
-  auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(devices.GetDevice(), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/copysrv.ps.hlsl", StrId("rootsig_tmp"), {{devices.swapchain.GetDxgiFormat()}, 1}, illuminate::core::EnableDisable::kDisabled, &memory_resource_work);
+  auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(devices.GetDevice(), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/copysrv.ps.hlsl", StrId("rootsig_tmp"), {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
   CHECK(rootsig);
   CHECK(pso);
   memory_resource_work.Reset();
@@ -335,6 +336,8 @@ TEST_CASE("draw to swapchain buffer") {
   for (auto& map : signal_values.frame_wait_signal) {
     CHECK(map.empty());
   }
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(devices.GetDevice(), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test.ps.hlsl", StrId("rootsig_tmp"), {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
   for (uint32_t frame_no = 0; frame_no < kTestFrameNum; frame_no++) {
     auto frame_index = frame_no % frame_buffer_num;
     devices.command_queue.WaitOnCpu(signal_values.frame_wait_signal[frame_index]);
@@ -353,9 +356,18 @@ TEST_CASE("draw to swapchain buffer") {
       }
       command_list->ResourceBarrier(1, &barrier);
       {
-        const FLOAT clear_color[4] = {0.0f,1.0f,1.0f,1.0f};
-        command_list->ClearRenderTargetView(devices.swapchain.GetRtvHandle(), clear_color, 0, nullptr);
-        // TODO draw
+        auto& width = swapchain_size.width;
+        auto& height = swapchain_size.height;
+        command_list->SetGraphicsRootSignature(rootsig);
+        D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), D3D12_MIN_DEPTH, D3D12_MAX_DEPTH};
+        command_list->RSSetViewports(1, &viewport);
+        D3D12_RECT scissor_rect{0L, 0L, static_cast<LONG>(width), static_cast<LONG>(height)};
+        command_list->RSSetScissorRects(1, &scissor_rect);
+        command_list->SetPipelineState(pso);
+        command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        auto cpu_handle = devices.swapchain.GetRtvHandle();
+        command_list->OMSetRenderTargets(1, &cpu_handle, true, nullptr);
+        command_list->DrawInstanced(3, 1, 0, 0);
       }
       {
         barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
