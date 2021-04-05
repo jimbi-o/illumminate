@@ -296,6 +296,105 @@ class DescriptorHeapSet {
   unordered_map<D3D12_DESCRIPTOR_HEAP_TYPE, DescriptorHeap> heaps_;
   unordered_map<D3D12_DESCRIPTOR_HEAP_TYPE, unordered_map<BufferId, D3D12_CPU_DESCRIPTOR_HANDLE>> handles_;
 };
+struct BufferConfig {
+  uint32_t width;
+  uint32_t height;
+  BufferFormat format;
+  BufferStateFlags state_flags;
+  BufferStateFlags initial_state_flags;
+  ClearValue clear_value;
+};
+constexpr D3D12_RESOURCE_STATES ConvertToD3d12ResourceState(const BufferStateFlags& flags) {
+  D3D12_RESOURCE_STATES state{};
+  if (flags & kBufferStateFlagCbv) {
+    state |= D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
+  }
+  if (flags & kBufferStateFlagSrvPsOnly) {
+    state |= D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+  }
+  if (flags & kBufferStateFlagSrvNonPs) {
+    state |= D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+  }
+  if (flags & kBufferStateFlagUav) {
+    state |= D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+  }
+  if (flags & kBufferStateFlagRtv) {
+    state |= D3D12_RESOURCE_STATE_RENDER_TARGET;
+  }
+  if (flags & kBufferStateFlagDsvWrite) {
+    state |= D3D12_RESOURCE_STATE_DEPTH_WRITE;
+  }
+  if (flags & kBufferStateFlagDsvRead) {
+    state |= D3D12_RESOURCE_STATE_DEPTH_READ;
+  }
+  if (flags & kBufferStateFlagCopySrc) {
+    state |= D3D12_RESOURCE_STATE_COPY_SOURCE;
+  }
+  if (flags & kBufferStateFlagCopyDst) {
+    state |= D3D12_RESOURCE_STATE_COPY_DEST;
+  }
+  if (flags & kBufferStateFlagPresent) {
+    state |= D3D12_RESOURCE_STATE_PRESENT;
+  }
+  return state;
+}
+constexpr D3D12_RESOURCE_STATES GetInitialD3d12ResourceStateFlag(const BufferConfig& buffer_config) {
+  return ConvertToD3d12ResourceState(buffer_config.initial_state_flags);
+}
+constexpr D3D12_RESOURCE_FLAGS ConvertToD3d12ResourceFlags(const BufferStateFlags state_flags) {
+  D3D12_RESOURCE_FLAGS flags{};
+  if (state_flags & kBufferStateFlagUav) flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+  if (state_flags & kBufferStateFlagRtv) flags |= D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+  if ((state_flags & kBufferStateFlagDsvWrite) || (state_flags & kBufferStateFlagDsvRead)) flags |= D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+  if ((flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL) && !(state_flags & kBufferStateFlagSrvPsOnly) && !(state_flags & kBufferStateFlagSrvNonPs)) flags = D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
+  return flags;
+}
+constexpr D3D12_RESOURCE_DESC ConvertToD3d12ResourceDesc(const BufferConfig& buffer_config) {
+  return {
+    .Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+    .Alignment = 0,
+    .Width = buffer_config.width,
+    .Height = buffer_config.height,
+    .DepthOrArraySize = 1,
+    .MipLevels = 1,
+    .Format = GetDxgiFormat(buffer_config.format),
+    .SampleDesc = {1, 0},
+    .Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN,
+    .Flags = ConvertToD3d12ResourceFlags(buffer_config.state_flags),
+  };
+}
+constexpr bool IsClearValueValid(const BufferConfig& buffer_config) {
+  if (buffer_config.state_flags && kBufferStateFlagRtv) return true;
+  if (buffer_config.state_flags && kBufferStateFlagDsvWrite) return true;
+  return false;
+}
+constexpr D3D12_CLEAR_VALUE GetD3d12ClearValue(const BufferConfig& buffer_config) {
+  if (std::holds_alternative<ClearValueDepthStencil>(buffer_config.clear_value)) {
+    auto&& depth_stencil = GetClearValueDepthBuffer(buffer_config.clear_value);
+    return {
+      .Format = GetDxgiFormat(buffer_config.format),
+      .DepthStencil = {
+        .Depth = depth_stencil.depth,
+        .Stencil = depth_stencil.stencil,
+      },
+    };
+  }
+  auto&& color = GetClearValueColorBuffer(buffer_config.clear_value);
+  return {
+    .Format = GetDxgiFormat(buffer_config.format),
+    .Color = {color[0], color[1], color[2], color[3],},
+  };
+}
+constexpr D3D12_RENDER_TARGET_VIEW_DESC ConvertToD3d12RtvDesc(const BufferConfig& buffer_config) {
+  return {
+    .Format = GetDxgiFormat(buffer_config.format),
+    .ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D,
+    .Texture2D{
+      .MipSlice = 0,
+      .PlaneSlice = 0,
+    },
+  };
+}
 struct SignalValues {
   unordered_map<CommandQueueType, uint64_t> used_signal_val;
   vector<unordered_map<CommandQueueType, uint64_t>> frame_wait_signal;
@@ -539,43 +638,26 @@ TEST_CASE("draw to a created buffer") {
   PhysicalBufferSet physical_buffers(&memory_resource_persistent);
   CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter()));
   BufferId buffer_id = 0;
-  {
-    D3D12_RESOURCE_DESC resource_desc{
-      .Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-      .Alignment = 0,
-      .Width = swapchain_size.width,
-      .Height = swapchain_size.height,
-      .DepthOrArraySize = 1,
-      .MipLevels = 1,
-      .Format = devices.swapchain.GetDxgiFormat(),
-      .SampleDesc = {1, 0},
-      .Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN,
-      .Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
-    };
-    D3D12_CLEAR_VALUE clear_value{.Format = resource_desc.Format, .Color = {1.0f,1.0f,1.0f,1.0f,}};
-    physical_buffers.CreatePhysicalBuffer(buffer_id, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, resource_desc, &clear_value);
-  }
+  BufferConfig buffer_config{
+    .width = swapchain_size.width,
+    .height = swapchain_size.height,
+    .format = BufferFormat::kR8G8B8A8Unorm,
+    .state_flags = kBufferStateFlagRtv,
+    .initial_state_flags = kBufferStateFlagRtv,
+    .clear_value = std::array<float, 4>{1.0f,1.0f,1.0f,1.0f},
+  };
+  auto clear_value = GetD3d12ClearValue(buffer_config);
+  physical_buffers.CreatePhysicalBuffer(buffer_id, D3D12_HEAP_TYPE_DEFAULT, GetInitialD3d12ResourceStateFlag(buffer_config), ConvertToD3d12ResourceDesc(buffer_config), IsClearValueValid(buffer_config) ? &clear_value : nullptr);
   DescriptorHeapSet descriptor_heaps{&memory_resource_persistent};
   CHECK(descriptor_heaps.Init(devices.GetDevice()));
   {
-    auto handle = descriptor_heaps.RetainHandle(buffer_id, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
     auto resource = physical_buffers.GetPhysicalBuffer(buffer_id);
-    D3D12_RENDER_TARGET_VIEW_DESC view_desc{
-      .Format = devices.swapchain.GetDxgiFormat(),
-      .ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D,
-      .Texture2D{
-        .MipSlice = 0,
-        .PlaneSlice = 0,
-      },
-    };
-    devices.GetDevice()->CreateRenderTargetView(resource, &view_desc, handle);
+    auto rtv_desc = ConvertToD3d12RtvDesc(buffer_config);
+    auto handle = descriptor_heaps.RetainHandle(buffer_id, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    devices.GetDevice()->CreateRenderTargetView(resource, &rtv_desc, handle);
   }
   SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
   CHECK(signal_values.used_signal_val.empty());
-  CHECK(signal_values.frame_wait_signal.size() == frame_buffer_num);
-  for (auto& map : signal_values.frame_wait_signal) {
-    CHECK(map.empty());
-  }
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
   auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(devices.GetDevice(), StrId("rootsig_tmp"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
   for (uint32_t frame_no = 0; frame_no < kTestFrameNum; frame_no++) {
@@ -585,16 +667,6 @@ TEST_CASE("draw to a created buffer") {
     devices.swapchain.UpdateBackBufferIndex();
     {
       auto command_list = command_list_set.GetCommandList(CommandQueueType::kGraphics, 1)[0];
-      D3D12_RESOURCE_BARRIER barrier{};
-      {
-        barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        barrier.Transition.pResource   = physical_buffers.GetPhysicalBuffer(buffer_id);
-        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
-      }
-      command_list->ResourceBarrier(1, &barrier);
       {
         auto& width = swapchain_size.width;
         auto& height = swapchain_size.height;
@@ -609,11 +681,6 @@ TEST_CASE("draw to a created buffer") {
         command_list->OMSetRenderTargets(1, &cpu_handle, true, nullptr);
         command_list->DrawInstanced(3, 1, 0, 0);
       }
-      {
-        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
-      }
-      command_list->ResourceBarrier(1, &barrier);
       command_list_set.ExecuteCommandLists(devices.GetCommandQueue(CommandQueueType::kGraphics), CommandQueueType::kGraphics);
     }
     devices.swapchain.Present();
