@@ -590,7 +590,7 @@ TEST_CASE("draw to a created buffer") {
         barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
         barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
         barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        barrier.Transition.pResource   = devices.swapchain.GetResource();
+        barrier.Transition.pResource   = physical_buffers.GetPhysicalBuffer(buffer_id);
         barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
         barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
       }
@@ -605,7 +605,7 @@ TEST_CASE("draw to a created buffer") {
         command_list->RSSetScissorRects(1, &scissor_rect);
         command_list->SetPipelineState(pso);
         command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        auto cpu_handle = devices.swapchain.GetRtvHandle();
+        auto cpu_handle = descriptor_heaps.GetHandle(buffer_id, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         command_list->OMSetRenderTargets(1, &cpu_handle, true, nullptr);
         command_list->DrawInstanced(3, 1, 0, 0);
       }
