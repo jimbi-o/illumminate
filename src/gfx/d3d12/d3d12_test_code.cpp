@@ -121,12 +121,15 @@ class ShaderResourceSet {
     for (auto& [key, rootsig] : rootsig_list_) {
       rootsig->Release();
     }
-    for (auto& pso : pso_list_) {
+    for (auto& [key, pso] : pso_list_) {
       pso->Release();
     }
     shader_compiler_.Term();
   }
-  std::tuple<ID3D12RootSignature*, ID3D12PipelineState*> CreateVsPsPipelineStateObject(D3d12Device* const device, const StrId& rootsig_id, LPCWSTR vs, LPCWSTR ps, D3D12_RT_FORMAT_ARRAY&& output_dxgi_format, DepthStencilEnableFlag enable_depth_stencil, std::pmr::memory_resource* memory_resource_work) {
+  std::tuple<ID3D12RootSignature*, ID3D12PipelineState*> CreateVsPsPipelineStateObject(const StrId& pso_id, D3d12Device* const device, const StrId& rootsig_id, LPCWSTR vs, LPCWSTR ps, D3D12_RT_FORMAT_ARRAY&& output_dxgi_format, DepthStencilEnableFlag enable_depth_stencil, std::pmr::memory_resource* memory_resource_work) {
+    if (rootsig_list_.contains(rootsig_id) && pso_list_.contains(pso_id)) {
+      return {rootsig_list_.at(rootsig_id), pso_list_.at(pso_id)};
+    }
     auto shader_result_ps = shader_compiler_.Compile(ps, ShaderType::kPs, memory_resource_work);
     if (!rootsig_list_.contains(rootsig_id)) {
       auto root_signature_blob = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_ps, DXC_OUT_ROOT_SIGNATURE);
@@ -170,10 +173,13 @@ class ShaderResourceSet {
     shader_result_vs->Release();
     if (FAILED(hr)) return {};
     pipeline_state->SetName(L"pso-vsps");
-    pso_list_.push_back(pipeline_state);
+    pso_list_.emplace(pso_id, pipeline_state);
     return {root_signature, pipeline_state};
   }
-  std::tuple<ID3D12RootSignature*, ID3D12PipelineState*> CreateCsPipelineStateObject(D3d12Device* const device, const StrId& rootsig_id, LPCWSTR cs, std::pmr::memory_resource* memory_resource_work) {
+  std::tuple<ID3D12RootSignature*, ID3D12PipelineState*> CreateCsPipelineStateObject(const StrId& pso_id, D3d12Device* const device, const StrId& rootsig_id, LPCWSTR cs, std::pmr::memory_resource* memory_resource_work) {
+    if (rootsig_list_.contains(rootsig_id) && pso_list_.contains(pso_id)) {
+      return {rootsig_list_.at(rootsig_id), pso_list_.at(pso_id)};
+    }
     auto shader_result_cs = shader_compiler_.Compile(cs, ShaderType::kCs, memory_resource_work);
     if (!rootsig_list_.contains(rootsig_id)) {
       auto root_signature_blob = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_cs, DXC_OUT_ROOT_SIGNATURE);
@@ -203,13 +209,19 @@ class ShaderResourceSet {
     shader_result_cs->Release();
     if (FAILED(hr)) return {};
     pipeline_state->SetName(L"pso-cs");
-    pso_list_.push_back(pipeline_state);
+    pso_list_.emplace(pso_id, pipeline_state);
     return {root_signature, pipeline_state};
+  }
+  ID3D12RootSignature* GetRootSignature(const StrId& rootsig_id) {
+    return rootsig_list_.at(rootsig_id);
+  }
+  ID3D12PipelineState* GetPipelineStateObject(const StrId& pso_id) {
+    return pso_list_.at(pso_id);
   }
  private:
   ShaderCompiler shader_compiler_;
   unordered_map<StrId, ID3D12RootSignature*> rootsig_list_;
-  vector<ID3D12PipelineState*> pso_list_;
+  unordered_map<StrId, ID3D12PipelineState*> pso_list_;
 };
 class PhysicalBufferSet {
  public:
@@ -438,13 +450,17 @@ TEST_CASE("create pso") {
   CHECK(shader_resource_set.Init(devices.GetDevice()));
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
   D3D12_RT_FORMAT_ARRAY array{{devices.swapchain.GetDxgiFormat()}, 1};
-  auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(devices.GetDevice(), StrId("rootsig_tmp"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/copysrv.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
+  auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("pso_id"), devices.GetDevice(), StrId("rootsig_tmp"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/copysrv.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
   CHECK(rootsig);
   CHECK(pso);
   memory_resource_work.Reset();
-  std::tie(rootsig, pso) = shader_resource_set.CreateCsPipelineStateObject(devices.GetDevice(), StrId("rootsig_cs_tmp"), L"shader/test/fill-screen.cs.hlsl", &memory_resource_work);
+  CHECK(shader_resource_set.GetRootSignature(StrId("rootsig_tmp")) == rootsig);
+  CHECK(shader_resource_set.GetPipelineStateObject(StrId("pso_id")) == pso);
+  std::tie(rootsig, pso) = shader_resource_set.CreateCsPipelineStateObject(StrId("pso_id_cs"), devices.GetDevice(), StrId("rootsig_cs_tmp"), L"shader/test/fill-screen.cs.hlsl", &memory_resource_work);
   CHECK(rootsig);
   CHECK(pso);
+  CHECK(shader_resource_set.GetRootSignature(StrId("rootsig_cs_tmp")) == rootsig);
+  CHECK(shader_resource_set.GetPipelineStateObject(StrId("pso_id_cs")) == pso);
   shader_resource_set.Term();
   devices.Term();
 }
@@ -522,7 +538,7 @@ TEST_CASE("draw to swapchain buffer") {
     CHECK(map.empty());
   }
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
-  auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(devices.GetDevice(), StrId("rootsig_tmp"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
+  auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("pso"), devices.GetDevice(), StrId("rootsig_tmp"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
   for (uint32_t frame_no = 0; frame_no < kTestFrameNum; frame_no++) {
     auto frame_index = frame_no % frame_buffer_num;
     devices.command_queue.WaitOnCpu(signal_values.frame_wait_signal[frame_index]);
@@ -659,7 +675,9 @@ TEST_CASE("draw to a created buffer") {
   SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
   CHECK(signal_values.used_signal_val.empty());
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
-  auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(devices.GetDevice(), StrId("rootsig_tmp"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
+  StrId pso_id("pso_tmp");
+  StrId rootsig_id("rootsig_tmp");
+  shader_resource_set.CreateVsPsPipelineStateObject(pso_id, devices.GetDevice(), rootsig_id, L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
   for (uint32_t frame_no = 0; frame_no < kTestFrameNum; frame_no++) {
     auto frame_index = frame_no % frame_buffer_num;
     devices.command_queue.WaitOnCpu(signal_values.frame_wait_signal[frame_index]);
@@ -670,12 +688,12 @@ TEST_CASE("draw to a created buffer") {
       {
         auto& width = swapchain_size.width;
         auto& height = swapchain_size.height;
-        command_list->SetGraphicsRootSignature(rootsig);
+        command_list->SetGraphicsRootSignature(shader_resource_set.GetRootSignature(rootsig_id));
         D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), D3D12_MIN_DEPTH, D3D12_MAX_DEPTH};
         command_list->RSSetViewports(1, &viewport);
         D3D12_RECT scissor_rect{0L, 0L, static_cast<LONG>(width), static_cast<LONG>(height)};
         command_list->RSSetScissorRects(1, &scissor_rect);
-        command_list->SetPipelineState(pso);
+        command_list->SetPipelineState(shader_resource_set.GetPipelineStateObject(pso_id));
         command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         auto cpu_handle = descriptor_heaps.GetHandle(buffer_id, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         command_list->OMSetRenderTargets(1, &cpu_handle, true, nullptr);
