@@ -76,8 +76,8 @@ class CommandListSet {
     auto allocators = allocator_.RetainCommandAllocator(command_queue_type, num);
     auto command_list = pool_.RetainCommandList(command_queue_type, num, allocators);
     allocator_buffer_[allocator_buffer_index_].push_back(allocators);
-    command_list_in_use_.insert_or_assign(command_queue_type, command_list);
-    command_list_num_in_use_.insert_or_assign(command_queue_type, num);
+    command_list_in_use_.emplace(command_queue_type, command_list);
+    command_list_num_in_use_.emplace(command_queue_type, num);
     return command_list;
   }
   void ExecuteCommandLists(ID3D12CommandQueue* command_queue, const CommandQueueType command_queue_type) {
@@ -138,7 +138,7 @@ class ShaderResourceSet {
         return {};
       }
       root_signature->SetName(L"rootsig-vsps");
-      rootsig_list_.insert({rootsig_id, root_signature});
+      rootsig_list_.emplace(rootsig_id, root_signature);
     }
     auto root_signature = rootsig_list_.at(rootsig_id);
     auto shader_result_vs = shader_compiler_.Compile(vs, ShaderType::kVs, memory_resource_work);
@@ -185,7 +185,7 @@ class ShaderResourceSet {
         return {};
       }
       root_signature->SetName(L"rootsig-cs");
-      rootsig_list_.insert({rootsig_id, root_signature});
+      rootsig_list_.emplace(rootsig_id, root_signature);
     }
     auto root_signature = rootsig_list_.at(rootsig_id);
     auto shader_object_cs = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result_cs, DXC_OUT_OBJECT);
@@ -245,14 +245,50 @@ class PhysicalBufferSet {
       logerror("CreatePhysicalBuffer failed. {} {}", hr, heap_type);
       return nullptr;
     }
-    allocation_list_.insert_or_assign(buffer_id, allocation);
-    resource_list_.insert_or_assign(buffer_id, resource);
+    allocation_list_.emplace(buffer_id, allocation);
+    resource_list_.emplace(buffer_id, resource);
     return resource;
   }
  private:
   D3D12MA::Allocator* allocator_ = nullptr;
   unordered_map<BufferId, D3D12MA::Allocation*> allocation_list_;
   unordered_map<BufferId, ID3D12Resource*> resource_list_;
+};
+class DescriptorHeapSet {
+ public:
+  DescriptorHeapSet(std::pmr::memory_resource* memory_resource)
+      : heaps_(memory_resource)
+      , handles_(memory_resource)
+  {
+    handles_[D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV] = unordered_map<BufferId, D3D12_CPU_DESCRIPTOR_HANDLE>(memory_resource);
+    handles_[D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER] = unordered_map<BufferId, D3D12_CPU_DESCRIPTOR_HANDLE>(memory_resource);
+    handles_[D3D12_DESCRIPTOR_HEAP_TYPE_RTV] = unordered_map<BufferId, D3D12_CPU_DESCRIPTOR_HANDLE>(memory_resource);
+    handles_[D3D12_DESCRIPTOR_HEAP_TYPE_DSV] = unordered_map<BufferId, D3D12_CPU_DESCRIPTOR_HANDLE>(memory_resource);
+    ASSERT(handles_.size() == D3D12_DESCRIPTOR_HEAP_TYPE_NUM_TYPES);
+  }
+  bool Init(D3d12Device* device) {
+    if (!heaps_[D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV].Init(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 256)) return false;
+    if (!heaps_[D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER].Init(device, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, 16)) return false;
+    if (!heaps_[D3D12_DESCRIPTOR_HEAP_TYPE_RTV].Init(device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 32)) return false;
+    if (!heaps_[D3D12_DESCRIPTOR_HEAP_TYPE_DSV].Init(device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 32)) return false;
+    ASSERT(heaps_.size() == D3D12_DESCRIPTOR_HEAP_TYPE_NUM_TYPES);
+    return true;
+  }
+  void Term() {
+    for (auto& [type, heap] : heaps_) {
+      heap.Term();
+    }
+  }
+  auto RetainHandle(const D3D12_DESCRIPTOR_HEAP_TYPE type, const BufferId buffer_id) {
+    if (!handles_.at(type).contains(buffer_id)) {
+      auto handle = heaps_.at(type).RetainHandle();
+      handles_.at(type).emplace(buffer_id, handle);
+    }
+    return handles_.at(type).at(buffer_id);
+  }
+ private:
+  unordered_map<D3D12_DESCRIPTOR_HEAP_TYPE, DescriptorHeap> heaps_;
+  unordered_map<D3D12_DESCRIPTOR_HEAP_TYPE, unordered_map<BufferId, D3D12_CPU_DESCRIPTOR_HANDLE>> handles_;
 };
 struct SignalValues {
   unordered_map<CommandQueueType, uint64_t> used_signal_val;
@@ -459,6 +495,25 @@ TEST_CASE("create buffer") {
   physical_buffers.Term();
   devices.Term();
 }
+TEST_CASE("create cpu handle") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  using namespace illuminate::gfx::d3d12;
+  const BufferSize2d swapchain_size{1600, 900};
+  const uint32_t frame_buffer_num = 2;
+  const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
+  DeviceSet devices;
+  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
+  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_size_in_bytes_persistent], buffer_size_in_bytes_persistent);
+  DescriptorHeapSet descriptor_heaps{&memory_resource_persistent};
+  CHECK(descriptor_heaps.Init(devices.GetDevice()));
+  auto handle = descriptor_heaps.RetainHandle(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1);
+  CHECK(handle.ptr);
+  CHECK(descriptor_heaps.RetainHandle(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1).ptr == handle.ptr);
+  CHECK(descriptor_heaps.RetainHandle(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1).ptr);
+  CHECK(descriptor_heaps.RetainHandle(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1).ptr != handle.ptr);
+  descriptor_heaps.Term();
+  devices.Term();
+}
 TEST_CASE("draw to a created buffer") {
 }
-
