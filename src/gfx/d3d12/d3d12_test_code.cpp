@@ -249,6 +249,9 @@ class PhysicalBufferSet {
     resource_list_.emplace(buffer_id, resource);
     return resource;
   }
+  ID3D12Resource* GetPhysicalBuffer(const BufferId buffer_id) {
+    return resource_list_.at(buffer_id);
+  }
  private:
   D3D12MA::Allocator* allocator_ = nullptr;
   unordered_map<BufferId, D3D12MA::Allocation*> allocation_list_;
@@ -279,11 +282,14 @@ class DescriptorHeapSet {
       heap.Term();
     }
   }
-  auto RetainHandle(const D3D12_DESCRIPTOR_HEAP_TYPE type, const BufferId buffer_id) {
+  auto RetainHandle(const BufferId buffer_id, const D3D12_DESCRIPTOR_HEAP_TYPE type) {
     if (!handles_.at(type).contains(buffer_id)) {
       auto handle = heaps_.at(type).RetainHandle();
       handles_.at(type).emplace(buffer_id, handle);
     }
+    return handles_.at(type).at(buffer_id);
+  }
+  auto GetHandle(const BufferId buffer_id, const D3D12_DESCRIPTOR_HEAP_TYPE type) {
     return handles_.at(type).at(buffer_id);
   }
  private:
@@ -492,6 +498,7 @@ TEST_CASE("create buffer") {
   D3D12_CLEAR_VALUE clear_value{.Format = resource_desc.Format, .Color = {1.0f,1.0f,1.0f,1.0f,}};
   auto resource = physical_buffers.CreatePhysicalBuffer(0, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, resource_desc, &clear_value);
   CHECK(resource);
+  CHECK(resource == physical_buffers.GetPhysicalBuffer(0));
   physical_buffers.Term();
   devices.Term();
 }
@@ -507,13 +514,115 @@ TEST_CASE("create cpu handle") {
   PmrLinearAllocator memory_resource_persistent(&buffer[buffer_size_in_bytes_persistent], buffer_size_in_bytes_persistent);
   DescriptorHeapSet descriptor_heaps{&memory_resource_persistent};
   CHECK(descriptor_heaps.Init(devices.GetDevice()));
-  auto handle = descriptor_heaps.RetainHandle(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1);
+  auto handle = descriptor_heaps.RetainHandle(1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
   CHECK(handle.ptr);
-  CHECK(descriptor_heaps.RetainHandle(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1).ptr == handle.ptr);
-  CHECK(descriptor_heaps.RetainHandle(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1).ptr);
-  CHECK(descriptor_heaps.RetainHandle(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1).ptr != handle.ptr);
+  CHECK(descriptor_heaps.RetainHandle(1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV).ptr == handle.ptr);
+  CHECK(descriptor_heaps.RetainHandle(1, D3D12_DESCRIPTOR_HEAP_TYPE_RTV).ptr);
+  CHECK(descriptor_heaps.RetainHandle(1, D3D12_DESCRIPTOR_HEAP_TYPE_RTV).ptr != handle.ptr);
   descriptor_heaps.Term();
   devices.Term();
 }
 TEST_CASE("draw to a created buffer") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  using namespace illuminate::gfx::d3d12;
+  const BufferSize2d swapchain_size{1600, 900};
+  const uint32_t frame_buffer_num = 2;
+  const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
+  DeviceSet devices;
+  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
+  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_size_in_bytes_persistent], buffer_size_in_bytes_persistent);
+  CommandListSet command_list_set(&memory_resource_persistent);
+  CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num));
+  ShaderResourceSet shader_resource_set(&memory_resource_persistent);
+  shader_resource_set.Init(devices.GetDevice());
+  PhysicalBufferSet physical_buffers(&memory_resource_persistent);
+  CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter()));
+  BufferId buffer_id = 0;
+  {
+    D3D12_RESOURCE_DESC resource_desc{
+      .Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+      .Alignment = 0,
+      .Width = swapchain_size.width,
+      .Height = swapchain_size.height,
+      .DepthOrArraySize = 1,
+      .MipLevels = 1,
+      .Format = devices.swapchain.GetDxgiFormat(),
+      .SampleDesc = {1, 0},
+      .Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN,
+      .Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+    };
+    D3D12_CLEAR_VALUE clear_value{.Format = resource_desc.Format, .Color = {1.0f,1.0f,1.0f,1.0f,}};
+    physical_buffers.CreatePhysicalBuffer(buffer_id, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, resource_desc, &clear_value);
+  }
+  DescriptorHeapSet descriptor_heaps{&memory_resource_persistent};
+  CHECK(descriptor_heaps.Init(devices.GetDevice()));
+  {
+    auto handle = descriptor_heaps.RetainHandle(buffer_id, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    auto resource = physical_buffers.GetPhysicalBuffer(buffer_id);
+    D3D12_RENDER_TARGET_VIEW_DESC view_desc{
+      .Format = devices.swapchain.GetDxgiFormat(),
+      .ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D,
+      .Texture2D{
+        .MipSlice = 0,
+        .PlaneSlice = 0,
+      },
+    };
+    devices.GetDevice()->CreateRenderTargetView(resource, &view_desc, handle);
+  }
+  SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
+  CHECK(signal_values.used_signal_val.empty());
+  CHECK(signal_values.frame_wait_signal.size() == frame_buffer_num);
+  for (auto& map : signal_values.frame_wait_signal) {
+    CHECK(map.empty());
+  }
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(devices.GetDevice(), StrId("rootsig_tmp"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
+  for (uint32_t frame_no = 0; frame_no < kTestFrameNum; frame_no++) {
+    auto frame_index = frame_no % frame_buffer_num;
+    devices.command_queue.WaitOnCpu(signal_values.frame_wait_signal[frame_index]);
+    command_list_set.RotateCommandAllocators();
+    devices.swapchain.UpdateBackBufferIndex();
+    {
+      auto command_list = command_list_set.GetCommandList(CommandQueueType::kGraphics, 1)[0];
+      D3D12_RESOURCE_BARRIER barrier{};
+      {
+        barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barrier.Transition.pResource   = devices.swapchain.GetResource();
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
+      }
+      command_list->ResourceBarrier(1, &barrier);
+      {
+        auto& width = swapchain_size.width;
+        auto& height = swapchain_size.height;
+        command_list->SetGraphicsRootSignature(rootsig);
+        D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), D3D12_MIN_DEPTH, D3D12_MAX_DEPTH};
+        command_list->RSSetViewports(1, &viewport);
+        D3D12_RECT scissor_rect{0L, 0L, static_cast<LONG>(width), static_cast<LONG>(height)};
+        command_list->RSSetScissorRects(1, &scissor_rect);
+        command_list->SetPipelineState(pso);
+        command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        auto cpu_handle = devices.swapchain.GetRtvHandle();
+        command_list->OMSetRenderTargets(1, &cpu_handle, true, nullptr);
+        command_list->DrawInstanced(3, 1, 0, 0);
+      }
+      {
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
+      }
+      command_list->ResourceBarrier(1, &barrier);
+      command_list_set.ExecuteCommandLists(devices.GetCommandQueue(CommandQueueType::kGraphics), CommandQueueType::kGraphics);
+    }
+    devices.swapchain.Present();
+    SignalQueueOnFrameEnd(&devices.command_queue, CommandQueueType::kGraphics, &signal_values.used_signal_val, &signal_values.frame_wait_signal[frame_index]);
+  }
+  devices.WaitAll();
+  descriptor_heaps.Term();
+  physical_buffers.Term();
+  shader_resource_set.Term();
+  command_list_set.Term();
+  devices.Term();
 }
