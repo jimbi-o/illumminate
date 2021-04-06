@@ -1,4 +1,10 @@
+#ifdef _MSC_VER
+#pragma warning(disable:4114)
+#endif
 TEST_CASE_CLASS("descriptor heap") {
+#ifdef _MSC_VER
+#pragma warning(default:4114)
+#endif
   DxgiCore dxgi_core;
   CHECK(dxgi_core.Init());
   Device device;
