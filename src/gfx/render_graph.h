@@ -16,7 +16,7 @@ using PassId = StrId;
 using BufferId = uint32_t;
 enum BufferStateFlags : uint32_t {
   kBufferStateFlagNone      = 0x0000,
-  kBufferStateFlagCbv       = 0x0001,
+  kBufferStateFlagCbvUpload = 0x0001,
   kBufferStateFlagSrvPsOnly = 0x0002,
   kBufferStateFlagSrvNonPs  = 0x0004,
   kBufferStateFlagUav       = 0x0008,
@@ -27,6 +27,15 @@ enum BufferStateFlags : uint32_t {
   kBufferStateFlagCopyDst   = 0x0100,
   kBufferStateFlagPresent   = 0x0200,
   kBufferStateFlagCommon    = kBufferStateFlagPresent,
+};
+struct BufferConfig {
+  uint32_t width;
+  uint32_t height;
+  BufferDimensionType dimension;
+  BufferFormat format;
+  BufferStateFlags state_flags;
+  BufferStateFlags initial_state_flags;
+  ClearValue clear_value;
 };
 }
 #endif

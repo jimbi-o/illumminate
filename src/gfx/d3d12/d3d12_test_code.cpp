@@ -254,7 +254,7 @@ class PhysicalBufferSet {
     ID3D12Resource* resource = nullptr;
     auto hr = allocator_->CreateResource(&allocation_desc, &resource_desc, initial_state, clear_value, &allocation, IID_PPV_ARGS(&resource));
     if (FAILED(hr)) {
-      logerror("CreatePhysicalBuffer failed. {} {}", hr, heap_type);
+      logerror("CreatePhysicalBuffer failed. {} {} {}", buffer_id, hr, heap_type);
       return nullptr;
     }
     allocation_list_.emplace(buffer_id, allocation);
@@ -308,18 +308,10 @@ class DescriptorHeapSet {
   unordered_map<D3D12_DESCRIPTOR_HEAP_TYPE, DescriptorHeap> heaps_;
   unordered_map<D3D12_DESCRIPTOR_HEAP_TYPE, unordered_map<BufferId, D3D12_CPU_DESCRIPTOR_HANDLE>> handles_;
 };
-struct BufferConfig {
-  uint32_t width;
-  uint32_t height;
-  BufferFormat format;
-  BufferStateFlags state_flags;
-  BufferStateFlags initial_state_flags;
-  ClearValue clear_value;
-};
 constexpr D3D12_RESOURCE_STATES ConvertToD3d12ResourceState(const BufferStateFlags& flags) {
   D3D12_RESOURCE_STATES state{};
-  if (flags & kBufferStateFlagCbv) {
-    state |= D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
+  if (flags & kBufferStateFlagCbvUpload) {
+    state |= D3D12_RESOURCE_STATE_GENERIC_READ;
   }
   if (flags & kBufferStateFlagSrvPsOnly) {
     state |= D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
@@ -361,9 +353,23 @@ constexpr D3D12_RESOURCE_FLAGS ConvertToD3d12ResourceFlags(const BufferStateFlag
   if ((flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL) && !(state_flags & kBufferStateFlagSrvPsOnly) && !(state_flags & kBufferStateFlagSrvNonPs)) flags = D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
   return flags;
 }
+constexpr D3D12_RESOURCE_DIMENSION ConvertToD3d12ResourceDimension(const BufferDimensionType type) {
+  switch (type) {
+    case BufferDimensionType::kBuffer:    return D3D12_RESOURCE_DIMENSION_BUFFER;
+    case BufferDimensionType::k1d:        return D3D12_RESOURCE_DIMENSION_TEXTURE1D;
+    case BufferDimensionType::k1dArray:   return D3D12_RESOURCE_DIMENSION_TEXTURE1D;
+    case BufferDimensionType::k2d:        return D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    case BufferDimensionType::k2dArray:   return D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    case BufferDimensionType::k3d:        return D3D12_RESOURCE_DIMENSION_TEXTURE3D;
+    case BufferDimensionType::kCube:      return D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    case BufferDimensionType::kCubeArray: return D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    case BufferDimensionType::kAS:        return D3D12_RESOURCE_DIMENSION_BUFFER; // TODO check
+  }
+  return D3D12_RESOURCE_DIMENSION_BUFFER;
+}
 constexpr D3D12_RESOURCE_DESC ConvertToD3d12ResourceDesc(const BufferConfig& buffer_config) {
   return {
-    .Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+    .Dimension = ConvertToD3d12ResourceDimension(buffer_config.dimension),
     .Alignment = 0,
     .Width = buffer_config.width,
     .Height = buffer_config.height,
@@ -371,7 +377,7 @@ constexpr D3D12_RESOURCE_DESC ConvertToD3d12ResourceDesc(const BufferConfig& buf
     .MipLevels = 1,
     .Format = GetDxgiFormat(buffer_config.format),
     .SampleDesc = {1, 0},
-    .Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN,
+    .Layout = (buffer_config.dimension == BufferDimensionType::kBuffer && buffer_config.format == BufferFormat::kUnknown) ? D3D12_TEXTURE_LAYOUT_ROW_MAJOR : D3D12_TEXTURE_LAYOUT_UNKNOWN,
     .Flags = ConvertToD3d12ResourceFlags(buffer_config.state_flags),
   };
 }
@@ -657,6 +663,7 @@ TEST_CASE("draw to a created buffer") {
   BufferConfig buffer_config{
     .width = swapchain_size.width,
     .height = swapchain_size.height,
+    .dimension = BufferDimensionType::k2d,
     .format = BufferFormat::kR8G8B8A8Unorm,
     .state_flags = kBufferStateFlagRtv,
     .initial_state_flags = kBufferStateFlagRtv,
@@ -725,6 +732,8 @@ TEST_CASE("use cbv (change buffer color dynamically)") {
   CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num));
   ShaderResourceSet shader_resource_set(&memory_resource_persistent);
   shader_resource_set.Init(devices.GetDevice());
+  PhysicalBufferSet physical_buffers(&memory_resource_persistent);
+  CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter()));
   SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
   CHECK(signal_values.used_signal_val.empty());
   CHECK(signal_values.frame_wait_signal.size() == frame_buffer_num);
@@ -733,6 +742,24 @@ TEST_CASE("use cbv (change buffer color dynamically)") {
   }
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
   auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("pso"), devices.GetDevice(), StrId("rootsig_tmp"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test-cbv.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
+  vector<ID3D12Resource*> cbv{&memory_resource_persistent};
+  {
+    cbv.reserve(frame_buffer_num);
+    BufferId buffer_id = 0;
+    BufferConfig buffer_config{
+      .width = (sizeof(float) * 4),
+      .height = 1,
+      .dimension = BufferDimensionType::kBuffer,
+      .format = BufferFormat::kUnknown,
+      .state_flags = kBufferStateFlagCbvUpload,
+      .initial_state_flags = kBufferStateFlagCbvUpload,
+      .clear_value = {},
+    };
+    for (uint32_t i = 0; i < frame_buffer_num; i++) {
+      cbv.push_back(physical_buffers.CreatePhysicalBuffer(buffer_id, D3D12_HEAP_TYPE_UPLOAD, GetInitialD3d12ResourceStateFlag(buffer_config), ConvertToD3d12ResourceDesc(buffer_config), nullptr));
+      buffer_id++;
+    }
+  }
   for (uint32_t frame_no = 0; frame_no < kTestFrameNum; frame_no++) {
     auto frame_index = frame_no % frame_buffer_num;
     devices.command_queue.WaitOnCpu(signal_values.frame_wait_signal[frame_index]);
@@ -781,6 +808,7 @@ TEST_CASE("use cbv (change buffer color dynamically)") {
     SignalQueueOnFrameEnd(&devices.command_queue, CommandQueueType::kGraphics, &signal_values.used_signal_val, &signal_values.frame_wait_signal[frame_index]);
   }
   devices.WaitAll();
+  physical_buffers.Term();
   shader_resource_set.Term();
   command_list_set.Term();
   devices.Term();
