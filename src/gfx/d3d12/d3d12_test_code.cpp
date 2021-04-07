@@ -223,6 +223,7 @@ class ShaderResourceSet {
   unordered_map<StrId, ID3D12RootSignature*> rootsig_list_;
   unordered_map<StrId, ID3D12PipelineState*> pso_list_;
 };
+using PhysicalBufferId = uint32_t;
 class PhysicalBufferSet {
  public:
   PhysicalBufferSet(std::pmr::memory_resource* memory_resource)
@@ -237,6 +238,7 @@ class PhysicalBufferSet {
     desc.pAdapter = adapter;
     auto hr = D3D12MA::CreateAllocator(&desc, &allocator_);
     if (FAILED(hr)) return false;
+    buffer_id_used_ = 0;
     return true;
   }
   void Term() {
@@ -246,20 +248,20 @@ class PhysicalBufferSet {
     }
     allocator_->Release();
   }
-  ID3D12Resource* CreatePhysicalBuffer(const BufferId buffer_id, const D3D12_HEAP_TYPE heap_type, const D3D12_RESOURCE_STATES initial_state, const D3D12_RESOURCE_DESC& resource_desc, const D3D12_CLEAR_VALUE* clear_value) {
-    ASSERT(!resource_list_.contains(buffer_id));
+  PhysicalBufferId CreatePhysicalBuffer(const D3D12_HEAP_TYPE heap_type, const D3D12_RESOURCE_STATES initial_state, const D3D12_RESOURCE_DESC& resource_desc, const D3D12_CLEAR_VALUE* clear_value) {
     D3D12MA::ALLOCATION_DESC allocation_desc{};
     allocation_desc.HeapType = heap_type;
     D3D12MA::Allocation* allocation = nullptr;
     ID3D12Resource* resource = nullptr;
     auto hr = allocator_->CreateResource(&allocation_desc, &resource_desc, initial_state, clear_value, &allocation, IID_PPV_ARGS(&resource));
     if (FAILED(hr)) {
-      logerror("CreatePhysicalBuffer failed. {} {} {}", buffer_id, hr, heap_type);
-      return nullptr;
+      logerror("CreatePhysicalBuffer failed. {} {} {}", buffer_id_used_, hr, heap_type);
+      return {};
     }
-    allocation_list_.emplace(buffer_id, allocation);
-    resource_list_.emplace(buffer_id, resource);
-    return resource;
+    buffer_id_used_++;
+    allocation_list_.emplace(buffer_id_used_, allocation);
+    resource_list_.emplace(buffer_id_used_, resource);
+    return buffer_id_used_;
   }
   ID3D12Resource* GetPhysicalBuffer(const BufferId buffer_id) {
     return resource_list_.at(buffer_id);
@@ -268,6 +270,7 @@ class PhysicalBufferSet {
   D3D12MA::Allocator* allocator_ = nullptr;
   unordered_map<BufferId, D3D12MA::Allocation*> allocation_list_;
   unordered_map<BufferId, ID3D12Resource*> resource_list_;
+  PhysicalBufferId buffer_id_used_ = 0;
 };
 class DescriptorHeapSet {
  public:
@@ -617,9 +620,9 @@ TEST_CASE("create buffer") {
     resource_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
   }
   D3D12_CLEAR_VALUE clear_value{.Format = resource_desc.Format, .Color = {1.0f,1.0f,1.0f,1.0f,}};
-  auto resource = physical_buffers.CreatePhysicalBuffer(0, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, resource_desc, &clear_value);
-  CHECK(resource);
-  CHECK(resource == physical_buffers.GetPhysicalBuffer(0));
+  auto buffer_id = physical_buffers.CreatePhysicalBuffer(D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, resource_desc, &clear_value);
+  CHECK(buffer_id);
+  CHECK(physical_buffers.GetPhysicalBuffer(buffer_id));
   physical_buffers.Term();
   devices.Term();
 }
@@ -659,7 +662,6 @@ TEST_CASE("draw to a created buffer") {
   shader_resource_set.Init(devices.GetDevice());
   PhysicalBufferSet physical_buffers(&memory_resource_persistent);
   CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter()));
-  BufferId buffer_id = 0;
   BufferConfig buffer_config{
     .width = swapchain_size.width,
     .height = swapchain_size.height,
@@ -670,7 +672,7 @@ TEST_CASE("draw to a created buffer") {
     .clear_value = std::array<float, 4>{1.0f,1.0f,1.0f,1.0f},
   };
   auto clear_value = GetD3d12ClearValue(buffer_config);
-  physical_buffers.CreatePhysicalBuffer(buffer_id, D3D12_HEAP_TYPE_DEFAULT, GetInitialD3d12ResourceStateFlag(buffer_config), ConvertToD3d12ResourceDesc(buffer_config), IsClearValueValid(buffer_config) ? &clear_value : nullptr);
+  auto buffer_id = physical_buffers.CreatePhysicalBuffer(D3D12_HEAP_TYPE_DEFAULT, GetInitialD3d12ResourceStateFlag(buffer_config), ConvertToD3d12ResourceDesc(buffer_config), IsClearValueValid(buffer_config) ? &clear_value : nullptr);
   DescriptorHeapSet descriptor_heaps{&memory_resource_persistent};
   CHECK(descriptor_heaps.Init(devices.GetDevice()));
   {
@@ -756,9 +758,9 @@ TEST_CASE("use cbv (change buffer color dynamically)") {
     cbv_ptr.resize(frame_buffer_num);
     for (uint32_t i = 0; i < frame_buffer_num; i++) {
       CAPTURE(i);
-      auto cbv = physical_buffers.CreatePhysicalBuffer(i, D3D12_HEAP_TYPE_UPLOAD, GetInitialD3d12ResourceStateFlag(buffer_config), ConvertToD3d12ResourceDesc(buffer_config), nullptr);
+      auto buffer_id = physical_buffers.CreatePhysicalBuffer(D3D12_HEAP_TYPE_UPLOAD, GetInitialD3d12ResourceStateFlag(buffer_config), ConvertToD3d12ResourceDesc(buffer_config), nullptr);
       D3D12_RANGE read_range{};
-      auto hr = cbv->Map(0, &read_range, &cbv_ptr[i]);
+      auto hr = physical_buffers.GetPhysicalBuffer(buffer_id)->Map(0, &read_range, &cbv_ptr[i]);
       CHECK(SUCCEEDED(hr));
       if (FAILED(hr)) {
         logerror("cbv->Map failed. {} {}", hr, i);
