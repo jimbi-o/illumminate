@@ -416,6 +416,44 @@ constexpr D3D12_RENDER_TARGET_VIEW_DESC ConvertToD3d12RtvDesc(const BufferConfig
     },
   };
 }
+constexpr BufferConfig GetBufferConfigUploadBuffer(const uint32_t size_in_bytes) {
+  return {
+    .width = size_in_bytes,
+    .height = 1,
+    .dimension = BufferDimensionType::kBuffer,
+    .format = BufferFormat::kUnknown,
+    .state_flags = kBufferStateFlagCbvUpload,
+    .initial_state_flags = kBufferStateFlagCbvUpload,
+    .clear_value = {},
+  };
+}
+using FrameBufferedBufferId = uint32_t;
+class FrameBufferedBufferSet {
+ public:
+  FrameBufferedBufferSet(std::pmr::memory_resource* memory_resource) : mapped_ptr_(memory_resource), memory_resource_(memory_resource) {
+  }
+  FrameBufferedBufferId RegisterFrameBufferedBuffers(ID3D12Resource** resource_list, const uint32_t resource_list_len) {
+    buffer_id_used_++;
+    mapped_ptr_.emplace(buffer_id_used_, vector<void*>{memory_resource_});
+    auto& ptr_list = mapped_ptr_.at(buffer_id_used_);
+    ptr_list.resize(resource_list_len);
+    D3D12_RANGE read_range{};
+    for (uint32_t i = 0; i < resource_list_len; i++) {
+      auto hr = resource_list[i]->Map(0, &read_range, &ptr_list[i]);
+      if (FAILED(hr)) {
+        return {};
+      }
+    }
+    return buffer_id_used_;
+  }
+  void* GetFrameBufferedBuffers(FrameBufferedBufferId buffer_id, const uint32_t index) {
+    return mapped_ptr_.at(buffer_id)[index];
+  }
+ private:
+  unordered_map<FrameBufferedBufferId, vector<void*>> mapped_ptr_;
+  std::pmr::memory_resource* memory_resource_;
+  FrameBufferedBufferId buffer_id_used_ = 0;
+};
 struct SignalValues {
   unordered_map<CommandQueueType, uint64_t> used_signal_val;
   vector<unordered_map<CommandQueueType, uint64_t>> frame_wait_signal;
@@ -720,6 +758,47 @@ TEST_CASE("draw to a created buffer") {
   command_list_set.Term();
   devices.Term();
 }
+TEST_CASE("cbv frame buffering") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  using namespace illuminate::gfx::d3d12;
+  const BufferSize2d swapchain_size{1600, 900};
+  const uint32_t frame_buffer_num = 2;
+  const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
+  DeviceSet devices;
+  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
+  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_size_in_bytes_persistent], buffer_size_in_bytes_persistent);
+  PhysicalBufferSet physical_buffers(&memory_resource_persistent);
+  CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter()));
+  FrameBufferedBufferSet frame_buffered_buffers(&memory_resource_persistent);
+  {
+    PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+    BufferConfig buffer_config = GetBufferConfigUploadBuffer(sizeof(uint32_t));
+    auto initial_flag = GetInitialD3d12ResourceStateFlag(buffer_config);
+    auto d3d12_resource_desc = ConvertToD3d12ResourceDesc(buffer_config);
+    vector<ID3D12Resource*> resource_list{&memory_resource_work};
+    resource_list.resize(frame_buffer_num);
+    for (uint32_t i = 0; i < frame_buffer_num; i++) {
+      CAPTURE(i);
+      auto buffer_id = physical_buffers.CreatePhysicalBuffer(D3D12_HEAP_TYPE_UPLOAD, initial_flag, d3d12_resource_desc, nullptr);
+      CHECK(buffer_id);
+      resource_list[i] = physical_buffers.GetPhysicalBuffer(buffer_id);
+      CHECK(resource_list[i]);
+    }
+    auto frame_buffered_buffer_id = frame_buffered_buffers.RegisterFrameBufferedBuffers(resource_list.data(), frame_buffer_num);
+    void* prev_ptr = nullptr;
+    for (uint32_t i = 0; i < frame_buffer_num; i++) {
+      CAPTURE(i);
+      auto ptr = frame_buffered_buffers.GetFrameBufferedBuffers(frame_buffered_buffer_id, i);
+      CHECK(ptr);
+      CHECK(ptr != prev_ptr);
+      memcpy(ptr, &i, sizeof(i));
+      prev_ptr = ptr;
+    }
+  }
+  physical_buffers.Term();
+  devices.Term();
+}
 TEST_CASE("use cbv (change buffer color dynamically)") {
   using namespace illuminate;
   using namespace illuminate::gfx;
@@ -746,15 +825,7 @@ TEST_CASE("use cbv (change buffer color dynamically)") {
   auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("pso"), devices.GetDevice(), StrId("rootsig_tmp"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test-cbv.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
   vector<void*> cbv_ptr{&memory_resource_persistent};
   {
-    BufferConfig buffer_config{
-      .width = (sizeof(float) * 4),
-      .height = 1,
-      .dimension = BufferDimensionType::kBuffer,
-      .format = BufferFormat::kUnknown,
-      .state_flags = kBufferStateFlagCbvUpload,
-      .initial_state_flags = kBufferStateFlagCbvUpload,
-      .clear_value = {},
-    };
+    BufferConfig buffer_config = GetBufferConfigUploadBuffer(sizeof(float) * 4);
     cbv_ptr.resize(frame_buffer_num);
     for (uint32_t i = 0; i < frame_buffer_num; i++) {
       CAPTURE(i);
