@@ -742,10 +742,8 @@ TEST_CASE("use cbv (change buffer color dynamically)") {
   }
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
   auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("pso"), devices.GetDevice(), StrId("rootsig_tmp"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test-cbv.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
-  vector<ID3D12Resource*> cbv{&memory_resource_persistent};
+  vector<void*> cbv_ptr{&memory_resource_persistent};
   {
-    cbv.reserve(frame_buffer_num);
-    BufferId buffer_id = 0;
     BufferConfig buffer_config{
       .width = (sizeof(float) * 4),
       .height = 1,
@@ -755,19 +753,31 @@ TEST_CASE("use cbv (change buffer color dynamically)") {
       .initial_state_flags = kBufferStateFlagCbvUpload,
       .clear_value = {},
     };
+    cbv_ptr.resize(frame_buffer_num);
     for (uint32_t i = 0; i < frame_buffer_num; i++) {
-      cbv.push_back(physical_buffers.CreatePhysicalBuffer(buffer_id, D3D12_HEAP_TYPE_UPLOAD, GetInitialD3d12ResourceStateFlag(buffer_config), ConvertToD3d12ResourceDesc(buffer_config), nullptr));
-      buffer_id++;
+      CAPTURE(i);
+      auto cbv = physical_buffers.CreatePhysicalBuffer(i, D3D12_HEAP_TYPE_UPLOAD, GetInitialD3d12ResourceStateFlag(buffer_config), ConvertToD3d12ResourceDesc(buffer_config), nullptr);
+      D3D12_RANGE read_range{};
+      auto hr = cbv->Map(0, &read_range, &cbv_ptr[i]);
+      CHECK(SUCCEEDED(hr));
+      if (FAILED(hr)) {
+        logerror("cbv->Map failed. {} {}", hr, i);
+      }
     }
   }
   for (uint32_t frame_no = 0; frame_no < kTestFrameNum; frame_no++) {
     auto frame_index = frame_no % frame_buffer_num;
     devices.command_queue.WaitOnCpu(signal_values.frame_wait_signal[frame_index]);
+    {
+      // update cbv
+      float color_val_per_channel = 0.1f * static_cast<float>(frame_no);
+      float color_diff[4] = {color_val_per_channel, color_val_per_channel, color_val_per_channel, 0.0f};
+      memcpy(cbv_ptr[frame_index], color_diff, sizeof(float) * 4);
+    }
     command_list_set.RotateCommandAllocators();
     devices.swapchain.UpdateBackBufferIndex();
     {
       /** TODO use cbv with frame buffering
-       ** create frame buffering cbv
        ** create cpu handles for each buffer
        ** attach gpu handles to pipeline
        ** increment color value by 0.1f and check results from RenderDoc captureing multiple frames in sequence
