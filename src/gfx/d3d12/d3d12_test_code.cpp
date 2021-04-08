@@ -438,14 +438,12 @@ class FrameBufferedBufferSet {
     auto& ptr_list = mapped_ptr_.at(buffer_id_used_);
     ptr_list.resize(resource_list_len);
     D3D12_RANGE read_range{};
-    uint32_t mask = 255;
-    auto buffer_size_in_bytes_256 = (buffer_size_in_bytes + mask) & ~mask;
     for (uint32_t i = 0; i < resource_list_len; i++) {
       auto hr = resource_list[i]->Map(0, &read_range, &ptr_list[i]);
       if (FAILED(hr)) {
         return {};
       }
-      D3D12_CONSTANT_BUFFER_VIEW_DESC cbv_desc{resource_list[i]->GetGPUVirtualAddress(), buffer_size_in_bytes_256};
+      D3D12_CONSTANT_BUFFER_VIEW_DESC cbv_desc{resource_list[i]->GetGPUVirtualAddress(), buffer_size_in_bytes};
       device->CreateConstantBufferView(&cbv_desc, cpu_handles[i]);
     }
     return buffer_id_used_;
@@ -471,8 +469,10 @@ void SignalQueueOnFrameEnd(CommandQueue* const command_queue, CommandQueueType c
   command_queue->RegisterSignal(command_queue_type, signal_val);
   (*frame_wait_signal)[command_queue_type] = signal_val;
 }
-FrameBufferedBufferId CreateFrameBufferedBuffers(D3d12Device* const device, const uint32_t buffer_size_in_bytes, const uint32_t frame_buffer_num, PhysicalBufferSet* physical_buffers, DescriptorHeapSet* descriptor_heaps, FrameBufferedBufferSet* frame_buffered_buffers, std::pmr::memory_resource* memory_resource_work) {
-  BufferConfig buffer_config = GetBufferConfigUploadBuffer(buffer_size_in_bytes);
+FrameBufferedBufferId CreateFrameBufferedConstantBuffers(D3d12Device* const device, const uint32_t buffer_size_in_bytes, const uint32_t frame_buffer_num, PhysicalBufferSet* physical_buffers, DescriptorHeapSet* descriptor_heaps, FrameBufferedBufferSet* frame_buffered_buffers, std::pmr::memory_resource* memory_resource_work) {
+  uint32_t mask = 255;
+  auto buffer_size_in_bytes_256_aligned = (buffer_size_in_bytes + mask) & ~mask;
+  BufferConfig buffer_config = GetBufferConfigUploadBuffer(buffer_size_in_bytes_256_aligned);
   auto initial_flag = GetInitialD3d12ResourceStateFlag(buffer_config);
   auto d3d12_resource_desc = ConvertToD3d12ResourceDesc(buffer_config);
   vector<ID3D12Resource*> resource_list{memory_resource_work};
@@ -485,7 +485,7 @@ FrameBufferedBufferId CreateFrameBufferedBuffers(D3d12Device* const device, cons
     auto cpu_handle = descriptor_heaps->RetainHandle(buffer_id, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     cpu_handles[i] = cpu_handle;
   }
-  auto frame_buffered_buffer_id = frame_buffered_buffers->RegisterFrameBufferedBuffers(device, buffer_size_in_bytes, resource_list.data(), cpu_handles.data(), frame_buffer_num);
+  auto frame_buffered_buffer_id = frame_buffered_buffers->RegisterFrameBufferedBuffers(device, buffer_size_in_bytes_256_aligned, resource_list.data(), cpu_handles.data(), frame_buffer_num);
   return frame_buffered_buffer_id;
 }
 }
@@ -854,9 +854,10 @@ TEST_CASE("use cbv (change buffer color dynamically)") {
   }
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
   auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("pso"), devices.GetDevice(), StrId("rootsig_tmp"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test-cbv.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
-  auto cbv_id = CreateFrameBufferedBuffers(devices.GetDevice(), sizeof(float) * 4, frame_buffer_num, &physical_buffers, &descriptor_heaps, &frame_buffered_buffers, &memory_resource_work);
+  auto cbv_id = CreateFrameBufferedConstantBuffers(devices.GetDevice(), sizeof(float) * 4, frame_buffer_num, &physical_buffers, &descriptor_heaps, &frame_buffered_buffers, &memory_resource_work);
   CHECK(cbv_id);
   for (uint32_t frame_no = 0; frame_no < kTestFrameNum; frame_no++) {
+    CAPTURE(frame_no);
     auto frame_index = frame_no % frame_buffer_num;
     devices.command_queue.WaitOnCpu(signal_values.frame_wait_signal[frame_index]);
     {
@@ -871,7 +872,7 @@ TEST_CASE("use cbv (change buffer color dynamically)") {
     devices.swapchain.UpdateBackBufferIndex();
     {
       /** TODO use cbv with frame buffering
-       ** create cpu handles for each buffer
+       ** copy cpu handles to gpu visible descriptor heap
        ** attach gpu handles to pipeline
        ** increment color value by 0.1f and check results from RenderDoc captureing multiple frames in sequence
        **/
