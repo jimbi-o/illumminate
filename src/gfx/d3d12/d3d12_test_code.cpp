@@ -467,6 +467,19 @@ void SignalQueueOnFrameEnd(CommandQueue* const command_queue, CommandQueueType c
   command_queue->RegisterSignal(command_queue_type, signal_val);
   (*frame_wait_signal)[command_queue_type] = signal_val;
 }
+FrameBufferedBufferId CreateFrameBufferedBuffers(const uint32_t buffer_size_in_bytes, const uint32_t frame_buffer_num, PhysicalBufferSet* physical_buffers, FrameBufferedBufferSet* frame_buffered_buffers, std::pmr::memory_resource* memory_resource_work) {
+  BufferConfig buffer_config = GetBufferConfigUploadBuffer(buffer_size_in_bytes);
+  auto initial_flag = GetInitialD3d12ResourceStateFlag(buffer_config);
+  auto d3d12_resource_desc = ConvertToD3d12ResourceDesc(buffer_config);
+  vector<ID3D12Resource*> resource_list{memory_resource_work};
+  resource_list.resize(frame_buffer_num);
+  for (uint32_t i = 0; i < frame_buffer_num; i++) {
+    auto buffer_id = physical_buffers->CreatePhysicalBuffer(D3D12_HEAP_TYPE_UPLOAD, initial_flag, d3d12_resource_desc, nullptr);
+    resource_list[i] = physical_buffers->GetPhysicalBuffer(buffer_id);
+  }
+  auto frame_buffered_buffer_id = frame_buffered_buffers->RegisterFrameBufferedBuffers(resource_list.data(), frame_buffer_num);
+  return frame_buffered_buffer_id;
+}
 }
 #ifdef BUILD_WITH_TEST
 namespace {
@@ -815,6 +828,7 @@ TEST_CASE("use cbv (change buffer color dynamically)") {
   shader_resource_set.Init(devices.GetDevice());
   PhysicalBufferSet physical_buffers(&memory_resource_persistent);
   CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter()));
+  FrameBufferedBufferSet frame_buffered_buffers(&memory_resource_persistent);
   SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
   CHECK(signal_values.used_signal_val.empty());
   CHECK(signal_values.frame_wait_signal.size() == frame_buffer_num);
@@ -823,21 +837,8 @@ TEST_CASE("use cbv (change buffer color dynamically)") {
   }
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
   auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("pso"), devices.GetDevice(), StrId("rootsig_tmp"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test-cbv.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
-  vector<void*> cbv_ptr{&memory_resource_persistent};
-  {
-    BufferConfig buffer_config = GetBufferConfigUploadBuffer(sizeof(float) * 4);
-    cbv_ptr.resize(frame_buffer_num);
-    for (uint32_t i = 0; i < frame_buffer_num; i++) {
-      CAPTURE(i);
-      auto buffer_id = physical_buffers.CreatePhysicalBuffer(D3D12_HEAP_TYPE_UPLOAD, GetInitialD3d12ResourceStateFlag(buffer_config), ConvertToD3d12ResourceDesc(buffer_config), nullptr);
-      D3D12_RANGE read_range{};
-      auto hr = physical_buffers.GetPhysicalBuffer(buffer_id)->Map(0, &read_range, &cbv_ptr[i]);
-      CHECK(SUCCEEDED(hr));
-      if (FAILED(hr)) {
-        logerror("cbv->Map failed. {} {}", hr, i);
-      }
-    }
-  }
+  auto cbv_id = CreateFrameBufferedBuffers(sizeof(float) * 4, frame_buffer_num, &physical_buffers, &frame_buffered_buffers, &memory_resource_work);
+  CHECK(cbv_id);
   for (uint32_t frame_no = 0; frame_no < kTestFrameNum; frame_no++) {
     auto frame_index = frame_no % frame_buffer_num;
     devices.command_queue.WaitOnCpu(signal_values.frame_wait_signal[frame_index]);
@@ -845,7 +846,9 @@ TEST_CASE("use cbv (change buffer color dynamically)") {
       // update cbv
       float color_val_per_channel = 0.1f * static_cast<float>(frame_no);
       float color_diff[4] = {color_val_per_channel, color_val_per_channel, color_val_per_channel, 0.0f};
-      memcpy(cbv_ptr[frame_index], color_diff, sizeof(float) * 4);
+      auto cbv_ptr = frame_buffered_buffers.GetFrameBufferedBuffers(cbv_id, frame_index);
+      CHECK(cbv_ptr);
+      memcpy(cbv_ptr, color_diff, sizeof(float) * 4);
     }
     command_list_set.RotateCommandAllocators();
     devices.swapchain.UpdateBackBufferIndex();
