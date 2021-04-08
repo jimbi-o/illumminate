@@ -432,17 +432,21 @@ class FrameBufferedBufferSet {
  public:
   FrameBufferedBufferSet(std::pmr::memory_resource* memory_resource) : mapped_ptr_(memory_resource), memory_resource_(memory_resource) {
   }
-  FrameBufferedBufferId RegisterFrameBufferedBuffers(ID3D12Resource** resource_list, const uint32_t resource_list_len) {
+  FrameBufferedBufferId RegisterFrameBufferedBuffers(D3d12Device* const device, const uint32_t buffer_size_in_bytes, ID3D12Resource** resource_list, const D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handles, const uint32_t resource_list_len) {
     buffer_id_used_++;
     mapped_ptr_.emplace(buffer_id_used_, vector<void*>{memory_resource_});
     auto& ptr_list = mapped_ptr_.at(buffer_id_used_);
     ptr_list.resize(resource_list_len);
     D3D12_RANGE read_range{};
+    uint32_t mask = 255;
+    auto buffer_size_in_bytes_256 = (buffer_size_in_bytes + mask) & ~mask;
     for (uint32_t i = 0; i < resource_list_len; i++) {
       auto hr = resource_list[i]->Map(0, &read_range, &ptr_list[i]);
       if (FAILED(hr)) {
         return {};
       }
+      D3D12_CONSTANT_BUFFER_VIEW_DESC cbv_desc{resource_list[i]->GetGPUVirtualAddress(), buffer_size_in_bytes_256};
+      device->CreateConstantBufferView(&cbv_desc, cpu_handles[i]);
     }
     return buffer_id_used_;
   }
@@ -467,17 +471,21 @@ void SignalQueueOnFrameEnd(CommandQueue* const command_queue, CommandQueueType c
   command_queue->RegisterSignal(command_queue_type, signal_val);
   (*frame_wait_signal)[command_queue_type] = signal_val;
 }
-FrameBufferedBufferId CreateFrameBufferedBuffers(const uint32_t buffer_size_in_bytes, const uint32_t frame_buffer_num, PhysicalBufferSet* physical_buffers, FrameBufferedBufferSet* frame_buffered_buffers, std::pmr::memory_resource* memory_resource_work) {
+FrameBufferedBufferId CreateFrameBufferedBuffers(D3d12Device* const device, const uint32_t buffer_size_in_bytes, const uint32_t frame_buffer_num, PhysicalBufferSet* physical_buffers, DescriptorHeapSet* descriptor_heaps, FrameBufferedBufferSet* frame_buffered_buffers, std::pmr::memory_resource* memory_resource_work) {
   BufferConfig buffer_config = GetBufferConfigUploadBuffer(buffer_size_in_bytes);
   auto initial_flag = GetInitialD3d12ResourceStateFlag(buffer_config);
   auto d3d12_resource_desc = ConvertToD3d12ResourceDesc(buffer_config);
   vector<ID3D12Resource*> resource_list{memory_resource_work};
   resource_list.resize(frame_buffer_num);
+  vector<D3D12_CPU_DESCRIPTOR_HANDLE> cpu_handles{memory_resource_work};
+  cpu_handles.resize(frame_buffer_num);
   for (uint32_t i = 0; i < frame_buffer_num; i++) {
     auto buffer_id = physical_buffers->CreatePhysicalBuffer(D3D12_HEAP_TYPE_UPLOAD, initial_flag, d3d12_resource_desc, nullptr);
     resource_list[i] = physical_buffers->GetPhysicalBuffer(buffer_id);
+    auto cpu_handle = descriptor_heaps->RetainHandle(buffer_id, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    cpu_handles[i] = cpu_handle;
   }
-  auto frame_buffered_buffer_id = frame_buffered_buffers->RegisterFrameBufferedBuffers(resource_list.data(), frame_buffer_num);
+  auto frame_buffered_buffer_id = frame_buffered_buffers->RegisterFrameBufferedBuffers(device, buffer_size_in_bytes, resource_list.data(), cpu_handles.data(), frame_buffer_num);
   return frame_buffered_buffer_id;
 }
 }
@@ -783,6 +791,8 @@ TEST_CASE("cbv frame buffering") {
   PmrLinearAllocator memory_resource_persistent(&buffer[buffer_size_in_bytes_persistent], buffer_size_in_bytes_persistent);
   PhysicalBufferSet physical_buffers(&memory_resource_persistent);
   CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter()));
+  DescriptorHeapSet descriptor_heaps{&memory_resource_persistent};
+  CHECK(descriptor_heaps.Init(devices.GetDevice()));
   FrameBufferedBufferSet frame_buffered_buffers(&memory_resource_persistent);
   {
     PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
@@ -791,14 +801,18 @@ TEST_CASE("cbv frame buffering") {
     auto d3d12_resource_desc = ConvertToD3d12ResourceDesc(buffer_config);
     vector<ID3D12Resource*> resource_list{&memory_resource_work};
     resource_list.resize(frame_buffer_num);
+    vector<D3D12_CPU_DESCRIPTOR_HANDLE> cpu_handles{&memory_resource_work};
+    cpu_handles.resize(frame_buffer_num);
     for (uint32_t i = 0; i < frame_buffer_num; i++) {
       CAPTURE(i);
       auto buffer_id = physical_buffers.CreatePhysicalBuffer(D3D12_HEAP_TYPE_UPLOAD, initial_flag, d3d12_resource_desc, nullptr);
       CHECK(buffer_id);
       resource_list[i] = physical_buffers.GetPhysicalBuffer(buffer_id);
       CHECK(resource_list[i]);
+      auto cpu_handle = descriptor_heaps.RetainHandle(buffer_id, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+      cpu_handles[i] = cpu_handle;
     }
-    auto frame_buffered_buffer_id = frame_buffered_buffers.RegisterFrameBufferedBuffers(resource_list.data(), frame_buffer_num);
+    auto frame_buffered_buffer_id = frame_buffered_buffers.RegisterFrameBufferedBuffers(devices.GetDevice(), sizeof(uint32_t), resource_list.data(), cpu_handles.data(), frame_buffer_num);
     void* prev_ptr = nullptr;
     for (uint32_t i = 0; i < frame_buffer_num; i++) {
       CAPTURE(i);
@@ -809,6 +823,7 @@ TEST_CASE("cbv frame buffering") {
       prev_ptr = ptr;
     }
   }
+  descriptor_heaps.Term();
   physical_buffers.Term();
   devices.Term();
 }
@@ -828,6 +843,8 @@ TEST_CASE("use cbv (change buffer color dynamically)") {
   shader_resource_set.Init(devices.GetDevice());
   PhysicalBufferSet physical_buffers(&memory_resource_persistent);
   CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter()));
+  DescriptorHeapSet descriptor_heaps{&memory_resource_persistent};
+  CHECK(descriptor_heaps.Init(devices.GetDevice()));
   FrameBufferedBufferSet frame_buffered_buffers(&memory_resource_persistent);
   SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
   CHECK(signal_values.used_signal_val.empty());
@@ -837,7 +854,7 @@ TEST_CASE("use cbv (change buffer color dynamically)") {
   }
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
   auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("pso"), devices.GetDevice(), StrId("rootsig_tmp"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test-cbv.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
-  auto cbv_id = CreateFrameBufferedBuffers(sizeof(float) * 4, frame_buffer_num, &physical_buffers, &frame_buffered_buffers, &memory_resource_work);
+  auto cbv_id = CreateFrameBufferedBuffers(devices.GetDevice(), sizeof(float) * 4, frame_buffer_num, &physical_buffers, &descriptor_heaps, &frame_buffered_buffers, &memory_resource_work);
   CHECK(cbv_id);
   for (uint32_t frame_no = 0; frame_no < kTestFrameNum; frame_no++) {
     auto frame_index = frame_no % frame_buffer_num;
@@ -894,6 +911,7 @@ TEST_CASE("use cbv (change buffer color dynamically)") {
     SignalQueueOnFrameEnd(&devices.command_queue, CommandQueueType::kGraphics, &signal_values.used_signal_val, &signal_values.frame_wait_signal[frame_index]);
   }
   devices.WaitAll();
+  descriptor_heaps.Term();
   physical_buffers.Term();
   shader_resource_set.Term();
   command_list_set.Term();
