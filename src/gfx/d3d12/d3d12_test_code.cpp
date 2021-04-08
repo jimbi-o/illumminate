@@ -69,15 +69,15 @@ class CommandListSet {
     ASSERT(command_list_num_in_use_.empty());
   }
   D3d12CommandList** GetCommandList(const CommandQueueType command_queue_type, const uint32_t num) {
-    if (command_list_in_use_.contains(command_queue_type)) {
+    if (command_list_in_use_.contains(command_queue_type) && command_list_in_use_.at(command_queue_type) != nullptr) {
       ASSERT(command_list_num_in_use_.at(command_queue_type) == num);
       return command_list_in_use_.at(command_queue_type);
     }
     auto allocators = allocator_.RetainCommandAllocator(command_queue_type, num);
     auto command_list = pool_.RetainCommandList(command_queue_type, num, allocators);
     allocator_buffer_[allocator_buffer_index_].push_back(allocators);
-    command_list_in_use_.emplace(command_queue_type, command_list);
-    command_list_num_in_use_.emplace(command_queue_type, num);
+    command_list_in_use_.insert_or_assign(command_queue_type, command_list);
+    command_list_num_in_use_.insert_or_assign(command_queue_type, num);
     return command_list;
   }
   void ExecuteCommandLists(ID3D12CommandQueue* command_queue, const CommandQueueType command_queue_type) {
@@ -88,8 +88,8 @@ class CommandListSet {
     }
     command_queue->ExecuteCommandLists(list_len, reinterpret_cast<ID3D12CommandList**>(list));
     pool_.ReturnCommandList(list);
-    command_list_in_use_.erase(command_queue_type);
-    command_list_num_in_use_.erase(command_queue_type);
+    command_list_in_use_.insert_or_assign(command_queue_type, nullptr);
+    command_list_num_in_use_.insert_or_assign(command_queue_type, 0);
   }
  private:
   void ReturnCommandAllocatorInBuffer(const uint32_t buffer_index) {
