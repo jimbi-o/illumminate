@@ -437,6 +437,7 @@ class FrameBufferedBufferSet {
     mapped_ptr_.emplace(buffer_id_used_, vector<void*>{memory_resource_});
     auto& ptr_list = mapped_ptr_.at(buffer_id_used_);
     ptr_list.resize(resource_list_len);
+    cpu_handles_.emplace(buffer_id_used_, vector<D3D12_CPU_DESCRIPTOR_HANDLE>{memory_resource_});
     D3D12_RANGE read_range{};
     for (uint32_t i = 0; i < resource_list_len; i++) {
       auto hr = resource_list[i]->Map(0, &read_range, &ptr_list[i]);
@@ -446,13 +447,20 @@ class FrameBufferedBufferSet {
       D3D12_CONSTANT_BUFFER_VIEW_DESC cbv_desc{resource_list[i]->GetGPUVirtualAddress(), buffer_size_in_bytes};
       device->CreateConstantBufferView(&cbv_desc, cpu_handles[i]);
     }
+    auto& handle_list = cpu_handles_.at(buffer_id_used_);
+    handle_list.resize(resource_list_len);
+    handle_list.assign(cpu_handles, cpu_handles + resource_list_len);
     return buffer_id_used_;
   }
-  void* GetFrameBufferedBuffers(FrameBufferedBufferId buffer_id, const uint32_t index) {
+  void* GetFrameBufferedBuffer(FrameBufferedBufferId buffer_id, const uint32_t index) {
     return mapped_ptr_.at(buffer_id)[index];
+  }
+  D3D12_CPU_DESCRIPTOR_HANDLE& GetFrameBufferedBufferCpuHandle(FrameBufferedBufferId buffer_id, const uint32_t index) {
+    return cpu_handles_.at(buffer_id)[index];
   }
  private:
   unordered_map<FrameBufferedBufferId, vector<void*>> mapped_ptr_;
+  unordered_map<FrameBufferedBufferId, vector<D3D12_CPU_DESCRIPTOR_HANDLE>> cpu_handles_;
   std::pmr::memory_resource* memory_resource_;
   FrameBufferedBufferId buffer_id_used_ = 0;
 };
@@ -816,7 +824,7 @@ TEST_CASE("cbv frame buffering") {
     void* prev_ptr = nullptr;
     for (uint32_t i = 0; i < frame_buffer_num; i++) {
       CAPTURE(i);
-      auto ptr = frame_buffered_buffers.GetFrameBufferedBuffers(frame_buffered_buffer_id, i);
+      auto ptr = frame_buffered_buffers.GetFrameBufferedBuffer(frame_buffered_buffer_id, i);
       CHECK(ptr);
       CHECK(ptr != prev_ptr);
       memcpy(ptr, &i, sizeof(i));
@@ -845,13 +853,10 @@ TEST_CASE("use cbv (change buffer color dynamically)") {
   CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter()));
   DescriptorHeapSet descriptor_heaps{&memory_resource_persistent};
   CHECK(descriptor_heaps.Init(devices.GetDevice()));
+  ShaderVisibleDescriptorHeap shader_visible_descriptor_heap;
+  CHECK(shader_visible_descriptor_heap.Init(devices.GetDevice()));
   FrameBufferedBufferSet frame_buffered_buffers(&memory_resource_persistent);
   SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
-  CHECK(signal_values.used_signal_val.empty());
-  CHECK(signal_values.frame_wait_signal.size() == frame_buffer_num);
-  for (auto& map : signal_values.frame_wait_signal) {
-    CHECK(map.empty());
-  }
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
   auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("pso"), devices.GetDevice(), StrId("rootsig_tmp"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test-cbv.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
   auto cbv_id = CreateFrameBufferedConstantBuffers(devices.GetDevice(), sizeof(float) * 4, frame_buffer_num, &physical_buffers, &descriptor_heaps, &frame_buffered_buffers, &memory_resource_work);
@@ -864,19 +869,21 @@ TEST_CASE("use cbv (change buffer color dynamically)") {
       // update cbv
       float color_val_per_channel = 0.1f * static_cast<float>(frame_no);
       float color_diff[4] = {color_val_per_channel, color_val_per_channel, color_val_per_channel, 0.0f};
-      auto cbv_ptr = frame_buffered_buffers.GetFrameBufferedBuffers(cbv_id, frame_index);
+      auto cbv_ptr = frame_buffered_buffers.GetFrameBufferedBuffer(cbv_id, frame_index);
       CHECK(cbv_ptr);
       memcpy(cbv_ptr, color_diff, sizeof(float) * 4);
+    }
+    D3D12_GPU_DESCRIPTOR_HANDLE cbv_gpu_handle{};
+    {
+      auto cpu_handle = frame_buffered_buffers.GetFrameBufferedBufferCpuHandle(cbv_id, frame_index);
+      cbv_gpu_handle = shader_visible_descriptor_heap.CopyToBufferDescriptorHeap(&cpu_handle, 1, &memory_resource_work);
+      memory_resource_work.Reset();
     }
     command_list_set.RotateCommandAllocators();
     devices.swapchain.UpdateBackBufferIndex();
     {
-      /** TODO use cbv with frame buffering
-       ** copy cpu handles to gpu visible descriptor heap
-       ** attach gpu handles to pipeline
-       ** increment color value by 0.1f and check results from RenderDoc captureing multiple frames in sequence
-       **/
       auto command_list = command_list_set.GetCommandList(CommandQueueType::kGraphics, 1)[0];
+      shader_visible_descriptor_heap.SetDescriptorHeapsToCommandList(command_list);
       D3D12_RESOURCE_BARRIER barrier{};
       {
         barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -899,6 +906,7 @@ TEST_CASE("use cbv (change buffer color dynamically)") {
         command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         auto cpu_handle = devices.swapchain.GetRtvHandle();
         command_list->OMSetRenderTargets(1, &cpu_handle, true, nullptr);
+        command_list->SetGraphicsRootDescriptorTable(0, cbv_gpu_handle);
         command_list->DrawInstanced(3, 1, 0, 0);
       }
       {
@@ -912,6 +920,7 @@ TEST_CASE("use cbv (change buffer color dynamically)") {
     SignalQueueOnFrameEnd(&devices.command_queue, CommandQueueType::kGraphics, &signal_values.used_signal_val, &signal_values.frame_wait_signal[frame_index]);
   }
   devices.WaitAll();
+  shader_visible_descriptor_heap.Term();
   descriptor_heaps.Term();
   physical_buffers.Term();
   shader_resource_set.Term();
