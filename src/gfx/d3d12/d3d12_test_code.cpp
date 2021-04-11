@@ -440,6 +440,45 @@ constexpr BufferConfig GetBufferConfigUploadBuffer(const uint32_t size_in_bytes)
     .clear_value = {},
   };
 }
+class DescriptorHandleSet {
+ public:
+  DescriptorHandleSet(std::pmr::memory_resource* memory_resource) : map_(memory_resource) {
+    map_.insert_or_assign(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, unordered_map<PhysicalBufferId, D3D12_CPU_DESCRIPTOR_HANDLE>{memory_resource});
+    map_.insert_or_assign(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, unordered_map<PhysicalBufferId, D3D12_CPU_DESCRIPTOR_HANDLE>{memory_resource});
+    map_.insert_or_assign(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, unordered_map<PhysicalBufferId, D3D12_CPU_DESCRIPTOR_HANDLE>{memory_resource});
+    map_.insert_or_assign(D3D12_DESCRIPTOR_HEAP_TYPE_DSV, unordered_map<PhysicalBufferId, D3D12_CPU_DESCRIPTOR_HANDLE>{memory_resource});
+    ASSERT(map_.size() == D3D12_DESCRIPTOR_HEAP_TYPE_NUM_TYPES);
+  }
+  void CreateSrv(const PhysicalBufferId buffer_id, const BufferConfig& buffer_config, D3d12Device* const device, ID3D12Resource* const resource, const D3D12_CPU_DESCRIPTOR_HANDLE& handle) {
+    auto srv_desc = ConvertToD3d12SrvDesc(buffer_config);
+    device->CreateShaderResourceView(resource, &srv_desc, handle);
+    map_.at(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV).insert_or_assign(buffer_id, handle);
+  }
+  void CreateRtv(const PhysicalBufferId buffer_id, const BufferConfig& buffer_config, D3d12Device* const device, ID3D12Resource* const resource, const D3D12_CPU_DESCRIPTOR_HANDLE& handle) {
+    auto rtv_desc = ConvertToD3d12RtvDesc(buffer_config);
+    device->CreateRenderTargetView(resource, &rtv_desc, handle);
+    map_.at(D3D12_DESCRIPTOR_HEAP_TYPE_RTV).insert_or_assign(buffer_id, handle);
+  }
+  D3D12_CPU_DESCRIPTOR_HANDLE GetCpuHandle(const PhysicalBufferId buffer_id, const D3D12_DESCRIPTOR_HEAP_TYPE type) {
+    return map_.at(type).at(buffer_id);
+  }
+ private:
+  unordered_map<D3D12_DESCRIPTOR_HEAP_TYPE, unordered_map<PhysicalBufferId, D3D12_CPU_DESCRIPTOR_HANDLE>> map_;
+};
+PhysicalBufferId CreatePhysicalBuffer(const BufferConfig& buffer_config, D3d12Device* const device, PhysicalBufferSet* const physical_buffers, DescriptorHeapSet* const descriptor_heaps, DescriptorHandleSet* const descriptor_handles) {
+  auto clear_value = GetD3d12ClearValue(buffer_config);
+  auto buffer_id = physical_buffers->CreatePhysicalBuffer(D3D12_HEAP_TYPE_DEFAULT, GetInitialD3d12ResourceStateFlag(buffer_config), ConvertToD3d12ResourceDesc(buffer_config), IsClearValueValid(buffer_config) ? &clear_value : nullptr);
+  auto resource = physical_buffers->GetPhysicalBuffer(buffer_id);
+  if ((buffer_config.state_flags & kBufferStateFlagSrvNonPs) || (buffer_config.state_flags & kBufferStateFlagSrvPsOnly)) {
+    auto srv_handle = descriptor_heaps->RetainHandle(buffer_id, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    descriptor_handles->CreateSrv(buffer_id, buffer_config, device, resource, srv_handle);
+  }
+  if (buffer_config.state_flags & kBufferStateFlagRtv) {
+    auto rtv_handle = descriptor_heaps->RetainHandle(buffer_id, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    descriptor_handles->CreateRtv(buffer_id, buffer_config, device, resource, rtv_handle);
+  }
+  return buffer_id;
+}
 using FrameBufferedBufferId = uint32_t;
 class FrameBufferedBufferSet {
  public:
@@ -956,8 +995,9 @@ TEST_CASE("load from srv") {
   shader_resource_set.Init(devices.GetDevice());
   PhysicalBufferSet physical_buffers(&memory_resource_persistent);
   CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter()));
-  DescriptorHeapSet descriptor_heaps{&memory_resource_persistent};
+  DescriptorHeapSet descriptor_heaps(&memory_resource_persistent);
   CHECK(descriptor_heaps.Init(devices.GetDevice()));
+  DescriptorHandleSet descriptor_handles(&memory_resource_persistent);
   ShaderVisibleDescriptorHeap shader_visible_descriptor_heap;
   CHECK(shader_visible_descriptor_heap.Init(devices.GetDevice()));
   FrameBufferedBufferSet frame_buffered_buffers(&memory_resource_persistent);
@@ -967,10 +1007,7 @@ TEST_CASE("load from srv") {
   auto [copy_rootsig, copy_pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("copy_pso"), devices.GetDevice(), StrId("copy_rootsig"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/copysrv.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
   auto cbv_id = CreateFrameBufferedConstantBuffers(devices.GetDevice(), sizeof(float) * 4, frame_buffer_num, &physical_buffers, &descriptor_heaps, &frame_buffered_buffers, &memory_resource_work);
   CHECK(cbv_id);
-  PhysicalBufferId rtv_id{};
-  D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle{}, srv_handle{};
-  {
-    BufferConfig buffer_config{
+  auto rtv_id = CreatePhysicalBuffer({
       .width = swapchain_size.width,
       .height = swapchain_size.height,
       .dimension = BufferDimensionType::k2d,
@@ -978,18 +1015,8 @@ TEST_CASE("load from srv") {
       .state_flags = static_cast<BufferStateFlags>(kBufferStateFlagRtv | kBufferStateFlagSrvPsOnly),
       .initial_state_flags = kBufferStateFlagRtv,
       .clear_value = std::array<float, 4>{1.0f,1.0f,1.0f,1.0f},
-    };
-    auto clear_value = GetD3d12ClearValue(buffer_config);
-    rtv_id = physical_buffers.CreatePhysicalBuffer(D3D12_HEAP_TYPE_DEFAULT, GetInitialD3d12ResourceStateFlag(buffer_config), ConvertToD3d12ResourceDesc(buffer_config), IsClearValueValid(buffer_config) ? &clear_value : nullptr);
-    CHECK(rtv_id);
-    auto resource = physical_buffers.GetPhysicalBuffer(rtv_id);
-    auto rtv_desc = ConvertToD3d12RtvDesc(buffer_config);
-    rtv_handle = descriptor_heaps.RetainHandle(rtv_id, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-    devices.GetDevice()->CreateRenderTargetView(resource, &rtv_desc, rtv_handle);
-    auto srv_desc = ConvertToD3d12SrvDesc(buffer_config);
-    srv_handle = descriptor_heaps.RetainHandle(rtv_id, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    devices.GetDevice()->CreateShaderResourceView(resource, &srv_desc, srv_handle);
-  }
+    },
+    devices.GetDevice(), &physical_buffers, &descriptor_heaps, &descriptor_handles);
   for (uint32_t frame_no = 0; frame_no < kTestFrameNum; frame_no++) {
     CAPTURE(frame_no);
     auto frame_index = frame_no % frame_buffer_num;
@@ -1011,6 +1038,7 @@ TEST_CASE("load from srv") {
     }
     D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu_handle{};
     {
+      auto srv_handle = descriptor_handles.GetCpuHandle(rtv_id, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
       srv_gpu_handle = shader_visible_descriptor_heap.CopyToBufferDescriptorHeap(&srv_handle, 1, &memory_resource_work);
       memory_resource_work.Reset();
     }
@@ -1042,6 +1070,7 @@ TEST_CASE("load from srv") {
         command_list->RSSetScissorRects(1, &scissor_rect);
         command_list->SetPipelineState(draw_pso);
         command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        auto rtv_handle = descriptor_handles.GetCpuHandle(rtv_id, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         command_list->OMSetRenderTargets(1, &rtv_handle, true, nullptr);
         command_list->SetGraphicsRootDescriptorTable(0, cbv_gpu_handle);
         command_list->DrawInstanced(3, 1, 0, 0);
