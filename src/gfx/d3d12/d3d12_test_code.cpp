@@ -1044,22 +1044,22 @@ TEST_CASE("load from srv") {
     }
     command_list_set.RotateCommandAllocators();
     devices.swapchain.UpdateBackBufferIndex();
+    // barrier
+    {
+      D3D12_RESOURCE_BARRIER barrier{};
+      barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+      barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_BEGIN_ONLY;
+      barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+      barrier.Transition.pResource   = devices.swapchain.GetResource();
+      barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+      barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
+      auto command_list = command_list_set.GetCommandList(CommandQueueType::kGraphics, 1)[0];
+      command_list->ResourceBarrier(1, &barrier);
+    }
     // draw pass
     {
       auto command_list = command_list_set.GetCommandList(CommandQueueType::kGraphics, 1)[0];
       shader_visible_descriptor_heap.SetDescriptorHeapsToCommandList(command_list);
-      D3D12_RESOURCE_BARRIER barrier{};
-      {
-        barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        barrier.Transition.pResource   = physical_buffers.GetPhysicalBuffer(rtv_id);
-        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
-      }
-      if (frame_no > 0) {
-        command_list->ResourceBarrier(1, &barrier);
-      }
       {
         auto& width = swapchain_size.width;
         auto& height = swapchain_size.height;
@@ -1075,26 +1075,34 @@ TEST_CASE("load from srv") {
         command_list->SetGraphicsRootDescriptorTable(0, cbv_gpu_handle);
         command_list->DrawInstanced(3, 1, 0, 0);
       }
-      {
-        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-      }
-      command_list->ResourceBarrier(1, &barrier);
     }
-    // copy pass
+    // barrier
     {
-      auto command_list = command_list_set.GetCommandList(CommandQueueType::kGraphics, 1)[0];
-      shader_visible_descriptor_heap.SetDescriptorHeapsToCommandList(command_list);
-      D3D12_RESOURCE_BARRIER barrier{};
+      D3D12_RESOURCE_BARRIER barriers[2]{};
       {
+        auto& barrier = barriers[0];
         barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+        barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_END_ONLY;
         barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         barrier.Transition.pResource   = devices.swapchain.GetResource();
         barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
         barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
       }
-      command_list->ResourceBarrier(1, &barrier);
+      {
+        auto& barrier = barriers[1];
+        barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barrier.Transition.pResource   = physical_buffers.GetPhysicalBuffer(rtv_id);
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+      }
+      auto command_list = command_list_set.GetCommandList(CommandQueueType::kGraphics, 1)[0];
+      command_list->ResourceBarrier(2, barriers);
+    }
+    // copy pass
+    {
+      auto command_list = command_list_set.GetCommandList(CommandQueueType::kGraphics, 1)[0];
       {
         auto& width = swapchain_size.width;
         auto& height = swapchain_size.height;
@@ -1110,11 +1118,30 @@ TEST_CASE("load from srv") {
         command_list->SetGraphicsRootDescriptorTable(0, srv_gpu_handle);
         command_list->DrawInstanced(3, 1, 0, 0);
       }
+    }
+    // barrier
+    {
+      D3D12_RESOURCE_BARRIER barriers[2]{};
       {
+        auto& barrier = barriers[0];
+        barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barrier.Transition.pResource   = devices.swapchain.GetResource();
         barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
         barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
       }
-      command_list->ResourceBarrier(1, &barrier);
+      {
+        auto& barrier = barriers[1];
+        barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barrier.Transition.pResource   = physical_buffers.GetPhysicalBuffer(rtv_id);
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
+      }
+      auto command_list = command_list_set.GetCommandList(CommandQueueType::kGraphics, 1)[0];
+      command_list->ResourceBarrier(2, barriers);
     }
     command_list_set.ExecuteCommandLists(devices.GetCommandQueue(CommandQueueType::kGraphics), CommandQueueType::kGraphics);
     devices.swapchain.Present();
