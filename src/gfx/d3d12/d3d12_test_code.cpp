@@ -1042,8 +1042,10 @@ TEST_CASE("load from srv") {
       srv_gpu_handle = shader_visible_descriptor_heap.CopyToBufferDescriptorHeap(&srv_handle, 1, &memory_resource_work);
       memory_resource_work.Reset();
     }
-    command_list_set.RotateCommandAllocators();
     devices.swapchain.UpdateBackBufferIndex();
+    command_list_set.RotateCommandAllocators();
+    auto command_list = command_list_set.GetCommandList(CommandQueueType::kGraphics, 1)[0];
+    shader_visible_descriptor_heap.SetDescriptorHeapsToCommandList(command_list);
     // barrier
     {
       D3D12_RESOURCE_BARRIER barrier{};
@@ -1053,28 +1055,23 @@ TEST_CASE("load from srv") {
       barrier.Transition.pResource   = devices.swapchain.GetResource();
       barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
       barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
-      auto command_list = command_list_set.GetCommandList(CommandQueueType::kGraphics, 1)[0];
       command_list->ResourceBarrier(1, &barrier);
     }
     // draw pass
     {
-      auto command_list = command_list_set.GetCommandList(CommandQueueType::kGraphics, 1)[0];
-      shader_visible_descriptor_heap.SetDescriptorHeapsToCommandList(command_list);
-      {
-        auto& width = swapchain_size.width;
-        auto& height = swapchain_size.height;
-        command_list->SetGraphicsRootSignature(draw_rootsig);
-        D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), D3D12_MIN_DEPTH, D3D12_MAX_DEPTH};
-        command_list->RSSetViewports(1, &viewport);
-        D3D12_RECT scissor_rect{0L, 0L, static_cast<LONG>(width), static_cast<LONG>(height)};
-        command_list->RSSetScissorRects(1, &scissor_rect);
-        command_list->SetPipelineState(draw_pso);
-        command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        auto rtv_handle = descriptor_handles.GetCpuHandle(rtv_id, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-        command_list->OMSetRenderTargets(1, &rtv_handle, true, nullptr);
-        command_list->SetGraphicsRootDescriptorTable(0, cbv_gpu_handle);
-        command_list->DrawInstanced(3, 1, 0, 0);
-      }
+      auto& width = swapchain_size.width;
+      auto& height = swapchain_size.height;
+      command_list->SetGraphicsRootSignature(draw_rootsig);
+      D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), D3D12_MIN_DEPTH, D3D12_MAX_DEPTH};
+      command_list->RSSetViewports(1, &viewport);
+      D3D12_RECT scissor_rect{0L, 0L, static_cast<LONG>(width), static_cast<LONG>(height)};
+      command_list->RSSetScissorRects(1, &scissor_rect);
+      command_list->SetPipelineState(draw_pso);
+      command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+      auto rtv_handle = descriptor_handles.GetCpuHandle(rtv_id, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+      command_list->OMSetRenderTargets(1, &rtv_handle, true, nullptr);
+      command_list->SetGraphicsRootDescriptorTable(0, cbv_gpu_handle);
+      command_list->DrawInstanced(3, 1, 0, 0);
     }
     // barrier
     {
@@ -1097,27 +1094,23 @@ TEST_CASE("load from srv") {
         barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
         barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
       }
-      auto command_list = command_list_set.GetCommandList(CommandQueueType::kGraphics, 1)[0];
       command_list->ResourceBarrier(2, barriers);
     }
     // copy pass
     {
-      auto command_list = command_list_set.GetCommandList(CommandQueueType::kGraphics, 1)[0];
-      {
-        auto& width = swapchain_size.width;
-        auto& height = swapchain_size.height;
-        command_list->SetGraphicsRootSignature(copy_rootsig);
-        D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), D3D12_MIN_DEPTH, D3D12_MAX_DEPTH};
-        command_list->RSSetViewports(1, &viewport);
-        D3D12_RECT scissor_rect{0L, 0L, static_cast<LONG>(width), static_cast<LONG>(height)};
-        command_list->RSSetScissorRects(1, &scissor_rect);
-        command_list->SetPipelineState(copy_pso);
-        command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        auto swapchain_cpu_handle = devices.swapchain.GetRtvHandle();
-        command_list->OMSetRenderTargets(1, &swapchain_cpu_handle, true, nullptr);
-        command_list->SetGraphicsRootDescriptorTable(0, srv_gpu_handle);
-        command_list->DrawInstanced(3, 1, 0, 0);
-      }
+      auto& width = swapchain_size.width;
+      auto& height = swapchain_size.height;
+      command_list->SetGraphicsRootSignature(copy_rootsig);
+      D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), D3D12_MIN_DEPTH, D3D12_MAX_DEPTH};
+      command_list->RSSetViewports(1, &viewport);
+      D3D12_RECT scissor_rect{0L, 0L, static_cast<LONG>(width), static_cast<LONG>(height)};
+      command_list->RSSetScissorRects(1, &scissor_rect);
+      command_list->SetPipelineState(copy_pso);
+      command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+      auto swapchain_cpu_handle = devices.swapchain.GetRtvHandle();
+      command_list->OMSetRenderTargets(1, &swapchain_cpu_handle, true, nullptr);
+      command_list->SetGraphicsRootDescriptorTable(0, srv_gpu_handle);
+      command_list->DrawInstanced(3, 1, 0, 0);
     }
     // barrier
     {
@@ -1140,7 +1133,6 @@ TEST_CASE("load from srv") {
         barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
       }
-      auto command_list = command_list_set.GetCommandList(CommandQueueType::kGraphics, 1)[0];
       command_list->ResourceBarrier(2, barriers);
     }
     command_list_set.ExecuteCommandLists(devices.GetCommandQueue(CommandQueueType::kGraphics), CommandQueueType::kGraphics);
