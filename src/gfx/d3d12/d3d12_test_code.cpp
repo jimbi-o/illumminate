@@ -1147,6 +1147,174 @@ TEST_CASE("load from srv") {
   command_list_set.Term();
   devices.Term();
 }
+TEST_CASE("load from srv/auto barrier configuration") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  using namespace illuminate::gfx::d3d12;
+  const BufferSize2d swapchain_size{1600, 900};
+  const uint32_t frame_buffer_num = 2;
+  const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
+  DeviceSet devices;
+  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
+  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_size_in_bytes_persistent], buffer_size_in_bytes_persistent);
+  CommandListSet command_list_set(&memory_resource_persistent);
+  CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num));
+  ShaderResourceSet shader_resource_set(&memory_resource_persistent);
+  shader_resource_set.Init(devices.GetDevice());
+  PhysicalBufferSet physical_buffers(&memory_resource_persistent);
+  CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter()));
+  DescriptorHeapSet descriptor_heaps(&memory_resource_persistent);
+  CHECK(descriptor_heaps.Init(devices.GetDevice()));
+  DescriptorHandleSet descriptor_handles(&memory_resource_persistent);
+  ShaderVisibleDescriptorHeap shader_visible_descriptor_heap;
+  CHECK(shader_visible_descriptor_heap.Init(devices.GetDevice()));
+  FrameBufferedBufferSet frame_buffered_buffers(&memory_resource_persistent);
+  SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  auto [draw_rootsig, draw_pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("draw_pso"), devices.GetDevice(), StrId("draw_rootsig"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test-cbv.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
+  auto [copy_rootsig, copy_pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("copy_pso"), devices.GetDevice(), StrId("copy_rootsig"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/copysrv.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
+  auto cbv_id = CreateFrameBufferedConstantBuffers(devices.GetDevice(), sizeof(float) * 4, frame_buffer_num, &physical_buffers, &descriptor_heaps, &frame_buffered_buffers, &memory_resource_work);
+  CHECK(cbv_id);
+  auto rtv_id = CreatePhysicalBuffer({
+      .width = swapchain_size.width,
+      .height = swapchain_size.height,
+      .dimension = BufferDimensionType::k2d,
+      .format = BufferFormat::kR8G8B8A8Unorm,
+      .state_flags = static_cast<BufferStateFlags>(kBufferStateFlagRtv | kBufferStateFlagSrvPsOnly),
+      .initial_state_flags = kBufferStateFlagRtv,
+      .clear_value = std::array<float, 4>{1.0f,1.0f,1.0f,1.0f},
+    },
+    devices.GetDevice(), &physical_buffers, &descriptor_heaps, &descriptor_handles);
+  for (uint32_t frame_no = 0; frame_no < kTestFrameNum; frame_no++) {
+    CAPTURE(frame_no);
+    auto frame_index = frame_no % frame_buffer_num;
+    devices.command_queue.WaitOnCpu(signal_values.frame_wait_signal[frame_index]);
+    // update cbv
+    {
+      float color_val_per_channel = 0.1f * static_cast<float>(frame_no);
+      float color_diff[4] = {color_val_per_channel, color_val_per_channel, color_val_per_channel, 0.0f};
+      auto cbv_ptr = frame_buffered_buffers.GetFrameBufferedBuffer(cbv_id, frame_index);
+      CHECK(cbv_ptr);
+      memcpy(cbv_ptr, color_diff, sizeof(float) * 4);
+    }
+    // copy descriptor handles to gpu side
+    D3D12_GPU_DESCRIPTOR_HANDLE cbv_gpu_handle{};
+    {
+      auto cpu_handle = frame_buffered_buffers.GetFrameBufferedBufferCpuHandle(cbv_id, frame_index);
+      cbv_gpu_handle = shader_visible_descriptor_heap.CopyToBufferDescriptorHeap(&cpu_handle, 1, &memory_resource_work);
+      memory_resource_work.Reset();
+    }
+    D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu_handle{};
+    {
+      auto srv_handle = descriptor_handles.GetCpuHandle(rtv_id, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+      srv_gpu_handle = shader_visible_descriptor_heap.CopyToBufferDescriptorHeap(&srv_handle, 1, &memory_resource_work);
+      memory_resource_work.Reset();
+    }
+    devices.swapchain.UpdateBackBufferIndex();
+    command_list_set.RotateCommandAllocators();
+    auto command_list = command_list_set.GetCommandList(CommandQueueType::kGraphics, 1)[0];
+    shader_visible_descriptor_heap.SetDescriptorHeapsToCommandList(command_list);
+    // barrier
+    {
+      D3D12_RESOURCE_BARRIER barrier{};
+      barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+      barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_BEGIN_ONLY;
+      barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+      barrier.Transition.pResource   = devices.swapchain.GetResource();
+      barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+      barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
+      command_list->ResourceBarrier(1, &barrier);
+    }
+    // draw pass
+    {
+      auto& width = swapchain_size.width;
+      auto& height = swapchain_size.height;
+      command_list->SetGraphicsRootSignature(draw_rootsig);
+      D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), D3D12_MIN_DEPTH, D3D12_MAX_DEPTH};
+      command_list->RSSetViewports(1, &viewport);
+      D3D12_RECT scissor_rect{0L, 0L, static_cast<LONG>(width), static_cast<LONG>(height)};
+      command_list->RSSetScissorRects(1, &scissor_rect);
+      command_list->SetPipelineState(draw_pso);
+      command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+      auto rtv_handle = descriptor_handles.GetCpuHandle(rtv_id, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+      command_list->OMSetRenderTargets(1, &rtv_handle, true, nullptr);
+      command_list->SetGraphicsRootDescriptorTable(0, cbv_gpu_handle);
+      command_list->DrawInstanced(3, 1, 0, 0);
+    }
+    // barrier
+    {
+      D3D12_RESOURCE_BARRIER barriers[2]{};
+      {
+        auto& barrier = barriers[0];
+        barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_END_ONLY;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barrier.Transition.pResource   = devices.swapchain.GetResource();
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
+      }
+      {
+        auto& barrier = barriers[1];
+        barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barrier.Transition.pResource   = physical_buffers.GetPhysicalBuffer(rtv_id);
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+      }
+      command_list->ResourceBarrier(2, barriers);
+    }
+    // copy pass
+    {
+      auto& width = swapchain_size.width;
+      auto& height = swapchain_size.height;
+      command_list->SetGraphicsRootSignature(copy_rootsig);
+      D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), D3D12_MIN_DEPTH, D3D12_MAX_DEPTH};
+      command_list->RSSetViewports(1, &viewport);
+      D3D12_RECT scissor_rect{0L, 0L, static_cast<LONG>(width), static_cast<LONG>(height)};
+      command_list->RSSetScissorRects(1, &scissor_rect);
+      command_list->SetPipelineState(copy_pso);
+      command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+      auto swapchain_cpu_handle = devices.swapchain.GetRtvHandle();
+      command_list->OMSetRenderTargets(1, &swapchain_cpu_handle, true, nullptr);
+      command_list->SetGraphicsRootDescriptorTable(0, srv_gpu_handle);
+      command_list->DrawInstanced(3, 1, 0, 0);
+    }
+    // barrier
+    {
+      D3D12_RESOURCE_BARRIER barriers[2]{};
+      {
+        auto& barrier = barriers[0];
+        barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barrier.Transition.pResource   = devices.swapchain.GetResource();
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
+      }
+      {
+        auto& barrier = barriers[1];
+        barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barrier.Transition.pResource   = physical_buffers.GetPhysicalBuffer(rtv_id);
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
+      }
+      command_list->ResourceBarrier(2, barriers);
+    }
+    command_list_set.ExecuteCommandLists(devices.GetCommandQueue(CommandQueueType::kGraphics), CommandQueueType::kGraphics);
+    devices.swapchain.Present();
+    SignalQueueOnFrameEnd(&devices.command_queue, CommandQueueType::kGraphics, &signal_values.used_signal_val, &signal_values.frame_wait_signal[frame_index]);
+  }
+  devices.WaitAll();
+  shader_visible_descriptor_heap.Term();
+  descriptor_heaps.Term();
+  physical_buffers.Term();
+  shader_resource_set.Term();
+  command_list_set.Term();
+  devices.Term();
+}
 /* TODO
  * multi threaded
  * inter-frame async compute

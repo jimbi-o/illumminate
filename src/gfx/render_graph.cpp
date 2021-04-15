@@ -6,7 +6,7 @@ struct BufferStateListPerBuffer {
   vector<uint32_t> pass_index_list;
   vector<BufferStateFlags> buffer_state_list;
 };
-unordered_map<BufferId, BufferStateListPerBuffer> ConfigureRenderPassBufferUsages(RenderPassBufferInfoList&& render_pass_buffer_info_list, std::pmr::memory_resource* memory_resource) {
+unordered_map<BufferId, BufferStateListPerBuffer> ConfigureRenderPassBufferUsages(const RenderPassBufferInfoList& render_pass_buffer_info_list, std::pmr::memory_resource* memory_resource) {
   unordered_map<BufferId, BufferStateListPerBuffer> buffer_usage_list{memory_resource};
   for (uint32_t pass_index = 0; auto&& render_pass_buffer_info_list_per_pass : render_pass_buffer_info_list) {
     for (auto&& buffer_info : render_pass_buffer_info_list_per_pass) {
@@ -32,7 +32,7 @@ struct BarrierConfig {
 };
 using BarrierUserPassIndexMap = unordered_map<BufferId, vector<uint32_t>>;
 using BarrierListMap = unordered_map<BufferId, vector<BarrierConfig>>;
-std::tuple<BarrierUserPassIndexMap, BarrierListMap> ConfigureBarriersPerBuffer(unordered_map<BufferId, BufferStateListPerBuffer>&& buffer_state_list, std::pmr::memory_resource* memory_resource) {
+std::tuple<BarrierUserPassIndexMap, BarrierListMap> ConfigureBarriersPerBuffer(const unordered_map<BufferId, BufferStateListPerBuffer>& buffer_state_list, std::pmr::memory_resource* memory_resource) {
   BarrierUserPassIndexMap barrier_user_pass_index_map{memory_resource};
   BarrierListMap barrier_list{memory_resource};
   for (auto& [buffer_id, state_info_list] : buffer_state_list) {
@@ -78,7 +78,7 @@ std::tuple<BarrierUserPassIndexMap, BarrierListMap> ConfigureBarriersPerBuffer(u
   return {barrier_user_pass_index_map, barrier_list};
 }
 using BarrierConfigList = vector<vector<BarrierConfig>>;
-BarrierConfigList ConfigureBarriersBetweenRenderPass(BarrierUserPassIndexMap&& barrier_user_pass_index_map, BarrierListMap&& barrier_list_map, const uint32_t render_pass_num, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
+BarrierConfigList ConfigureBarriersBetweenRenderPass(const BarrierUserPassIndexMap& barrier_user_pass_index_map, const BarrierListMap& barrier_list_map, const uint32_t render_pass_num, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
   set<BufferId> buffer_id_list{memory_resource_work};
   for (auto& [buffer_id, list] : barrier_user_pass_index_map) {
     buffer_id_list.insert(buffer_id);
@@ -92,7 +92,7 @@ BarrierConfigList ConfigureBarriersBetweenRenderPass(BarrierUserPassIndexMap&& b
     auto& barrier_list = barrier_list_map.at(buffer_id);
     ASSERT(barrier_num == barrier_list.size());
     for (uint32_t i = 0; i < barrier_num; i++) {
-      barriers[pass_index_list[i]].push_back(std::move(barrier_list[i]));
+      barriers[pass_index_list[i]].push_back(barrier_list[i]);
     }
   }
   return barriers;
@@ -160,7 +160,7 @@ TEST_CASE("barrier for load from srv") {
     },
     &memory_resource_work
   };
-  auto buffer_usage_list = ConfigureRenderPassBufferUsages(std::move(pass_buffer_info_list), &memory_resource_work);
+  auto buffer_usage_list = ConfigureRenderPassBufferUsages(pass_buffer_info_list, &memory_resource_work);
   CHECK(buffer_usage_list.size() == 2);
   CHECK(buffer_usage_list.contains(1));
   CHECK(buffer_usage_list.at(1).pass_index_list.size() == 4);
@@ -182,7 +182,7 @@ TEST_CASE("barrier for load from srv") {
   CHECK(buffer_usage_list.at(2).buffer_state_list[0] == kBufferStateFlagPresent);
   CHECK(buffer_usage_list.at(2).buffer_state_list[1] == kBufferStateFlagRtv);
   CHECK(buffer_usage_list.at(2).buffer_state_list[2] == kBufferStateFlagPresent);
-  auto [barrier_user_pass_index_map, barrier_list_map] = ConfigureBarriersPerBuffer(std::move(buffer_usage_list), &memory_resource_work);
+  auto [barrier_user_pass_index_map, barrier_list_map] = ConfigureBarriersPerBuffer(buffer_usage_list, &memory_resource_work);
   CHECK(barrier_user_pass_index_map.size() == 2);
   CHECK(barrier_user_pass_index_map.contains(1));
   CHECK(barrier_user_pass_index_map.at(1).size() == 2);
@@ -233,7 +233,7 @@ TEST_CASE("barrier for load from srv") {
     CHECK(std::get<BarrierTransition>(barrier.params).state_before == kBufferStateFlagRtv);
     CHECK(std::get<BarrierTransition>(barrier.params).state_after  == kBufferStateFlagPresent);
   }
-  auto barriers = ConfigureBarriersBetweenRenderPass(std::move(barrier_user_pass_index_map), std::move(barrier_list_map), 2, &memory_resource_work, &memory_resource_work);
+  auto barriers = ConfigureBarriersBetweenRenderPass(barrier_user_pass_index_map, barrier_list_map, 2, &memory_resource_work, &memory_resource_work);
   CHECK(barriers.size() == 3);
   CHECK(barriers[0].size() == 1);
   CHECK(barriers[0][0].buffer_id == 2);
