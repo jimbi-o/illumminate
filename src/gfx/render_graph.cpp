@@ -1,12 +1,10 @@
 #include "render_graph.h"
 namespace illuminate::gfx {
-using RenderPassBufferInfo = vector<BufferStateSet>;
-using RenderPassBufferInfoList = vector<RenderPassBufferInfo>;
 struct BufferStateListPerBuffer {
   vector<uint32_t> pass_index_list;
   vector<BufferStateFlags> buffer_state_list;
 };
-unordered_map<BufferId, BufferStateListPerBuffer> ConfigureRenderPassBufferUsages(const RenderPassBufferInfoList& render_pass_buffer_info_list, std::pmr::memory_resource* memory_resource) {
+static unordered_map<BufferId, BufferStateListPerBuffer> ConfigureRenderPassBufferUsages(const RenderPassBufferInfoList& render_pass_buffer_info_list, std::pmr::memory_resource* memory_resource) {
   unordered_map<BufferId, BufferStateListPerBuffer> buffer_usage_list{memory_resource};
   for (uint32_t pass_index = 0; auto&& render_pass_buffer_info_list_per_pass : render_pass_buffer_info_list) {
     for (auto&& buffer_info : render_pass_buffer_info_list_per_pass) {
@@ -20,19 +18,9 @@ unordered_map<BufferId, BufferStateListPerBuffer> ConfigureRenderPassBufferUsage
   }
   return buffer_usage_list;
 }
-struct BarrierTransition {
-  BufferStateFlags state_before;
-  BufferStateFlags state_after;
-};
-struct BarrierConfig {
-  BufferId buffer_id;
-  BarrierSplitType split_type;
-  std::byte _pad[3]{};
-  std::variant<BarrierTransition> params;
-};
 using BarrierUserPassIndexMap = unordered_map<BufferId, vector<uint32_t>>;
 using BarrierListMap = unordered_map<BufferId, vector<BarrierConfig>>;
-std::tuple<BarrierUserPassIndexMap, BarrierListMap> ConfigureBarriersPerBuffer(const unordered_map<BufferId, BufferStateListPerBuffer>& buffer_state_list, std::pmr::memory_resource* memory_resource) {
+static std::tuple<BarrierUserPassIndexMap, BarrierListMap> ConfigureBarriersPerBuffer(const unordered_map<BufferId, BufferStateListPerBuffer>& buffer_state_list, std::pmr::memory_resource* memory_resource) {
   BarrierUserPassIndexMap barrier_user_pass_index_map{memory_resource};
   BarrierListMap barrier_list{memory_resource};
   for (auto& [buffer_id, state_info_list] : buffer_state_list) {
@@ -78,7 +66,7 @@ std::tuple<BarrierUserPassIndexMap, BarrierListMap> ConfigureBarriersPerBuffer(c
   return {barrier_user_pass_index_map, barrier_list};
 }
 using BarrierConfigList = vector<vector<BarrierConfig>>;
-BarrierConfigList ConfigureBarriersBetweenRenderPass(const BarrierUserPassIndexMap& barrier_user_pass_index_map, const BarrierListMap& barrier_list_map, const uint32_t render_pass_num, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
+static BarrierConfigList ConfigureBarriersBetweenRenderPass(const BarrierUserPassIndexMap& barrier_user_pass_index_map, const BarrierListMap& barrier_list_map, const uint32_t render_pass_num, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
   set<BufferId> buffer_id_list{memory_resource_work};
   for (auto& [buffer_id, list] : barrier_user_pass_index_map) {
     buffer_id_list.insert(buffer_id);
@@ -96,6 +84,11 @@ BarrierConfigList ConfigureBarriersBetweenRenderPass(const BarrierUserPassIndexM
     }
   }
   return barriers;
+}
+vector<vector<BarrierConfig>> ConfigureBarrier(const RenderPassBufferInfoList& pass_buffer_info_list, std::pmr::memory_resource* memory_resource_barrier, std::pmr::memory_resource* memory_resource_work) {
+  auto buffer_usage_list = ConfigureRenderPassBufferUsages(pass_buffer_info_list, memory_resource_work);
+  auto [barrier_user_pass_index_map, barrier_list_map] = ConfigureBarriersPerBuffer(buffer_usage_list, memory_resource_work);
+  return ConfigureBarriersBetweenRenderPass(barrier_user_pass_index_map, barrier_list_map, 2, memory_resource_barrier, memory_resource_work);
 }
 }
 #ifdef BUILD_WITH_TEST

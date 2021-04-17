@@ -59,10 +59,23 @@ struct BufferConfig {
   BufferStateFlags initial_state_flags;
   ClearValue clear_value;
 };
-enum class BarrierSplitType : uint8_t { kNone = 0, kBegin, kEnd, };
 struct BufferStateSet {
   BufferId buffer_id;
   BufferStateFlags state;
 };
+using RenderPassBufferInfo = vector<BufferStateSet>;
+using RenderPassBufferInfoList = vector<RenderPassBufferInfo>;
+struct BarrierTransition {
+  BufferStateFlags state_before;
+  BufferStateFlags state_after;
+};
+enum class BarrierSplitType : uint8_t { kNone = 0, kBegin, kEnd, };
+struct BarrierConfig {
+  BufferId buffer_id;
+  BarrierSplitType split_type;
+  std::byte _pad[3]{};
+  std::variant<BarrierTransition> params;
+};
+vector<vector<BarrierConfig>> ConfigureBarrier(const RenderPassBufferInfoList& pass_buffer_info_list, std::pmr::memory_resource* memory_resource_barrier, std::pmr::memory_resource* memory_resource);
 }
 #endif

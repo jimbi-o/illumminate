@@ -242,8 +242,12 @@ class PhysicalBufferSet {
     return true;
   }
   void Term() {
+    for (auto& [buffer_id, resource] : resource_list_) {
+      if (allocation_list_.contains(buffer_id)) {
+        resource->Release();
+      }
+    }
     for (auto& [buffer_id, allocation] : allocation_list_) {
-      resource_list_.at(buffer_id)->Release();
       allocation->Release();
     }
     allocator_->Release();
@@ -260,6 +264,11 @@ class PhysicalBufferSet {
     }
     buffer_id_used_++;
     allocation_list_.emplace(buffer_id_used_, allocation);
+    resource_list_.emplace(buffer_id_used_, resource);
+    return buffer_id_used_;
+  }
+  PhysicalBufferId RegisterExternalPhysicalBuffer(ID3D12Resource* resource) {
+    buffer_id_used_++;
     resource_list_.emplace(buffer_id_used_, resource);
     return buffer_id_used_;
   }
@@ -322,7 +331,10 @@ constexpr D3D12_RESOURCE_STATES ConvertToD3d12ResourceState(const BufferStateFla
   if (flags & kBufferStateFlagSrvNonPs) {
     state |= D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
   }
-  if (flags & kBufferStateFlagUav) {
+  if (flags & kBufferStateFlagUavRead) {
+    state |= D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+  }
+  if (flags & kBufferStateFlagUavWrite) {
     state |= D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
   }
   if (flags & kBufferStateFlagRtv) {
@@ -350,7 +362,8 @@ constexpr D3D12_RESOURCE_STATES GetInitialD3d12ResourceStateFlag(const BufferCon
 }
 constexpr D3D12_RESOURCE_FLAGS ConvertToD3d12ResourceFlags(const BufferStateFlags state_flags) {
   D3D12_RESOURCE_FLAGS flags{};
-  if (state_flags & kBufferStateFlagUav) flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+  if (state_flags & kBufferStateFlagUavRead) flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+  if (state_flags & kBufferStateFlagUavWrite) flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
   if (state_flags & kBufferStateFlagRtv) flags |= D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
   if ((state_flags & kBufferStateFlagDsvWrite) || (state_flags & kBufferStateFlagDsvRead)) flags |= D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
   if ((flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL) && !(state_flags & kBufferStateFlagSrvPsOnly) && !(state_flags & kBufferStateFlagSrvNonPs)) flags = D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
@@ -547,6 +560,46 @@ FrameBufferedBufferId CreateFrameBufferedConstantBuffers(D3d12Device* const devi
   }
   auto frame_buffered_buffer_id = frame_buffered_buffers->RegisterFrameBufferedBuffers(device, buffer_size_in_bytes_256_aligned, resource_list.data(), cpu_handles.data(), frame_buffer_num);
   return frame_buffered_buffer_id;
+}
+constexpr D3D12_RESOURCE_BARRIER_FLAGS ConvertToD3d12SplitType(const BarrierSplitType& type) {
+  switch (type) {
+    case BarrierSplitType::kNone:  return D3D12_RESOURCE_BARRIER_FLAG_NONE;
+    case BarrierSplitType::kBegin: return D3D12_RESOURCE_BARRIER_FLAG_BEGIN_ONLY;
+    case BarrierSplitType::kEnd:   return D3D12_RESOURCE_BARRIER_FLAG_END_ONLY;
+  }
+  return D3D12_RESOURCE_BARRIER_FLAG_NONE;
+}
+constexpr D3D12_RESOURCE_BARRIER ConvertToD3d12Barrier(const BarrierConfig& barrier, ID3D12Resource* resource) {
+  // TODO alias, uav
+  return {
+    .Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+    .Flags = ConvertToD3d12SplitType(barrier.split_type),
+    .Transition = {
+      .pResource   = resource,
+      .Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+      .StateBefore = ConvertToD3d12ResourceState(std::get<BarrierTransition>(barrier.params).state_before),
+      .StateAfter  = ConvertToD3d12ResourceState(std::get<BarrierTransition>(barrier.params).state_after),
+    }
+  };
+}
+std::tuple<vector<vector<BufferId>>, vector<vector<D3D12_RESOURCE_BARRIER>>> ConfigureD3d12Barrier(const RenderPassBufferInfoList& pass_buffer_info_list, std::pmr::memory_resource* memory_resource_barrier, std::pmr::memory_resource* memory_resource_work) {
+  auto barriers = ConfigureBarrier(pass_buffer_info_list, memory_resource_work, memory_resource_work);
+  vector<vector<BufferId>> barriers_buffer_id_list;
+  barriers_buffer_id_list.resize(barriers.size());
+  vector<vector<D3D12_RESOURCE_BARRIER>> d3d12_barriers{memory_resource_barrier};
+  d3d12_barriers.resize(barriers.size());
+  for (uint32_t pass_index = 0; pass_index < barriers.size(); pass_index++) {
+    barriers_buffer_id_list[pass_index].reserve(barriers[pass_index].size());
+    d3d12_barriers[pass_index].reserve(barriers[pass_index].size());
+    for (uint32_t i = 0; i < barriers[pass_index].size(); i++) {
+      barriers_buffer_id_list[pass_index].push_back(barriers[pass_index][i].buffer_id);
+      d3d12_barriers[pass_index].push_back(ConvertToD3d12Barrier(barriers[pass_index][i], nullptr));
+    }
+  }
+  return {barriers_buffer_id_list, d3d12_barriers};
+}
+void ExecuteBarriers(const vector<D3D12_RESOURCE_BARRIER>& barriers, D3d12CommandList* command_list) {
+  command_list->ResourceBarrier(barriers.size(), barriers.data());
 }
 }
 #ifdef BUILD_WITH_TEST
@@ -1185,6 +1238,55 @@ TEST_CASE("load from srv/auto barrier configuration") {
       .clear_value = std::array<float, 4>{1.0f,1.0f,1.0f,1.0f},
     },
     devices.GetDevice(), &physical_buffers, &descriptor_heaps, &descriptor_handles);
+  vector<vector<BufferId>> barriers_buffer_id_list;
+  vector<vector<D3D12_RESOURCE_BARRIER>> barriers;
+  unordered_map<BufferId, ID3D12Resource*> physical_resources{&memory_resource_persistent};
+  {
+    physical_resources.insert_or_assign(1, physical_buffers.GetPhysicalBuffer(rtv_id));
+    RenderPassBufferInfo render_pass_buffer_info_initial{&memory_resource_work};
+    render_pass_buffer_info_initial.push_back({
+        .buffer_id = 2,
+        .state = kBufferStateFlagPresent,
+      });
+    render_pass_buffer_info_initial.push_back({
+        .buffer_id = 1,
+        .state = kBufferStateFlagRtv,
+      });
+    RenderPassBufferInfo render_pass_buffer_info_draw{&memory_resource_work};
+    render_pass_buffer_info_draw.push_back({
+        .buffer_id = 1,
+        .state = kBufferStateFlagRtv,
+      });
+    RenderPassBufferInfo render_pass_buffer_info_copy{&memory_resource_work};
+    render_pass_buffer_info_copy.push_back({
+        .buffer_id = 1,
+        .state = kBufferStateFlagSrvPsOnly,
+      });
+    render_pass_buffer_info_copy.push_back({
+        .buffer_id = 2,
+        .state = kBufferStateFlagRtv,
+      });
+    RenderPassBufferInfo render_pass_buffer_info_final{&memory_resource_work};
+    render_pass_buffer_info_final.push_back({
+        .buffer_id = 1,
+        .state = kBufferStateFlagRtv,
+      });
+    render_pass_buffer_info_final.push_back({
+        .buffer_id = 2,
+        .state = kBufferStateFlagPresent,
+      });
+    RenderPassBufferInfoList pass_buffer_info_list{
+      {
+        std::move(render_pass_buffer_info_initial),
+        std::move(render_pass_buffer_info_draw),
+        std::move(render_pass_buffer_info_copy),
+        std::move(render_pass_buffer_info_final),
+      },
+      &memory_resource_work
+    };
+    std::tie(barriers_buffer_id_list, barriers) = ConfigureD3d12Barrier(pass_buffer_info_list, &memory_resource_persistent, &memory_resource_work);
+    memory_resource_work.Reset();
+  }
   for (uint32_t frame_no = 0; frame_no < kTestFrameNum; frame_no++) {
     CAPTURE(frame_no);
     auto frame_index = frame_no % frame_buffer_num;
@@ -1211,20 +1313,20 @@ TEST_CASE("load from srv/auto barrier configuration") {
       memory_resource_work.Reset();
     }
     devices.swapchain.UpdateBackBufferIndex();
+    // update barrier resource pointers
+    physical_resources.insert_or_assign(2, devices.swapchain.GetResource());
+    for (uint32_t pass_index = 0; pass_index < barriers.size(); pass_index++) {
+      for (uint32_t i = 0; i < barriers[pass_index].size(); i++) {
+        barriers[pass_index][i].Transition.pResource = physical_resources.at(barriers_buffer_id_list[pass_index][i]);
+      }
+    }
     command_list_set.RotateCommandAllocators();
     auto command_list = command_list_set.GetCommandList(CommandQueueType::kGraphics, 1)[0];
     shader_visible_descriptor_heap.SetDescriptorHeapsToCommandList(command_list);
     // barrier
-    {
-      D3D12_RESOURCE_BARRIER barrier{};
-      barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-      barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_BEGIN_ONLY;
-      barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-      barrier.Transition.pResource   = devices.swapchain.GetResource();
-      barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-      barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
-      command_list->ResourceBarrier(1, &barrier);
-    }
+    uint32_t barrier_index = 0;
+    ExecuteBarriers(barriers[barrier_index], command_list);
+    barrier_index++;
     // draw pass
     {
       auto& width = swapchain_size.width;
@@ -1242,28 +1344,8 @@ TEST_CASE("load from srv/auto barrier configuration") {
       command_list->DrawInstanced(3, 1, 0, 0);
     }
     // barrier
-    {
-      D3D12_RESOURCE_BARRIER barriers[2]{};
-      {
-        auto& barrier = barriers[0];
-        barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_END_ONLY;
-        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        barrier.Transition.pResource   = devices.swapchain.GetResource();
-        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
-      }
-      {
-        auto& barrier = barriers[1];
-        barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        barrier.Transition.pResource   = physical_buffers.GetPhysicalBuffer(rtv_id);
-        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-      }
-      command_list->ResourceBarrier(2, barriers);
-    }
+    ExecuteBarriers(barriers[barrier_index], command_list);
+    barrier_index++;
     // copy pass
     {
       auto& width = swapchain_size.width;
@@ -1281,28 +1363,7 @@ TEST_CASE("load from srv/auto barrier configuration") {
       command_list->DrawInstanced(3, 1, 0, 0);
     }
     // barrier
-    {
-      D3D12_RESOURCE_BARRIER barriers[2]{};
-      {
-        auto& barrier = barriers[0];
-        barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        barrier.Transition.pResource   = devices.swapchain.GetResource();
-        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
-      }
-      {
-        auto& barrier = barriers[1];
-        barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        barrier.Transition.pResource   = physical_buffers.GetPhysicalBuffer(rtv_id);
-        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
-      }
-      command_list->ResourceBarrier(2, barriers);
-    }
+    ExecuteBarriers(barriers[barrier_index], command_list);
     command_list_set.ExecuteCommandLists(devices.GetCommandQueue(CommandQueueType::kGraphics), CommandQueueType::kGraphics);
     devices.swapchain.Present();
     SignalQueueOnFrameEnd(&devices.command_queue, CommandQueueType::kGraphics, &signal_values.used_signal_val, &signal_values.frame_wait_signal[frame_index]);
