@@ -42,7 +42,7 @@ void CommandQueue::RegisterSignal(const CommandQueueType command_queue_type, con
   }
   ASSERT(SUCCEEDED(hr) && "command queue signal failed.");
 }
-void CommandQueue::RegisterWaitOnQueue(const CommandQueueType signal_queue, const uint64_t val, const CommandQueueType waiting_queue) {
+void CommandQueue::RegisterWaitOnQueue(const CommandQueueType signal_queue, const uint64_t& val, const CommandQueueType waiting_queue) {
   ASSERT(signal_queue != waiting_queue);
   auto hr = command_queue_.at(waiting_queue)->Wait(fence_.at(signal_queue), val);
   if (FAILED(hr)) {

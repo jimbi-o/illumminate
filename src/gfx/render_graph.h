@@ -25,6 +25,7 @@ enum BufferStateFlags : uint32_t {
   kBufferStateFlagSrvNonPs  = 0x0004,
   kBufferStateFlagUavRead   = 0x0008,
   kBufferStateFlagUavWrite  = 0x0010,
+  kBufferStateFlagUav       = kBufferStateFlagUavRead | kBufferStateFlagUavWrite,
   kBufferStateFlagRtv       = 0x0020,
   kBufferStateFlagDsvWrite  = 0x0040,
   kBufferStateFlagDsvRead   = 0x0080,
@@ -50,6 +51,7 @@ constexpr bool IsBufferStateFlagsMergeable(const BufferStateFlags& a, const Buff
 constexpr BufferStateFlags MergeBufferStateFlags(const BufferStateFlags& a, const BufferStateFlags& b) {
   return static_cast<BufferStateFlags>(a | b);
 }
+enum class DepthStencilFlag : uint8_t { kDefault = 0, kDepthStencilReadOnly, kDepthReadOnly, kStencilReadOnly, };
 struct BufferConfig {
   uint32_t width;
   uint32_t height;
@@ -58,6 +60,7 @@ struct BufferConfig {
   BufferStateFlags state_flags;
   BufferStateFlags initial_state_flags;
   ClearValue clear_value;
+  DepthStencilFlag depth_stencil_flag;
 };
 struct BufferStateSet {
   BufferId buffer_id;

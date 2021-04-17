@@ -140,7 +140,7 @@ class ShaderResourceSet {
         shader_result_ps->Release();
         return {};
       }
-      root_signature->SetName(L"rootsig-vsps");
+      SET_NAME(root_signature, L"rootsig-vsps", rootsig_id);
       rootsig_list_.emplace(rootsig_id, root_signature);
     }
     auto root_signature = rootsig_list_.at(rootsig_id);
@@ -172,7 +172,7 @@ class ShaderResourceSet {
     shader_result_ps->Release();
     shader_result_vs->Release();
     if (FAILED(hr)) return {};
-    pipeline_state->SetName(L"pso-vsps");
+    SET_NAME(pipeline_state, L"pso-vsps", pso_id);
     pso_list_.emplace(pso_id, pipeline_state);
     return {root_signature, pipeline_state};
   }
@@ -190,7 +190,7 @@ class ShaderResourceSet {
         shader_result_cs->Release();
         return {};
       }
-      root_signature->SetName(L"rootsig-cs");
+      SET_NAME(root_signature, L"rootsig-cs", rootsig_id);
       rootsig_list_.emplace(rootsig_id, root_signature);
     }
     auto root_signature = rootsig_list_.at(rootsig_id);
@@ -208,7 +208,7 @@ class ShaderResourceSet {
     shader_object_cs->Release();
     shader_result_cs->Release();
     if (FAILED(hr)) return {};
-    pipeline_state->SetName(L"pso-cs");
+    SET_NAME(pipeline_state, L"pso-cs", pso_id);
     pso_list_.emplace(pso_id, pipeline_state);
     return {root_signature, pipeline_state};
   }
@@ -265,6 +265,7 @@ class PhysicalBufferSet {
     buffer_id_used_++;
     allocation_list_.emplace(buffer_id_used_, allocation);
     resource_list_.emplace(buffer_id_used_, resource);
+    SET_NAME(resource, L"resource", buffer_id_used_);
     return buffer_id_used_;
   }
   PhysicalBufferId RegisterExternalPhysicalBuffer(ID3D12Resource* resource) {
@@ -331,10 +332,7 @@ constexpr D3D12_RESOURCE_STATES ConvertToD3d12ResourceState(const BufferStateFla
   if (flags & kBufferStateFlagSrvNonPs) {
     state |= D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
   }
-  if (flags & kBufferStateFlagUavRead) {
-    state |= D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-  }
-  if (flags & kBufferStateFlagUavWrite) {
+  if (flags & kBufferStateFlagUav) {
     state |= D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
   }
   if (flags & kBufferStateFlagRtv) {
@@ -362,8 +360,7 @@ constexpr D3D12_RESOURCE_STATES GetInitialD3d12ResourceStateFlag(const BufferCon
 }
 constexpr D3D12_RESOURCE_FLAGS ConvertToD3d12ResourceFlags(const BufferStateFlags state_flags) {
   D3D12_RESOURCE_FLAGS flags{};
-  if (state_flags & kBufferStateFlagUavRead) flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-  if (state_flags & kBufferStateFlagUavWrite) flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+  if (state_flags & kBufferStateFlagUav) flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
   if (state_flags & kBufferStateFlagRtv) flags |= D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
   if ((state_flags & kBufferStateFlagDsvWrite) || (state_flags & kBufferStateFlagDsvRead)) flags |= D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
   if ((flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL) && !(state_flags & kBufferStateFlagSrvPsOnly) && !(state_flags & kBufferStateFlagSrvNonPs)) flags = D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
@@ -398,8 +395,8 @@ constexpr D3D12_RESOURCE_DESC ConvertToD3d12ResourceDesc(const BufferConfig& buf
   };
 }
 constexpr bool IsClearValueValid(const BufferConfig& buffer_config) {
-  if (buffer_config.state_flags && kBufferStateFlagRtv) return true;
-  if (buffer_config.state_flags && kBufferStateFlagDsvWrite) return true;
+  if (buffer_config.state_flags & kBufferStateFlagRtv) return true;
+  if (buffer_config.state_flags & kBufferStateFlagDsvWrite) return true;
   return false;
 }
 constexpr D3D12_CLEAR_VALUE GetD3d12ClearValue(const BufferConfig& buffer_config) {
@@ -429,6 +426,25 @@ constexpr D3D12_RENDER_TARGET_VIEW_DESC ConvertToD3d12RtvDesc(const BufferConfig
     },
   };
 }
+constexpr D3D12_DSV_FLAGS ConvertToD3d12DepthStencilFlag(const DepthStencilFlag& flag) {
+  switch (flag) {
+    case DepthStencilFlag::kDefault:              return D3D12_DSV_FLAG_NONE;
+    case DepthStencilFlag::kDepthStencilReadOnly: return (D3D12_DSV_FLAG_READ_ONLY_DEPTH | D3D12_DSV_FLAG_READ_ONLY_STENCIL);
+    case DepthStencilFlag::kDepthReadOnly:        return D3D12_DSV_FLAG_READ_ONLY_DEPTH;
+    case DepthStencilFlag::kStencilReadOnly:      return D3D12_DSV_FLAG_READ_ONLY_STENCIL;
+  }
+  return D3D12_DSV_FLAG_NONE;
+}
+constexpr D3D12_DEPTH_STENCIL_VIEW_DESC ConvertToD3d12DsvDesc(const BufferConfig& buffer_config) {
+  return {
+    .Format = GetDxgiFormat(buffer_config.format),
+    .ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D,
+    .Flags = ConvertToD3d12DepthStencilFlag(buffer_config.depth_stencil_flag),
+    .Texture2D{
+      .MipSlice = 0,
+    },
+  };
+}
 constexpr D3D12_SHADER_RESOURCE_VIEW_DESC ConvertToD3d12SrvDesc(const BufferConfig& buffer_config) {
   return {
     .Format = GetDxgiFormat(buffer_config.format),
@@ -439,6 +455,16 @@ constexpr D3D12_SHADER_RESOURCE_VIEW_DESC ConvertToD3d12SrvDesc(const BufferConf
       .MipLevels = 1,
       .PlaneSlice = 0,
       .ResourceMinLODClamp = 0.0f,
+    },
+  };
+}
+constexpr D3D12_UNORDERED_ACCESS_VIEW_DESC ConvertToD3d12UavDesc(const BufferConfig& buffer_config) {
+  return {
+    .Format = GetDxgiFormat(buffer_config.format),
+    .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D,
+    .Texture2D{
+      .MipSlice = 0,
+      .PlaneSlice = 0,
     },
   };
 }
@@ -467,10 +493,20 @@ class DescriptorHandleSet {
     device->CreateShaderResourceView(resource, &srv_desc, handle);
     map_.at(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV).insert_or_assign(buffer_id, handle);
   }
+  void CreateUav(const PhysicalBufferId buffer_id, const BufferConfig& buffer_config, D3d12Device* const device, ID3D12Resource* const resource, const D3D12_CPU_DESCRIPTOR_HANDLE& handle) {
+    auto uav_desc = ConvertToD3d12UavDesc(buffer_config);
+    device->CreateUnorderedAccessView(resource, nullptr, &uav_desc, handle);
+    map_.at(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV).insert_or_assign(buffer_id, handle);
+  }
   void CreateRtv(const PhysicalBufferId buffer_id, const BufferConfig& buffer_config, D3d12Device* const device, ID3D12Resource* const resource, const D3D12_CPU_DESCRIPTOR_HANDLE& handle) {
     auto rtv_desc = ConvertToD3d12RtvDesc(buffer_config);
     device->CreateRenderTargetView(resource, &rtv_desc, handle);
     map_.at(D3D12_DESCRIPTOR_HEAP_TYPE_RTV).insert_or_assign(buffer_id, handle);
+  }
+  void CreateDsv(const PhysicalBufferId buffer_id, const BufferConfig& buffer_config, D3d12Device* const device, ID3D12Resource* const resource, const D3D12_CPU_DESCRIPTOR_HANDLE& handle) {
+    auto dsv_desc = ConvertToD3d12DsvDesc(buffer_config);
+    device->CreateDepthStencilView(resource, &dsv_desc, handle);
+    map_.at(D3D12_DESCRIPTOR_HEAP_TYPE_DSV).insert_or_assign(buffer_id, handle);
   }
   D3D12_CPU_DESCRIPTOR_HANDLE GetCpuHandle(const PhysicalBufferId buffer_id, const D3D12_DESCRIPTOR_HEAP_TYPE type) {
     return map_.at(type).at(buffer_id);
@@ -486,9 +522,17 @@ PhysicalBufferId CreatePhysicalBuffer(const BufferConfig& buffer_config, D3d12De
     auto srv_handle = descriptor_heaps->RetainHandle(buffer_id, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     descriptor_handles->CreateSrv(buffer_id, buffer_config, device, resource, srv_handle);
   }
+  if (buffer_config.state_flags & kBufferStateFlagUav) {
+    auto uav_handle = descriptor_heaps->RetainHandle(buffer_id, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    descriptor_handles->CreateUav(buffer_id, buffer_config, device, resource, uav_handle);
+  }
   if (buffer_config.state_flags & kBufferStateFlagRtv) {
     auto rtv_handle = descriptor_heaps->RetainHandle(buffer_id, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
     descriptor_handles->CreateRtv(buffer_id, buffer_config, device, resource, rtv_handle);
+  }
+  if ((buffer_config.state_flags & kBufferStateFlagDsvRead) || (buffer_config.state_flags & kBufferStateFlagDsvWrite)) {
+    auto dsv_handle = descriptor_heaps->RetainHandle(buffer_id, D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+    descriptor_handles->CreateDsv(buffer_id, buffer_config, device, resource, dsv_handle);
   }
   return buffer_id;
 }
@@ -1367,6 +1411,143 @@ TEST_CASE("load from srv/auto barrier configuration") {
     command_list_set.ExecuteCommandLists(devices.GetCommandQueue(CommandQueueType::kGraphics), CommandQueueType::kGraphics);
     devices.swapchain.Present();
     SignalQueueOnFrameEnd(&devices.command_queue, CommandQueueType::kGraphics, &signal_values.used_signal_val, &signal_values.frame_wait_signal[frame_index]);
+  }
+  devices.WaitAll();
+  shader_visible_descriptor_heap.Term();
+  descriptor_heaps.Term();
+  physical_buffers.Term();
+  shader_resource_set.Term();
+  command_list_set.Term();
+  devices.Term();
+}
+TEST_CASE("use compute queue") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  using namespace illuminate::gfx::d3d12;
+  const BufferSize2d swapchain_size{1600, 900};
+  const uint32_t frame_buffer_num = 2;
+  const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
+  DeviceSet devices;
+  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
+  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_size_in_bytes_persistent], buffer_size_in_bytes_persistent);
+  CommandListSet command_list_set(&memory_resource_persistent);
+  CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num));
+  ShaderResourceSet shader_resource_set(&memory_resource_persistent);
+  shader_resource_set.Init(devices.GetDevice());
+  PhysicalBufferSet physical_buffers(&memory_resource_persistent);
+  CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter()));
+  DescriptorHeapSet descriptor_heaps(&memory_resource_persistent);
+  CHECK(descriptor_heaps.Init(devices.GetDevice()));
+  DescriptorHandleSet descriptor_handles(&memory_resource_persistent);
+  ShaderVisibleDescriptorHeap shader_visible_descriptor_heap;
+  CHECK(shader_visible_descriptor_heap.Init(devices.GetDevice()));
+  FrameBufferedBufferSet frame_buffered_buffers(&memory_resource_persistent);
+  SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  auto [compute_queue_rootsig, compute_queue_pso] = shader_resource_set.CreateCsPipelineStateObject(StrId("compute_queue_pso"), devices.GetDevice(), StrId("draw_rootsig"), L"shader/test/fill-screen.cs.hlsl", &memory_resource_work);
+  auto [copy_rootsig, copy_pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("copy_pso"), devices.GetDevice(), StrId("copy_rootsig"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/copyuav.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
+  auto uav_id = CreatePhysicalBuffer({
+      .width = swapchain_size.width,
+      .height = swapchain_size.height,
+      .dimension = BufferDimensionType::k2d,
+      .format = BufferFormat::kR8G8B8A8Unorm,
+      .state_flags = kBufferStateFlagUav,
+      .initial_state_flags = kBufferStateFlagUavWrite,
+    },
+    devices.GetDevice(), &physical_buffers, &descriptor_heaps, &descriptor_handles);
+  for (uint32_t frame_no = 0; frame_no < kTestFrameNum; frame_no++) {
+    CAPTURE(frame_no);
+    auto frame_index = frame_no % frame_buffer_num;
+    devices.command_queue.WaitOnCpu(signal_values.frame_wait_signal[frame_index]);
+    D3D12_GPU_DESCRIPTOR_HANDLE uav_gpu_handle{};
+    {
+      auto uav_handle = descriptor_handles.GetCpuHandle(uav_id, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+      uav_gpu_handle = shader_visible_descriptor_heap.CopyToBufferDescriptorHeap(&uav_handle, 1, &memory_resource_work);
+      memory_resource_work.Reset();
+    }
+    devices.swapchain.UpdateBackBufferIndex();
+    command_list_set.RotateCommandAllocators();
+    // record compute queue command list
+    auto command_list = command_list_set.GetCommandList(CommandQueueType::kCompute, 1)[0];
+    shader_visible_descriptor_heap.SetDescriptorHeapsToCommandList(command_list);
+    // compute queue pass
+    {
+      command_list->DiscardResource(physical_buffers.GetPhysicalBuffer(uav_id), nullptr);
+      command_list->SetComputeRootSignature(compute_queue_rootsig);
+      command_list->SetPipelineState(compute_queue_pso);
+      command_list->SetComputeRootDescriptorTable(0, uav_gpu_handle);
+      command_list->Dispatch(swapchain_size.width, swapchain_size.height, 1);
+      command_list->SetComputeRootSignature(compute_queue_rootsig);
+    }
+    // execute compute queue
+    command_list_set.ExecuteCommandLists(devices.GetCommandQueue(CommandQueueType::kCompute), CommandQueueType::kCompute);
+    // register signal and wait
+    {
+      auto& signal_val = ++signal_values.used_signal_val[CommandQueueType::kCompute];
+      devices.command_queue.RegisterSignal(CommandQueueType::kCompute, signal_val);
+      devices.command_queue.RegisterWaitOnQueue(CommandQueueType::kCompute, signal_val, CommandQueueType::kGraphics);
+    }
+    // record graphics queue command list
+    command_list = command_list_set.GetCommandList(CommandQueueType::kGraphics, 1)[0];
+    shader_visible_descriptor_heap.SetDescriptorHeapsToCommandList(command_list);
+    // barrier
+    {
+      D3D12_RESOURCE_BARRIER barriers[2]{};
+      {
+        auto& barrier = barriers[0];
+        barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barrier.Transition.pResource   = devices.swapchain.GetResource();
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
+      }
+      {
+        auto& barrier = barriers[1];
+        barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+        barrier.UAV.pResource = physical_buffers.GetPhysicalBuffer(uav_id);
+      }
+      command_list->ResourceBarrier(2, barriers);
+    }
+    // copy pass
+    {
+      auto& width = swapchain_size.width;
+      auto& height = swapchain_size.height;
+      command_list->SetGraphicsRootSignature(copy_rootsig);
+      D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), D3D12_MIN_DEPTH, D3D12_MAX_DEPTH};
+      command_list->RSSetViewports(1, &viewport);
+      D3D12_RECT scissor_rect{0L, 0L, static_cast<LONG>(width), static_cast<LONG>(height)};
+      command_list->RSSetScissorRects(1, &scissor_rect);
+      command_list->SetPipelineState(copy_pso);
+      command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+      auto swapchain_cpu_handle = devices.swapchain.GetRtvHandle();
+      command_list->OMSetRenderTargets(1, &swapchain_cpu_handle, true, nullptr);
+      command_list->SetGraphicsRootDescriptorTable(0, uav_gpu_handle);
+      command_list->DrawInstanced(3, 1, 0, 0);
+    }
+    // barrier
+    {
+      D3D12_RESOURCE_BARRIER barriers[1]{};
+      {
+        auto& barrier = barriers[0];
+        barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barrier.Transition.pResource   = devices.swapchain.GetResource();
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
+      }
+      command_list->ResourceBarrier(1, barriers);
+    }
+    command_list_set.ExecuteCommandLists(devices.GetCommandQueue(CommandQueueType::kGraphics), CommandQueueType::kGraphics);
+    devices.swapchain.Present();
+    {
+      auto& signal_val = ++signal_values.used_signal_val[CommandQueueType::kGraphics];
+      devices.command_queue.RegisterSignal(CommandQueueType::kGraphics, signal_val);
+      devices.command_queue.RegisterWaitOnQueue(CommandQueueType::kGraphics, signal_val, CommandQueueType::kCompute);
+      signal_values.frame_wait_signal[frame_index][CommandQueueType::kGraphics] = signal_val;
+    }
   }
   devices.WaitAll();
   shader_visible_descriptor_heap.Term();
