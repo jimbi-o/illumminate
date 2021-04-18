@@ -1558,6 +1558,7 @@ TEST_CASE("use compute queue") {
   devices.Term();
 }
 /* TODO
- * multi threaded
+ * intra-frame async compute
  * inter-frame async compute
+ * multi threaded
  */
