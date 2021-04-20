@@ -80,5 +80,20 @@ struct BarrierConfig {
   std::variant<BarrierTransition> params;
 };
 vector<vector<BarrierConfig>> ConfigureBarrier(const RenderPassBufferInfoList& pass_buffer_info_list, std::pmr::memory_resource* memory_resource_barrier, std::pmr::memory_resource* memory_resource);
+using SignalQueueRenderPassInfo = unordered_map<uint32_t, uint32_t>;
+enum class BufferReadWriteFlag : uint8_t {
+  kRead      = 0x1,
+  kWrite     = 0x2,
+  kReadWrite = (kRead | kWrite),
+};
+struct RenderPassBufferReadWriteInfo {
+  BufferId buffer_id;
+  BufferReadWriteFlag read_write_flag;
+  std::byte _pad[3]{};
+};
+using RenderPassBufferReadWriteInfoListPerPass = vector<RenderPassBufferReadWriteInfo>;
+using RenderPassBufferReadWriteInfoList        = vector<RenderPassBufferReadWriteInfoListPerPass>;
+enum class RenderFrameLoopSetting :uint8_t { kNoLoop = 0, kWithLoop, };
+SignalQueueRenderPassInfo ConfigureQueueSignal(const vector<CommandQueueType>& render_pass_command_queue_type, const RenderPassBufferReadWriteInfoList& pass_buffer_info_list, const RenderFrameLoopSetting loop_type, std::pmr::memory_resource* memory_resource_signal_info, std::pmr::memory_resource* memory_resource_work);
 }
 #endif

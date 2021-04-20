@@ -90,20 +90,6 @@ vector<vector<BarrierConfig>> ConfigureBarrier(const RenderPassBufferInfoList& p
   auto [barrier_user_pass_index_map, barrier_list_map] = ConfigureBarriersPerBuffer(buffer_usage_list, memory_resource_work);
   return ConfigureBarriersBetweenRenderPass(barrier_user_pass_index_map, barrier_list_map, 2, memory_resource_barrier, memory_resource_work);
 }
-using SignalQueueRenderPassInfo = unordered_map<uint32_t, uint32_t>;
-enum class BufferReadWriteFlag : uint8_t {
-  kRead      = 0x1,
-  kWrite     = 0x2,
-  kReadWrite = (kRead | kWrite),
-};
-struct RenderPassBufferReadWriteInfo {
-  BufferId buffer_id;
-  BufferReadWriteFlag read_write_flag;
-  std::byte _pad[3]{};
-};
-using RenderPassBufferReadWriteInfoListPerPass = vector<RenderPassBufferReadWriteInfo>;
-using RenderPassBufferReadWriteInfoList        = vector<RenderPassBufferReadWriteInfoListPerPass>;
-enum class RenderFrameLoopSetting :uint8_t { kNoLoop = 0, kWithLoop, };
 SignalQueueRenderPassInfo ConfigureQueueSignal(const vector<CommandQueueType>& render_pass_command_queue_type, const RenderPassBufferReadWriteInfoList& pass_buffer_info_list, const RenderFrameLoopSetting loop_type, std::pmr::memory_resource* memory_resource_signal_info, std::pmr::memory_resource* memory_resource_work) {
   SignalQueueRenderPassInfo signal_queue_render_pass_info{memory_resource_signal_info};
   const auto& pass_len = render_pass_command_queue_type.size();
