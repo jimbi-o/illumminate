@@ -90,6 +90,63 @@ vector<vector<BarrierConfig>> ConfigureBarrier(const RenderPassBufferInfoList& p
   auto [barrier_user_pass_index_map, barrier_list_map] = ConfigureBarriersPerBuffer(buffer_usage_list, memory_resource_work);
   return ConfigureBarriersBetweenRenderPass(barrier_user_pass_index_map, barrier_list_map, 2, memory_resource_barrier, memory_resource_work);
 }
+using SignalQueueRenderPassInfo = unordered_map<uint32_t, uint32_t>;
+enum class BufferReadWriteFlag : uint8_t {
+  kRead      = 0x1,
+  kWrite     = 0x2,
+  kReadWrite = (kRead | kWrite),
+};
+struct RenderPassBufferReadWriteInfo {
+  BufferId buffer_id;
+  BufferReadWriteFlag read_write_flag;
+  std::byte _pad[3]{};
+};
+using RenderPassBufferReadWriteInfoListPerPass = vector<RenderPassBufferReadWriteInfo>;
+using RenderPassBufferReadWriteInfoList        = vector<RenderPassBufferReadWriteInfoListPerPass>;
+enum class RenderFrameLoopSetting :uint8_t { kNoLoop = 0, kWithLoop, };
+SignalQueueRenderPassInfo ConfigureQueueSignal(const vector<CommandQueueType>& render_pass_command_queue_type, const RenderPassBufferReadWriteInfoList& pass_buffer_info_list, const RenderFrameLoopSetting loop_type, std::pmr::memory_resource* memory_resource_signal_info, std::pmr::memory_resource* memory_resource_work) {
+  SignalQueueRenderPassInfo signal_queue_render_pass_info{memory_resource_signal_info};
+  const auto& pass_len = render_pass_command_queue_type.size();
+  unordered_map<BufferId, uint32_t>            prev_buffer_user_pass_index_list{memory_resource_work};
+  unordered_map<BufferId, CommandQueueType>    prev_buffer_user_queue_list{memory_resource_work};
+  unordered_map<BufferId, BufferReadWriteFlag> prev_buffer_read_write_flag_list{memory_resource_work};
+  for (uint32_t pass_index = 0; pass_index < pass_len; pass_index++) {
+    auto& command_queue_type = render_pass_command_queue_type[pass_index];
+    auto& buffer_info_list = pass_buffer_info_list[pass_index];
+    for (auto& buffer_info : buffer_info_list) {
+      if (!prev_buffer_user_queue_list.contains(buffer_info.buffer_id)) continue;
+      if (prev_buffer_user_queue_list.at(buffer_info.buffer_id) == command_queue_type) continue;
+      if (buffer_info.read_write_flag == BufferReadWriteFlag::kRead && prev_buffer_read_write_flag_list.at(buffer_info.buffer_id) == BufferReadWriteFlag::kRead) continue;
+      signal_queue_render_pass_info.insert_or_assign(prev_buffer_user_pass_index_list.at(buffer_info.buffer_id), pass_index);
+    }
+    for (auto& buffer_info : buffer_info_list) {
+      prev_buffer_user_pass_index_list[buffer_info.buffer_id] = pass_index;
+      prev_buffer_user_queue_list[buffer_info.buffer_id] = command_queue_type;
+      prev_buffer_read_write_flag_list[buffer_info.buffer_id] = buffer_info.read_write_flag;
+    }
+  }
+  if (loop_type == RenderFrameLoopSetting::kNoLoop) return signal_queue_render_pass_info;
+  for (uint32_t pass_index = 0; pass_index < pass_len; pass_index++) {
+    auto& command_queue_type = render_pass_command_queue_type[pass_index];
+    auto& buffer_info_list = pass_buffer_info_list[pass_index];
+    for (auto& buffer_info : buffer_info_list) {
+      if (!prev_buffer_user_pass_index_list.contains(buffer_info.buffer_id)) continue;
+      auto prev_pass_index = prev_buffer_user_pass_index_list.at(buffer_info.buffer_id);
+      prev_buffer_user_pass_index_list.erase(buffer_info.buffer_id);
+      if (pass_index >= prev_pass_index) continue;
+      if (prev_buffer_user_queue_list.at(buffer_info.buffer_id) == command_queue_type) continue;
+      if (buffer_info.read_write_flag == BufferReadWriteFlag::kRead && prev_buffer_read_write_flag_list.at(buffer_info.buffer_id) == BufferReadWriteFlag::kRead) continue;
+      signal_queue_render_pass_info.insert_or_assign(prev_pass_index, pass_index);
+    }
+    if (prev_buffer_user_pass_index_list.empty()) break;
+  }
+  return signal_queue_render_pass_info;
+}
+SignalQueueRenderPassInfo RemoveRedundantQueueSignals(SignalQueueRenderPassInfo&& signal_queue_render_pass_info, [[maybe_unused]]const vector<CommandQueueType>& render_pass_command_queue_type, [[maybe_unused]]std::pmr::memory_resource* memory_resource_work) {
+  // TODO remove [[maybe_unused]]
+  // TODO implement
+  return std::move(signal_queue_render_pass_info);
+}
 }
 #ifdef BUILD_WITH_TEST
 namespace {
@@ -256,6 +313,40 @@ TEST_CASE("barrier for load from srv") {
   CHECK(std::holds_alternative<BarrierTransition>(barriers[2][1].params));
   CHECK(std::get<BarrierTransition>(barriers[2][1].params).state_before == kBufferStateFlagRtv);
   CHECK(std::get<BarrierTransition>(barriers[2][1].params).state_after  == kBufferStateFlagPresent);
+}
+TEST_CASE("queue signal for use compute queue") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  vector<CommandQueueType> render_pass_command_queue_type{&memory_resource_work};
+  render_pass_command_queue_type.push_back(CommandQueueType::kCompute);
+  render_pass_command_queue_type.push_back(CommandQueueType::kGraphics);
+  RenderPassBufferReadWriteInfoListPerPass render_pass_buffer_info_draw{&memory_resource_work};
+  render_pass_buffer_info_draw.push_back({
+      .buffer_id = 1,
+      .read_write_flag = BufferReadWriteFlag::kWrite,
+    });
+  RenderPassBufferReadWriteInfoListPerPass render_pass_buffer_info_copy{&memory_resource_work};
+  render_pass_buffer_info_copy.push_back({
+      .buffer_id = 1,
+      .read_write_flag = BufferReadWriteFlag::kRead,
+    });
+  RenderPassBufferReadWriteInfoList pass_buffer_info_list{
+    {
+      std::move(render_pass_buffer_info_draw),
+      std::move(render_pass_buffer_info_copy),
+    },
+    &memory_resource_work
+  };
+  auto signal_queue_render_pass_info = ConfigureQueueSignal(render_pass_command_queue_type, pass_buffer_info_list, RenderFrameLoopSetting::kWithLoop, &memory_resource_work, &memory_resource_work);
+  CHECK(signal_queue_render_pass_info.size() == 2);
+  CHECK(signal_queue_render_pass_info.contains(0));
+  CHECK(signal_queue_render_pass_info.at(0) == 1);
+  CHECK(signal_queue_render_pass_info.contains(1));
+  CHECK(signal_queue_render_pass_info.at(1) == 0);
+}
+TEST_CASE("barrier for use compute queue") {
+  // TODO
 }
 #ifdef __clang__
 #pragma clang diagnostic pop
