@@ -1589,5 +1589,6 @@ TEST_CASE("use compute queue") {
 /* TODO
  * intra-frame async compute
  * inter-frame async compute
+ * combine buffer flag test
  * multi threaded
  */

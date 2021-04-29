@@ -52,6 +52,18 @@ constexpr BufferStateFlags MergeBufferStateFlags(const BufferStateFlags& a, cons
   return static_cast<BufferStateFlags>(a | b);
 }
 enum class DepthStencilFlag : uint8_t { kDefault = 0, kDepthStencilReadOnly, kDepthReadOnly, kStencilReadOnly, };
+struct BarrierTransition {
+  BufferStateFlags state_before;
+  BufferStateFlags state_after;
+};
+enum class BarrierSplitType : uint8_t { kNone = 0, kBegin, kEnd, };
+struct BarrierConfig {
+  BufferId buffer_id;
+  BarrierSplitType split_type;
+  std::byte _pad[3]{};
+  std::variant<BarrierTransition> params;
+};
+#if 0
 struct BufferConfig {
   uint32_t width;
   uint32_t height;
@@ -95,5 +107,6 @@ using RenderPassBufferReadWriteInfoListPerPass = vector<RenderPassBufferReadWrit
 using RenderPassBufferReadWriteInfoList        = vector<RenderPassBufferReadWriteInfoListPerPass>;
 enum class RenderFrameLoopSetting :uint8_t { kNoLoop = 0, kWithLoop, };
 SignalQueueRenderPassInfo ConfigureQueueSignal(const vector<CommandQueueType>& render_pass_command_queue_type, const RenderPassBufferReadWriteInfoList& pass_buffer_info_list, const RenderFrameLoopSetting loop_type, std::pmr::memory_resource* memory_resource_signal_info, std::pmr::memory_resource* memory_resource_work);
+#endif
 }
 #endif
