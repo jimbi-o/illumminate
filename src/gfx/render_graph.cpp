@@ -57,173 +57,101 @@ struct BufferStateChangeInfo {
   BarrierPosType barrier_end_pass_pos_type;
   std::byte _pad[2]{};
 };
-static std::tuple<vector<BufferId>, vector<vector<BufferId>>> InitBufferIdList(const uint32_t pass_num, const RenderPassBufferStateList& render_pass_buffer_state_list, std::pmr::memory_resource* memory_resource) {
+static std::tuple<vector<BufferId>, vector<vector<BufferId>>, vector<vector<BufferStateFlags>>> InitBufferIdList(const uint32_t pass_num, const RenderPassBufferStateList& render_pass_buffer_state_list, std::pmr::memory_resource* memory_resource) {
   vector<BufferId> buffer_id_list{memory_resource};
   vector<vector<BufferId>> render_pass_buffer_id_list{memory_resource};
   render_pass_buffer_id_list.reserve(render_pass_buffer_state_list.size());
+  vector<vector<BufferStateFlags>> render_pass_buffer_state_flag_list{memory_resource};
+  render_pass_buffer_state_flag_list.reserve(render_pass_buffer_state_list.size());
   unordered_map<StrId, BufferId> used_buffer_name{memory_resource};
   for (uint32_t pass_index = 0; pass_index < pass_num; pass_index++) {
     auto& buffer_state_list = render_pass_buffer_state_list[pass_index];
     render_pass_buffer_id_list.push_back(vector<BufferId>{memory_resource});
     render_pass_buffer_id_list.back().reserve(buffer_state_list.size());
+    render_pass_buffer_state_flag_list.push_back(vector<BufferStateFlags>{memory_resource});
+    render_pass_buffer_state_flag_list.back().reserve(buffer_state_list.size());
     for (auto& buffer_state : buffer_state_list) {
-      if (used_buffer_name.contains(buffer_state.buffer_name) && (buffer_state.read_write_flag & kReadFlag)) {
-        render_pass_buffer_id_list.back().push_back(used_buffer_name.at(buffer_state.buffer_name));
-        continue;
+      if (!used_buffer_name.contains(buffer_state.buffer_name) || (buffer_state.read_write_flag & kReadFlag) == 0) {
+        BufferId buffer_id = static_cast<BufferId>(used_buffer_name.size());
+        used_buffer_name.insert_or_assign(buffer_state.buffer_name, buffer_id);
+        buffer_id_list.push_back(buffer_id);
       }
-      BufferId buffer_id = static_cast<BufferId>(used_buffer_name.size());
-      used_buffer_name.insert_or_assign(buffer_state.buffer_name, buffer_id);
-      buffer_id_list.push_back(buffer_id);
-      render_pass_buffer_id_list.back().push_back(buffer_id);
+      render_pass_buffer_id_list.back().push_back(used_buffer_name.at(buffer_state.buffer_name));
+      render_pass_buffer_state_flag_list.back().push_back(buffer_state.state);
     }
   }
-  return {buffer_id_list, render_pass_buffer_id_list};
+  return {buffer_id_list, render_pass_buffer_id_list, render_pass_buffer_state_flag_list};
 }
-static unordered_map<BufferId, BufferStateFlags> ConfigureInitialBufferStateFlags(const unordered_map<StrId, BufferStateFlags>& initial_buffer_state_list_with_buffer_name, const uint32_t pass_num, const RenderPassBufferStateList& render_pass_buffer_state_list, const vector<BufferId>& buffer_id_list, const vector<vector<BufferId>>& render_pass_buffer_id_list, std::pmr::memory_resource* memory_resource) {
-  const auto buffer_num = static_cast<uint32_t>(buffer_id_list.size());
-  unordered_map<BufferId, BufferStateFlags> initial_buffer_state_list{memory_resource};
-  initial_buffer_state_list.reserve(buffer_num);
-  for (uint32_t pass_index = 0; pass_index < pass_num; pass_index++) {
-    auto& buffer_state_list = render_pass_buffer_state_list[pass_index];
-    auto render_pass_buffer_num = static_cast<uint32_t>(buffer_state_list.size());
-    for (uint32_t buffer_index = 0; buffer_index < render_pass_buffer_num; buffer_index++) {
-      auto& buffer_state_config = buffer_state_list[buffer_index];
-      auto& buffer_name = buffer_state_config.buffer_name;
-      auto& buffer_id = render_pass_buffer_id_list[pass_index][buffer_index];
-      if (initial_buffer_state_list.contains(buffer_id)) continue;
-      const auto buffer_state = initial_buffer_state_list_with_buffer_name.contains(buffer_name) ? initial_buffer_state_list_with_buffer_name.at(buffer_name) : buffer_state_config.state;
-      initial_buffer_state_list.insert_or_assign(buffer_id, buffer_state);
-      if (initial_buffer_state_list.size() == buffer_num) break;
-    }
-    if (initial_buffer_state_list.size() == buffer_num) break;
-  }
-  return initial_buffer_state_list;
-}
-static unordered_map<BufferId, BufferStateFlags> ConfigureFinalBufferStateFlags(const unordered_map<StrId, BufferStateFlags>& final_buffer_state_list_with_buffer_name, const uint32_t pass_num, const RenderPassBufferStateList& render_pass_buffer_state_list, const vector<vector<BufferId>>& render_pass_buffer_id_list, unordered_map<BufferId, BufferStateFlags>&& initial_buffer_state_list) {
-  auto&& final_buffer_state_list = std::move(initial_buffer_state_list);
-  const auto final_buffer_state_num = static_cast<uint32_t>(final_buffer_state_list_with_buffer_name.size());
-  for (uint32_t pass_index = pass_num - 1; pass_index < pass_num /*pass_index is unsigned*/; pass_index--) {
-    auto& buffer_state_list = render_pass_buffer_state_list[pass_index];
-    auto render_pass_buffer_num = static_cast<uint32_t>(buffer_state_list.size());
-    for (uint32_t buffer_index = 0; buffer_index < render_pass_buffer_num; buffer_index++) {
-      auto& buffer_state_config = buffer_state_list[buffer_index];
-      auto& buffer_name = buffer_state_config.buffer_name;
-      if (!final_buffer_state_list_with_buffer_name.contains(buffer_name)) continue;
-      auto& buffer_id = render_pass_buffer_id_list[pass_index][buffer_index];
-      if (final_buffer_state_list.contains(buffer_id)) continue;
-      final_buffer_state_list.insert_or_assign(buffer_id, final_buffer_state_list_with_buffer_name.at(buffer_name));
-      if (final_buffer_state_list.size() == final_buffer_state_num) break;
-    }
-    if (final_buffer_state_list.size() == final_buffer_state_num) break;
-  }
-  return std::move(final_buffer_state_list);
-}
-static unordered_map<BufferId, vector<BufferStateChangeInfo>> InitBufferStateChangeInfoList(const uint32_t pass_num, const RenderPassBufferStateList& render_pass_buffer_state_list, const vector<BufferId>& buffer_id_list, const vector<vector<BufferId>>& render_pass_buffer_id_list, const unordered_map<BufferId, BufferStateFlags>& initial_buffer_state_list, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
-  unordered_map<BufferId, vector<BufferStateChangeInfo>> buffer_state_change_info_list_map;
-  buffer_state_change_info_list_map.reserve(buffer_id_list.size());
+static std::tuple<unordered_map<BufferId, vector<BufferStateFlags>>, unordered_map<BufferId, vector<vector<uint32_t>>>> CreateBufferStateList(const uint32_t pass_num, const vector<BufferId>& buffer_id_list, const vector<vector<BufferId>>& render_pass_buffer_id_list, const vector<vector<BufferStateFlags>>& render_pass_buffer_state_flag_list, std::pmr::memory_resource* memory_resource) {
+  unordered_map<BufferId, vector<BufferStateFlags>> buffer_state_list{memory_resource};
+  buffer_state_list.reserve(buffer_id_list.size());
+  unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{memory_resource};
+  buffer_user_pass_list.reserve(buffer_id_list.size());
   for (auto& buffer_id : buffer_id_list) {
-    buffer_state_change_info_list_map.insert_or_assign(buffer_id, vector<BufferStateChangeInfo>{memory_resource});
+    buffer_state_list.insert_or_assign(buffer_id, vector<BufferStateFlags>{memory_resource});
+    buffer_user_pass_list.insert_or_assign(buffer_id, vector<vector<uint32_t>>{memory_resource});
+    buffer_user_pass_list.at(buffer_id).push_back(vector<uint32_t>{memory_resource});
   }
-  const uint32_t invalid_pass_index = 0xFFFFFFFF;
-  unordered_map<BufferId, uint32_t> last_accessed_pass_index{memory_resource_work};
   for (uint32_t pass_index = 0; pass_index < pass_num; pass_index++) {
-    auto& buffer_state_list = render_pass_buffer_state_list[pass_index];
-    const uint32_t buffer_num = static_cast<uint32_t>(buffer_state_list.size());
-    auto& pass_binded_buffer_id_list = render_pass_buffer_id_list[pass_index];
-    ASSERT(buffer_num == pass_binded_buffer_id_list.size());
+    auto& current_pass_buffer_state_list = render_pass_buffer_state_flag_list[pass_index];
+    const auto buffer_num = static_cast<uint32_t>(buffer_state_list.size());
     for (uint32_t buffer_index = 0; buffer_index < buffer_num; buffer_index++) {
-      const auto buffer_id = pass_binded_buffer_id_list[buffer_index];
-      auto& state_change_info_list = buffer_state_change_info_list_map.at(buffer_index);
-      const auto barrier_exists = !state_change_info_list.empty();
-      const auto current_state = barrier_exists ? state_change_info_list.back().state_after : initial_buffer_state_list.at(buffer_id);
-      const auto next_state = buffer_state_list[buffer_index].state;
-      if ((current_state & next_state) == next_state) {
-        last_accessed_pass_index.insert_or_assign(buffer_id, pass_index);
-        continue;
+      auto& buffer_id = render_pass_buffer_id_list[pass_index][buffer_index];
+      auto& buffer_state = current_pass_buffer_state_list[buffer_index];
+      if (buffer_state_list.at(buffer_id).empty()) {
+        buffer_state_list.at(buffer_id).push_back(buffer_state);
       }
-      if (barrier_exists && IsBufferStateFlagsMergeable(current_state, next_state)) {
-        state_change_info_list.back().state_after = MergeBufferStateFlags(current_state, next_state);
-        last_accessed_pass_index.insert_or_assign(buffer_id, pass_index);
-        continue;
+      auto& prev_state = buffer_state_list.at(buffer_id).back();
+      if ((buffer_state & prev_state) != prev_state) {
+        if (IsBufferStateFlagsMergeable(buffer_state, prev_state)) {
+          buffer_state_list.at(buffer_id).back() = MergeBufferStateFlags(buffer_state, prev_state);
+        } else {
+          buffer_state_list.at(buffer_id).push_back(buffer_state);
+          buffer_user_pass_list.at(buffer_id).push_back(vector<uint32_t>{memory_resource});
+        }
       }
-      if (barrier_exists && state_change_info_list.back().barrier_end_pass_index == invalid_pass_index) {
-        auto& state_change_info = state_change_info_list.back();
-        state_change_info.barrier_end_pass_index = pass_index;
-        state_change_info.barrier_end_pass_pos_type = BarrierPosType::kPrePass;
-      }
-      const auto initial_access = !last_accessed_pass_index.contains(buffer_id);
-      state_change_info_list.push_back({
-          .barrier_begin_pass_index = initial_access ? 0 : last_accessed_pass_index.at(buffer_id),
-          .barrier_end_pass_index = pass_index,
-          .state_before = current_state,
-          .state_after = next_state,
-          .barrier_begin_pass_pos_type = initial_access ? BarrierPosType::kPrePass : BarrierPosType::kPostPass,
-          .barrier_end_pass_pos_type = BarrierPosType::kPrePass,
-        });
-      last_accessed_pass_index.insert_or_assign(buffer_id, pass_index);
+      buffer_user_pass_list.at(buffer_id).back().push_back(pass_index);
     }
   }
-  return buffer_state_change_info_list_map;
+  return {buffer_state_list, buffer_user_pass_list};
 }
-static unordered_map<BufferId, vector<BufferStateChangeInfo>> AppendFinalBufferStateToChangeInfoList(const uint32_t pass_num, unordered_map<BufferId, vector<BufferStateChangeInfo>>&& buffer_state_change_info_list_map, const unordered_map<BufferId, BufferStateFlags>& final_buffer_state_list) {
-  const auto end_pass_index = pass_num - 1;
-  for (auto& [buffer_id, buffer_state_change_info_list] : buffer_state_change_info_list_map) {
-    if (buffer_state_change_info_list.empty()) continue;
-    auto& buffer_state_change_info = buffer_state_change_info_list.back();
-    auto& buffer_state = final_buffer_state_list.at(buffer_id);
-    if ((buffer_state_change_info.state_after & buffer_state) == buffer_state) continue;
-    if (IsBufferStateFlagsMergeable(buffer_state_change_info.state_after, buffer_state)) {
-      buffer_state_change_info.state_after = MergeBufferStateFlags(buffer_state_change_info.state_after, buffer_state);
-      continue;
-    }
-    buffer_state_change_info_list.push_back({
-        .barrier_begin_pass_index = buffer_state_change_info.barrier_end_pass_index,
-        .barrier_end_pass_index = end_pass_index,
-        .state_before = buffer_state_change_info.state_after,
-        .state_after = buffer_state,
-        .barrier_begin_pass_pos_type = BarrierPosType::kPostPass,
-        .barrier_end_pass_pos_type = BarrierPosType::kPostPass,
-      });
-  }
-  return std::move(buffer_state_change_info_list_map);
+#if 0
+static unordered_map<BufferId, BufferStateFlags> ConvertBufferNameToBufferIdForInitialFlagList(const uint32_t pass_num, const RenderPassBufferStateList& render_pass_buffer_state_list, const vector<BufferId>& buffer_id_list, const vector<vector<BufferId>>& render_pass_buffer_id_list, const unordered_map<StrId, BufferStateFlags>& initial_state_flag_list_with_name, std::pmr::memory_resource* memory_resource) {
+  // TODO
+  unordered_map<BufferId, BufferStateFlags> initial_state_flag_list{memory_resource};
+  return initial_state_flag_list;
 }
-static unordered_map<BufferId, vector<BufferStateChangeInfo>> FixPassIndexAtSamePositionWithDifferentValues(unordered_map<BufferId, vector<BufferStateChangeInfo>>&& buffer_state_change_info_list_map) {
-  for (auto&& [buffer_id, state_change_info_list] : buffer_state_change_info_list_map) {
-    for (auto&& state_change_info : state_change_info_list) {
-      if (state_change_info.barrier_begin_pass_index + 1 != state_change_info.barrier_end_pass_index) continue;
-      if (state_change_info.barrier_begin_pass_pos_type != BarrierPosType::kPostPass) continue;
-      if (state_change_info.barrier_end_pass_pos_type != BarrierPosType::kPrePass) continue;
-      state_change_info.barrier_begin_pass_index = state_change_info.barrier_end_pass_index;
-      state_change_info.barrier_begin_pass_pos_type = BarrierPosType::kPrePass;
-    }
-  }
-  return std::move(buffer_state_change_info_list_map);
+static std::tuple<unordered_map<BufferId, vector<BufferStateFlags>>, unordered_map<BufferId, vector<vector<uint32_t>>>> MergeInitialBufferState(const unordered_map<BufferId, BufferStateFlags>& initial_state_flag_list, unordered_map<BufferId, vector<BufferStateFlags>>&& buffer_state_list, unordered_map<BufferId, vector<vector<uint32_t>>>&& buffer_user_pass_list) {
+  // TODO
+  return {buffer_state_list, buffer_user_pass_list};
 }
+#endif
 class RenderGraph {
  public:
   RenderGraph(RenderGraphConfig&& config, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work)
       : memory_resource_(memory_resource)
       , render_pass_num_(config.GetRenderPassNum())
   {
-    auto& render_pass_buffer_state_list = config.GetRenderPassBufferStateList();
-    std::tie(buffer_id_list_, render_pass_buffer_id_list_) = InitBufferIdList(render_pass_num_, render_pass_buffer_state_list, memory_resource_);
-    // TODO decide creation state for buffers not in initial_buffer_state_list_with_buffer_name (in separate function)
-    auto initial_buffer_state_list = ConfigureInitialBufferStateFlags(config.GetBufferInitialStateList(), render_pass_num_, render_pass_buffer_state_list, buffer_id_list_, render_pass_buffer_id_list_, memory_resource_work);
-    buffer_state_change_info_list_map_ = InitBufferStateChangeInfoList(render_pass_num_, render_pass_buffer_state_list, buffer_id_list_, render_pass_buffer_id_list_, initial_buffer_state_list, memory_resource_, memory_resource_work);
-    auto final_buffer_state_list = ConfigureFinalBufferStateFlags(config.GetBufferFinalStateList(), render_pass_num_, render_pass_buffer_state_list, render_pass_buffer_id_list_, std::move(initial_buffer_state_list));
-    buffer_state_change_info_list_map_ = AppendFinalBufferStateToChangeInfoList(render_pass_num_, std::move(buffer_state_change_info_list_map_), final_buffer_state_list);
-    buffer_state_change_info_list_map_ = FixPassIndexAtSamePositionWithDifferentValues(std::move(buffer_state_change_info_list_map_));
-    // TODO find appropriate pass (in separate function)
+    vector<vector<BufferId>> render_pass_buffer_id_list{memory_resource_work};
+    vector<vector<BufferStateFlags>> render_pass_buffer_state_list{memory_resource_work};
+    std::tie(buffer_id_list_, render_pass_buffer_id_list, render_pass_buffer_state_list) = InitBufferIdList(render_pass_num_, config.GetRenderPassBufferStateList(), memory_resource_);
+    auto [buffer_state_list, buffer_user_pass_list] = CreateBufferStateList(render_pass_num_, buffer_id_list_, render_pass_buffer_id_list, render_pass_buffer_state_list, memory_resource_);
+#if 0
+    auto initial_state_flag_list = ConvertBufferNameToBufferIdForInitialFlagList(config.GetBufferInitialStateList(), memory_resource_work);
+    std::tie(buffer_state_list, buffer_user_pass_list) = MergeInitialBufferState(initial_state_flag_list, std::move(buffer_state_list), std::move(buffer_user_pass_list));
+    // buffer_state_list = MergeFinalBufferState(config.GetBufferFinalStateList(), std::move(buffer_state_list)); // TODO
+    // buffer_state_change_info_list_map_ = CreateBufferStateChangeInfoList(buffer_state_list); // TODO
+#endif
   }
   constexpr uint32_t GetRenderPassNum() const { return render_pass_num_; }
   constexpr const auto& GetBufferIdList() const { return buffer_id_list_; }
-  constexpr const auto& GetRenderPassBufferIdList() const { return render_pass_buffer_id_list_; }
   const auto& GetBufferStateChangeInfoList(const BufferId& buffer_id) const { return buffer_state_change_info_list_map_.at(buffer_id); }
+  // TODO create function to return initial creation state for buffers not in initial_buffer_state_list_with_buffer_name (in separate function)
  private:
   std::pmr::memory_resource* memory_resource_;
   uint32_t render_pass_num_;
   vector<BufferId> buffer_id_list_;
-  vector<vector<BufferId>> render_pass_buffer_id_list_;
+  unordered_map<BufferId, vector<uint32_t>> buffer_user_pass_index_;
   unordered_map<BufferId, vector<BufferStateChangeInfo>> buffer_state_change_info_list_map_;
   RenderGraph() = delete;
   RenderGraph(const RenderGraph&) = delete;
@@ -446,9 +374,8 @@ TEST_CASE("barrier for load from srv") {
   render_graph_config.AddBufferFinalState(StrId("swapchain"),  kBufferStateFlagPresent);
   {
     // check render graph config
-    auto& render_pass_buffer_state_list = render_graph_config.GetRenderPassBufferStateList();
     auto render_pass_num = render_graph_config.GetRenderPassNum();
-    auto [buffer_id_list, render_pass_buffer_id_list] = InitBufferIdList(render_pass_num, render_pass_buffer_state_list, &memory_resource_work);
+    auto [buffer_id_list, render_pass_buffer_id_list, render_pass_buffer_state_flag_list] = InitBufferIdList(render_pass_num, render_graph_config.GetRenderPassBufferStateList(), &memory_resource_work);
     CHECK(buffer_id_list.size() == 2);
     CHECK(buffer_id_list[0] == 0);
     CHECK(buffer_id_list[1] == 1);
@@ -458,18 +385,38 @@ TEST_CASE("barrier for load from srv") {
     CHECK(render_pass_buffer_id_list[1].size() == 2);
     CHECK(render_pass_buffer_id_list[1][0] == buffer_id_list[0]);
     CHECK(render_pass_buffer_id_list[1][1] == buffer_id_list[1]);
-    auto initial_buffer_state_list = ConfigureInitialBufferStateFlags(render_graph_config.GetBufferInitialStateList(), render_pass_num, render_pass_buffer_state_list, buffer_id_list, render_pass_buffer_id_list, &memory_resource_work);
-    CHECK(initial_buffer_state_list.size() == 2);
-    CHECK(initial_buffer_state_list.contains(render_pass_buffer_id_list[0][0]));
-    CHECK(initial_buffer_state_list.at(render_pass_buffer_id_list[0][0]) == kBufferStateFlagRtv);
-    CHECK(initial_buffer_state_list.contains(render_pass_buffer_id_list[1][1]));
-    CHECK(initial_buffer_state_list.at(render_pass_buffer_id_list[1][1]) == kBufferStateFlagPresent);
-    const auto final_buffer_state_list = ConfigureFinalBufferStateFlags(render_graph_config.GetBufferFinalStateList(), render_pass_num, render_pass_buffer_state_list, render_pass_buffer_id_list, std::move(initial_buffer_state_list));
-    CHECK(final_buffer_state_list.size() == 2);
-    CHECK(final_buffer_state_list.contains(render_pass_buffer_id_list[0][0]));
-    CHECK(final_buffer_state_list.at(render_pass_buffer_id_list[0][0]) == kBufferStateFlagRtv);
-    CHECK(final_buffer_state_list.contains(render_pass_buffer_id_list[1][1]));
-    CHECK(final_buffer_state_list.at(render_pass_buffer_id_list[1][1]) == kBufferStateFlagPresent);
+    CHECK(render_pass_buffer_state_flag_list.size() == 2);
+    CHECK(render_pass_buffer_state_flag_list[0].size() == 1);
+    CHECK(render_pass_buffer_state_flag_list[0][0] == kBufferStateFlagRtv);
+    CHECK(render_pass_buffer_state_flag_list[1].size() == 2);
+    CHECK(render_pass_buffer_state_flag_list[1][0] == kBufferStateFlagSrvPsOnly);
+    CHECK(render_pass_buffer_state_flag_list[1][1] == kBufferStateFlagRtv);
+    auto [buffer_state_list, buffer_user_pass_list] = CreateBufferStateList(render_pass_num, buffer_id_list, render_pass_buffer_id_list, render_pass_buffer_state_flag_list, &memory_resource_work);
+    CHECK(buffer_state_list.size() == 2);
+    CHECK(buffer_user_pass_list.size() == 2);
+    CHECK(buffer_state_list.contains(0));
+    CHECK(buffer_state_list.at(0).size() == 3);
+    CHECK(buffer_state_list.at(0)[0] == kBufferStateFlagRtv);
+    CHECK(buffer_state_list.at(0)[1] == kBufferStateFlagSrvPsOnly);
+    CHECK(buffer_state_list.at(0)[2] == kBufferStateFlagRtv);
+    CHECK(buffer_user_pass_list.contains(0));
+    CHECK(buffer_user_pass_list.at(0).size() == 3);
+    CHECK(buffer_user_pass_list.at(0)[0].size() == 1);
+    CHECK(buffer_user_pass_list.at(0)[0][0] == 0);
+    CHECK(buffer_user_pass_list.at(0)[1].size() == 1);
+    CHECK(buffer_user_pass_list.at(0)[1][0] == 1);
+    CHECK(buffer_user_pass_list.at(0)[2].empty());
+    CHECK(buffer_state_list.contains(1));
+    CHECK(buffer_state_list.at(1).size() == 3);
+    CHECK(buffer_state_list.at(1)[0] == kBufferStateFlagPresent);
+    CHECK(buffer_state_list.at(1)[1] == kBufferStateFlagRtv);
+    CHECK(buffer_state_list.at(1)[2] == kBufferStateFlagPresent);
+    CHECK(buffer_user_pass_list.contains(1));
+    CHECK(buffer_user_pass_list.at(1).size() == 3);
+    CHECK(buffer_user_pass_list.at(1)[0].empty());
+    CHECK(buffer_user_pass_list.at(1)[1].size() == 1);
+    CHECK(buffer_user_pass_list.at(1)[1][0] == 1);
+    CHECK(buffer_user_pass_list.at(1)[2].empty());
     memory_resource_work.Reset();
   }
   RenderGraph render_graph(std::move(render_graph_config), &memory_resource_scene, &memory_resource_work);
