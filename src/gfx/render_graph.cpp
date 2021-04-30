@@ -176,6 +176,16 @@ static std::tuple<unordered_map<BufferId, vector<BufferStateFlags>>, unordered_m
   }
   return {buffer_state_list, buffer_user_pass_list};
 }
+static std::tuple<unordered_map<BufferId, vector<BufferStateFlags>>, unordered_map<BufferId, vector<vector<uint32_t>>>> RevertBufferStateToInitialState(unordered_map<BufferId, vector<BufferStateFlags>>&& buffer_state_list, unordered_map<BufferId, vector<vector<uint32_t>>>&& buffer_user_pass_list, std::pmr::memory_resource* memory_resource) {
+  for (auto& [buffer_id, user_list] : buffer_user_pass_list) {
+    if (user_list.empty()) continue;
+    if (user_list.back().empty()) continue;
+    user_list.push_back(vector<uint32_t>{memory_resource});
+    auto& state_list = buffer_state_list.at(buffer_id);
+    state_list.push_back(state_list.front());
+  }
+  return {buffer_state_list, buffer_user_pass_list};
+}
 static uint32_t FindClosestCommonDescendant(const vector<uint32_t>& pass_index_list) {
   return *std::max_element(pass_index_list.begin(), pass_index_list.end());
 }
@@ -202,6 +212,12 @@ static unordered_map<BufferId, vector<BufferStateChangeInfo>> CreateBufferStateC
           .barrier_begin_pass_pos_type = core::IsContaining(current_users, begin_pass) ? BarrierPosType::kPostPass : BarrierPosType::kPrePass,
           .barrier_end_pass_pos_type = core::IsContaining(next_users, end_pass) ? BarrierPosType::kPrePass : BarrierPosType::kPostPass,
         });
+      auto&& current_buffer_state_change_info = current_buffer_state_change_info_list.back();
+      if (current_buffer_state_change_info.barrier_begin_pass_index + 1 != current_buffer_state_change_info.barrier_end_pass_index) continue;
+      if (current_buffer_state_change_info.barrier_begin_pass_pos_type != BarrierPosType::kPostPass) continue;
+      if (current_buffer_state_change_info.barrier_end_pass_pos_type != BarrierPosType::kPrePass) continue;
+      current_buffer_state_change_info.barrier_begin_pass_index++;
+      current_buffer_state_change_info.barrier_begin_pass_pos_type = current_buffer_state_change_info.barrier_end_pass_pos_type;
     }
   }
   return buffer_state_change_info_list_map;
@@ -220,6 +236,7 @@ class RenderGraph {
     std::tie(buffer_state_list, buffer_user_pass_list) = MergeInitialBufferState(initial_state_flag_list, std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work);
     auto final_state_flag_list = ConvertBufferNameToBufferIdForFinalFlagList(render_pass_num_, config.GetRenderPassBufferStateList(), render_pass_buffer_id_list, config.GetBufferFinalStateList(), memory_resource_work, memory_resource_work);
     std::tie(buffer_state_list, buffer_user_pass_list) = MergeFinalBufferState(final_state_flag_list, std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work);
+    std::tie(buffer_state_list, buffer_user_pass_list) = RevertBufferStateToInitialState(std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work);
     buffer_state_change_info_list_map_ = CreateBufferStateChangeInfoList(render_pass_num_, buffer_state_list, buffer_user_pass_list, memory_resource);
   }
   constexpr uint32_t GetRenderPassNum() const { return render_pass_num_; }
