@@ -192,32 +192,8 @@ static unordered_map<BufferId, vector<BufferStateChangeInfo>> CreateBufferStateC
     for (uint32_t buffer_index = 0; buffer_index < buffer_state_num - 1; buffer_index++) {
       auto& current_users = current_buffer_user_pass_list[buffer_index];
       auto& next_users = current_buffer_user_pass_list[buffer_index + 1];
-      if (buffer_index == 0 && current_users.empty()) {
-        auto end_pass = FindClosestCommonAncestor(next_users);
-        current_buffer_state_change_info_list.push_back({
-            .barrier_begin_pass_index = 0,
-            .barrier_end_pass_index = end_pass,
-            .state_before = current_buffer_state_list[buffer_index],
-            .state_after = current_buffer_state_list[buffer_index + 1],
-            .barrier_begin_pass_pos_type = BarrierPosType::kPrePass,
-            .barrier_end_pass_pos_type = core::IsContaining(next_users, end_pass) ? BarrierPosType::kPrePass : BarrierPosType::kPostPass,
-          });
-        continue;
-      }
-      if (buffer_index + 2 == buffer_state_num && next_users.empty()) {
-        auto begin_pass = FindClosestCommonDescendant(current_users);
-        current_buffer_state_change_info_list.push_back({
-            .barrier_begin_pass_index = begin_pass,
-            .barrier_end_pass_index = pass_num - 1,
-            .state_before = current_buffer_state_list[buffer_index],
-            .state_after = current_buffer_state_list[buffer_index + 1],
-            .barrier_begin_pass_pos_type = core::IsContaining(current_users, begin_pass) ? BarrierPosType::kPostPass : BarrierPosType::kPrePass,
-            .barrier_end_pass_pos_type = BarrierPosType::kPostPass,
-          });
-        continue;
-      }
-      auto begin_pass = FindClosestCommonDescendant(current_users);
-      auto end_pass = FindClosestCommonAncestor(next_users);
+      auto begin_pass = (buffer_index == 0 && current_users.empty()) ? 0 :FindClosestCommonDescendant(current_users);
+      auto end_pass = (buffer_index + 2 == buffer_state_num && next_users.empty()) ? (pass_num - 1) : FindClosestCommonAncestor(next_users);
       current_buffer_state_change_info_list.push_back({
           .barrier_begin_pass_index = begin_pass,
           .barrier_end_pass_index = end_pass,
