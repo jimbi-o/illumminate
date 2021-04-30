@@ -11,21 +11,35 @@ struct RenderGraphBufferStateConfig {
   ReadWriteFlag read_write_flag;
   std::byte _pad[3]{};
 };
+struct RenderPassConfig {
+  StrId pass_name;
+  CommandQueueType command_queue_type;
+  std::byte _pad[7]{};
+};
 using RenderPassBufferStateList = vector<vector<RenderGraphBufferStateConfig>>;
 class RenderGraphConfig {
  public:
   RenderGraphConfig(std::pmr::memory_resource* memory_resource)
       : memory_resource_(memory_resource)
-      , pass_index_used_(0)
+      , pass_num_(0)
+      , render_pass_id_map_(memory_resource_)
+      , render_pass_config_list_(memory_resource_)
       , render_pass_buffer_state_list_(memory_resource_)
       , initial_buffer_state_list_(memory_resource_)
       , final_buffer_state_list_(memory_resource_)
   {}
-  uint32_t CreateNewRenderPass() {
-    auto pass_index = pass_index_used_;
+  uint32_t CreateNewRenderPass(RenderPassConfig&& render_pass_config) {
+    if (render_pass_id_map_.contains(render_pass_config.pass_name)) {
+      logerror("render pass name dup. {}", render_pass_config.pass_name);
+      return ~0u;
+    }
+    const auto pass_index = pass_num_;
+    render_pass_id_map_.insert_or_assign(render_pass_config.pass_name, pass_index);
+    ASSERT(pass_index == render_pass_config_list_.size());
+    render_pass_config_list_.push_back(std::move(render_pass_config));
     ASSERT(render_pass_buffer_state_list_.size() == pass_index);
     render_pass_buffer_state_list_.push_back(vector<RenderGraphBufferStateConfig>{memory_resource_});
-    pass_index_used_++;
+    pass_num_++;
     return pass_index;
   }
   void AddNewBufferConfig(const uint32_t pass_index, RenderGraphBufferStateConfig&& config)  {
@@ -33,13 +47,15 @@ class RenderGraphConfig {
   }
   void AddBufferInitialState(const StrId& buffer_name, const BufferStateFlags flag) { initial_buffer_state_list_.insert_or_assign(buffer_name, flag); }
   void AddBufferFinalState(const StrId& buffer_name, const BufferStateFlags flag) { final_buffer_state_list_.insert_or_assign(buffer_name, flag); }
-  constexpr auto GetRenderPassNum() const { return pass_index_used_; }
+  constexpr auto GetRenderPassNum() const { return pass_num_; }
   constexpr const auto& GetRenderPassBufferStateList() const { return render_pass_buffer_state_list_; }
   constexpr const auto& GetBufferInitialStateList() const { return initial_buffer_state_list_; }
   constexpr const auto& GetBufferFinalStateList() const { return final_buffer_state_list_; }
  private:
   std::pmr::memory_resource* memory_resource_;
-  uint32_t pass_index_used_;
+  uint32_t pass_num_;
+  unordered_map<uint32_t, uint32_t> render_pass_id_map_;
+  vector<RenderPassConfig> render_pass_config_list_;
   RenderPassBufferStateList render_pass_buffer_state_list_;
   unordered_map<StrId, BufferStateFlags> initial_buffer_state_list_;
   unordered_map<StrId, BufferStateFlags> final_buffer_state_list_;
@@ -457,11 +473,11 @@ TEST_CASE("barrier for load from srv") {
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
   RenderGraphConfig render_graph_config(&memory_resource_scene);
   CHECK(render_graph_config.GetRenderPassNum() == 0);
-  auto render_pass_id = render_graph_config.CreateNewRenderPass();
+  auto render_pass_id = render_graph_config.CreateNewRenderPass({.pass_name = StrId("draw"), .command_queue_type = CommandQueueType::kGraphics});
   render_graph_config.AddNewBufferConfig(render_pass_id, {StrId("mainbuffer"), kBufferStateFlagRtv, kWriteFlag});
   CHECK(render_graph_config.GetRenderPassNum() == 1);
   auto prev_render_pass_id = render_pass_id;
-  render_pass_id = render_graph_config.CreateNewRenderPass();
+  render_pass_id = render_graph_config.CreateNewRenderPass({.pass_name = StrId("copy"), .command_queue_type = CommandQueueType::kGraphics});
   CHECK(render_graph_config.GetRenderPassNum() == 2);
   CHECK(render_pass_id != prev_render_pass_id);
   render_graph_config.AddNewBufferConfig(render_pass_id, {StrId("mainbuffer"), kBufferStateFlagSrvPsOnly, kReadFlag});
@@ -601,6 +617,13 @@ TEST_CASE("barrier for load from srv") {
   CHECK(std::holds_alternative<BarrierTransition>(barriers_postpass[1][1].params));
   CHECK(std::get<BarrierTransition>(barriers_postpass[1][1].params).state_before == kBufferStateFlagRtv);
   CHECK(std::get<BarrierTransition>(barriers_postpass[1][1].params).state_after  == kBufferStateFlagPresent);
+}
+TEST_CASE("barrier for use compute queue") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  PmrLinearAllocator memory_resource_scene(&buffer[buffer_size_in_bytes_scene], buffer_size_in_bytes_scene);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  RenderGraphConfig render_graph_config(&memory_resource_scene);
 }
 #if 0
 TEST_CASE("barrier for load from srv") {
