@@ -176,6 +176,60 @@ static std::tuple<unordered_map<BufferId, vector<BufferStateFlags>>, unordered_m
   }
   return {buffer_state_list, buffer_user_pass_list};
 }
+static uint32_t FindClosestCommonDescendant(const vector<uint32_t>& pass_index_list) {
+  return *std::max_element(pass_index_list.begin(), pass_index_list.end());
+}
+static uint32_t FindClosestCommonAncestor(const vector<uint32_t>& pass_index_list) {
+  return *std::min_element(pass_index_list.begin(), pass_index_list.end());
+}
+static unordered_map<BufferId, vector<BufferStateChangeInfo>> CreateBufferStateChangeInfoList(const uint32_t pass_num, const unordered_map<BufferId, vector<BufferStateFlags>>& buffer_state_list, const unordered_map<BufferId, vector<vector<uint32_t>>>& buffer_user_pass_list, std::pmr::memory_resource* memory_resource) {
+  unordered_map<BufferId, vector<BufferStateChangeInfo>> buffer_state_change_info_list_map{memory_resource};
+  for (auto& [buffer_id, current_buffer_state_list] : buffer_state_list) {
+    buffer_state_change_info_list_map.insert_or_assign(buffer_id, vector<BufferStateChangeInfo>{memory_resource});
+    auto& current_buffer_state_change_info_list = buffer_state_change_info_list_map.at(buffer_id);
+    auto& current_buffer_user_pass_list = buffer_user_pass_list.at(buffer_id);
+    const auto buffer_state_num = static_cast<uint32_t>(current_buffer_user_pass_list.size());
+    for (uint32_t buffer_index = 0; buffer_index < buffer_state_num - 1; buffer_index++) {
+      auto& current_users = current_buffer_user_pass_list[buffer_index];
+      auto& next_users = current_buffer_user_pass_list[buffer_index + 1];
+      if (buffer_index == 0 && current_users.empty()) {
+        auto end_pass = FindClosestCommonAncestor(next_users);
+        current_buffer_state_change_info_list.push_back({
+            .barrier_begin_pass_index = 0,
+            .barrier_end_pass_index = end_pass,
+            .state_before = current_buffer_state_list[buffer_index],
+            .state_after = current_buffer_state_list[buffer_index + 1],
+            .barrier_begin_pass_pos_type = BarrierPosType::kPrePass,
+            .barrier_end_pass_pos_type = core::IsContaining(next_users, end_pass) ? BarrierPosType::kPrePass : BarrierPosType::kPostPass,
+          });
+        continue;
+      }
+      if (buffer_index + 2 == buffer_state_num && next_users.empty()) {
+        auto begin_pass = FindClosestCommonDescendant(current_users);
+        current_buffer_state_change_info_list.push_back({
+            .barrier_begin_pass_index = begin_pass,
+            .barrier_end_pass_index = pass_num - 1,
+            .state_before = current_buffer_state_list[buffer_index],
+            .state_after = current_buffer_state_list[buffer_index + 1],
+            .barrier_begin_pass_pos_type = core::IsContaining(current_users, begin_pass) ? BarrierPosType::kPostPass : BarrierPosType::kPrePass,
+            .barrier_end_pass_pos_type = BarrierPosType::kPostPass,
+          });
+        continue;
+      }
+      auto begin_pass = FindClosestCommonDescendant(current_users);
+      auto end_pass = FindClosestCommonAncestor(next_users);
+      current_buffer_state_change_info_list.push_back({
+          .barrier_begin_pass_index = begin_pass,
+          .barrier_end_pass_index = end_pass,
+          .state_before = current_buffer_state_list[buffer_index],
+          .state_after = current_buffer_state_list[buffer_index + 1],
+          .barrier_begin_pass_pos_type = core::IsContaining(current_users, begin_pass) ? BarrierPosType::kPostPass : BarrierPosType::kPrePass,
+          .barrier_end_pass_pos_type = core::IsContaining(next_users, end_pass) ? BarrierPosType::kPrePass : BarrierPosType::kPostPass,
+        });
+    }
+  }
+  return buffer_state_change_info_list_map;
+}
 class RenderGraph {
  public:
   RenderGraph(RenderGraphConfig&& config, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work)
@@ -190,7 +244,7 @@ class RenderGraph {
     std::tie(buffer_state_list, buffer_user_pass_list) = MergeInitialBufferState(initial_state_flag_list, std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work);
     auto final_state_flag_list = ConvertBufferNameToBufferIdForFinalFlagList(render_pass_num_, config.GetRenderPassBufferStateList(), render_pass_buffer_id_list, config.GetBufferFinalStateList(), memory_resource_work, memory_resource_work);
     std::tie(buffer_state_list, buffer_user_pass_list) = MergeFinalBufferState(final_state_flag_list, std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work);
-    // buffer_state_change_info_list_map_ = CreateBufferStateChangeInfoList(buffer_state_list); // TODO
+    buffer_state_change_info_list_map_ = CreateBufferStateChangeInfoList(render_pass_num_, buffer_state_list, buffer_user_pass_list, memory_resource);
   }
   constexpr uint32_t GetRenderPassNum() const { return render_pass_num_; }
   constexpr const auto& GetBufferIdList() const { return buffer_id_list_; }
