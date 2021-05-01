@@ -23,20 +23,17 @@ enum BufferStateFlags : uint32_t {
   kBufferStateFlagCbvUpload = 0x0001,
   kBufferStateFlagSrvPsOnly = 0x0002,
   kBufferStateFlagSrvNonPs  = 0x0004,
-  kBufferStateFlagUavRead   = 0x0008,
-  kBufferStateFlagUavWrite  = 0x0010,
-  kBufferStateFlagUav       = kBufferStateFlagUavRead | kBufferStateFlagUavWrite,
-  kBufferStateFlagRtv       = 0x0020,
-  kBufferStateFlagDsvWrite  = 0x0040,
-  kBufferStateFlagDsvRead   = 0x0080,
-  kBufferStateFlagCopySrc   = 0x0100,
-  kBufferStateFlagCopyDst   = 0x0200,
-  kBufferStateFlagPresent   = 0x0400,
+  kBufferStateFlagUav       = 0x0008,
+  kBufferStateFlagRtv       = 0x0010,
+  kBufferStateFlagDsvWrite  = 0x0020,
+  kBufferStateFlagDsvRead   = 0x0040,
+  kBufferStateFlagCopySrc   = 0x0080,
+  kBufferStateFlagCopyDst   = 0x0100,
+  kBufferStateFlagPresent   = 0x0200,
   kBufferStateFlagCommon    = kBufferStateFlagPresent,
 };
 constexpr bool IsBufferStateFlagMergeAcceptable(const BufferStateFlags& state) {
-  if (state & kBufferStateFlagUavRead) return false;
-  if (state & kBufferStateFlagUavWrite) return false;
+  if (state & kBufferStateFlagUav) return false;
   if (state & kBufferStateFlagRtv) return false;
   if (state & kBufferStateFlagDsvWrite) return false;
   if (state & kBufferStateFlagCopyDst) return false;
@@ -56,12 +53,13 @@ struct BarrierTransition {
   BufferStateFlags state_before;
   BufferStateFlags state_after;
 };
+using BarrierUav = std::monostate;
 enum class BarrierSplitType : uint8_t { kNone = 0, kBegin, kEnd, };
 struct BarrierConfig {
   BufferId buffer_id;
   BarrierSplitType split_type;
   std::byte _pad[3]{};
-  std::variant<BarrierTransition> params;
+  std::variant<BarrierTransition, BarrierUav> params;
 };
 #if 0
 struct BufferConfig {
