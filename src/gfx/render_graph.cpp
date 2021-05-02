@@ -48,7 +48,7 @@ class RenderGraphConfig {
   void AddBufferInitialState(const StrId& buffer_name, const BufferStateFlags flag) { initial_buffer_state_list_.insert_or_assign(buffer_name, flag); }
   void AddBufferFinalState(const StrId& buffer_name, const BufferStateFlags flag) { final_buffer_state_list_.insert_or_assign(buffer_name, flag); }
   constexpr auto GetRenderPassNum() const { return pass_num_; }
-  constexpr uint32_t GetRenderPassIndex(const StrId& pass_id) const { return render_pass_id_map_.at(pass_id); }
+  uint32_t GetRenderPassIndex(const StrId& pass_id) const { return render_pass_id_map_.at(pass_id); }
   constexpr const auto& GetRenderPassBufferStateList() const { return render_pass_buffer_state_list_; }
   constexpr const auto& GetBufferInitialStateList() const { return initial_buffer_state_list_; }
   constexpr const auto& GetBufferFinalStateList() const { return final_buffer_state_list_; }
@@ -197,9 +197,12 @@ static std::tuple<unordered_map<BufferId, vector<BufferStateFlags>>, unordered_m
   for (auto& [buffer_id, user_list] : buffer_user_pass_list) {
     if (user_list.empty()) continue;
     if (user_list.back().empty()) continue;
-    user_list.push_back(vector<uint32_t>{memory_resource});
     auto& state_list = buffer_state_list.at(buffer_id);
-    state_list.push_back(state_list.front());
+    BufferStateFlags initial_state = state_list.front();
+    BufferStateFlags final_state = state_list.back();
+    if ((initial_state & final_state) == initial_state) continue;
+    state_list.push_back(initial_state);
+    user_list.push_back(vector<uint32_t>{memory_resource});
   }
   return {buffer_state_list, buffer_user_pass_list};
 }
