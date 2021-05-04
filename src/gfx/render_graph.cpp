@@ -231,11 +231,13 @@ static CommandQueueTypeFlags GetBufferStateValidCommandQueueTypeFlags(const Buff
 static uint32_t FindClosestCommonDescendant(const vector<uint32_t>& ancestors, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>& node_distance_map, const unordered_map<uint32_t, CommandQueueTypeFlags>& render_pass_command_queue_type_list, const CommandQueueTypeFlags valid_queues, std::pmr::memory_resource* memory_resource_work) {
   if (ancestors.empty()) {
     // TODO
+    return ~0u;
   }
   if (ancestors.size() == 1 && (render_pass_command_queue_type_list.at(ancestors.back()) & valid_queues)) return ancestors.back();
   unordered_set<uint32_t> merged_ancestors{memory_resource_work};
   merged_ancestors.reserve(ancestors.size());
   merged_ancestors.insert(ancestors.begin(), ancestors.end());
+  // erase ancestors within ancestors
   for (auto& a : ancestors) {
     auto& distance_map = node_distance_map.at(a);
     for (auto& b : ancestors) {
@@ -243,17 +245,47 @@ static uint32_t FindClosestCommonDescendant(const vector<uint32_t>& ancestors, c
         merged_ancestors.erase(a);
         break;
       }
-      if (merged_ancestors.contains(b)) {
-        auto& distance_map_b = node_distance_map.at(b);
-        if (distance_map_b.contains(a) && distance_map_b.at(a) > 0) {
-          merged_ancestors.erase(b);
-          break;
-        }
-      }
     }
   }
   if (merged_ancestors.size() == 1 && (render_pass_command_queue_type_list.at(*merged_ancestors.begin()) & valid_queues)) return *merged_ancestors.begin();
-  return ~0u;
+  // gather all descendants of merged_ancestors
+  unordered_set<uint32_t> cands{memory_resource_work};
+  for (auto& ancestor : merged_ancestors) {
+    auto& distance_map = node_distance_map.at(ancestor);
+    for (auto& [pass_index, distance] : distance_map) {
+      if (distance < 0) continue;
+      if (render_pass_command_queue_type_list.at(pass_index) & valid_queues) cands.insert(pass_index);
+    }
+  }
+  // remove descendants not in all merged_ancestors
+  auto cands_it = cands.begin();
+  while (cands_it != cands.end()) {
+    bool succeed_to_next = true;
+    for (auto& ancestor : merged_ancestors) {
+      auto& distance_map = node_distance_map.at(ancestor);
+      if (!distance_map.contains(*cands_it) || distance_map.at(*cands_it) < 0) {
+        cands_it = cands.erase(cands_it);
+        succeed_to_next = false;
+        break;
+      }
+    }
+    if (succeed_to_next) cands_it++;
+  }
+  if (cands.size() == 1) return *cands.begin();
+  // select descendant closest to any merged_ancestors
+  auto retval = *cands.begin();
+  auto min_dist = std::numeric_limits<int>::min();
+  for (auto& cand : cands) {
+    auto& dist_from_cand = node_distance_map.at(cand);
+    for (auto& ancestor : merged_ancestors) {
+      auto& distance_map = node_distance_map.at(ancestor);
+      if (dist_from_cand.at(ancestor) > min_dist) {
+        min_dist = dist_from_cand.at(ancestor);
+        retval = cand;
+      }
+    }
+  }
+  return retval;
 }
 enum class BarrierPosType : uint8_t { kPrePass, kPostPass, };
 struct BufferStateChangeInfo {
