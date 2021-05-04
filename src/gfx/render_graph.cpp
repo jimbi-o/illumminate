@@ -230,8 +230,23 @@ static CommandQueueTypeFlags GetBufferStateValidCommandQueueTypeFlags(const Buff
 }
 static uint32_t FindClosestCommonDescendant(const vector<uint32_t>& ancestors, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>& node_distance_map, const unordered_map<uint32_t, CommandQueueTypeFlags>& render_pass_command_queue_type_list, const CommandQueueTypeFlags valid_queues, std::pmr::memory_resource* memory_resource_work) {
   if (ancestors.empty()) {
-    // TODO
-    return ~0u;
+    // return pass without ancestor
+    uint32_t retval = ~0u;
+    for (auto& [pass_index, distance_map] :node_distance_map) {
+      if (pass_index > retval) continue;
+      if (!(render_pass_command_queue_type_list.at(pass_index) & valid_queues)) continue;
+      bool valid = true;
+      for (auto& [target, distance] : distance_map) {
+        if (distance < 0) {
+          valid = false;
+          break;
+        }
+      }
+      if (valid) {
+        retval = pass_index;
+      }
+    }
+    return retval;
   }
   if (ancestors.size() == 1 && (render_pass_command_queue_type_list.at(ancestors.back()) & valid_queues)) return ancestors.back();
   unordered_set<uint32_t> merged_ancestors{memory_resource_work};
@@ -278,7 +293,6 @@ static uint32_t FindClosestCommonDescendant(const vector<uint32_t>& ancestors, c
   for (auto& cand : cands) {
     auto& dist_from_cand = node_distance_map.at(cand);
     for (auto& ancestor : merged_ancestors) {
-      auto& distance_map = node_distance_map.at(ancestor);
       if (dist_from_cand.at(ancestor) > min_dist) {
         min_dist = dist_from_cand.at(ancestor);
         retval = cand;
