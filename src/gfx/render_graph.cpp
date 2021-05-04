@@ -5,6 +5,12 @@ enum ReadWriteFlag : uint8_t {
   kWriteFlag     = 0x2,
   kReadWriteFlag = (kReadFlag | kWriteFlag),
 };
+static BufferStateFlags MergeReadWriteFlag(const BufferStateFlags& state, const ReadWriteFlag& rw_flag) {
+  BufferStateFlags ret = state;
+  if (rw_flag & kReadFlag) ret = static_cast<BufferStateFlags>(ret | kBufferStateReadFlag);
+  if (rw_flag & kWriteFlag) ret = static_cast<BufferStateFlags>(ret | kBufferStateWriteFlag);
+  return ret;
+}
 struct RenderGraphBufferStateConfig {
   StrId buffer_name;
   BufferStateFlags state;
@@ -49,6 +55,7 @@ class RenderGraphConfig {
   void AddBufferFinalState(const StrId& buffer_name, const BufferStateFlags flag) { final_buffer_state_list_.insert_or_assign(buffer_name, flag); }
   constexpr auto GetRenderPassNum() const { return pass_num_; }
   uint32_t GetRenderPassIndex(const StrId& pass_id) const { return render_pass_id_map_.at(pass_id); }
+  constexpr const auto& GetRenderPassCommandQueueTypeList() const { return render_pass_command_queue_type_list_; }
   constexpr const auto& GetRenderPassBufferStateList() const { return render_pass_buffer_state_list_; }
   constexpr const auto& GetBufferInitialStateList() const { return initial_buffer_state_list_; }
   constexpr const auto& GetBufferFinalStateList() const { return final_buffer_state_list_; }
@@ -63,16 +70,6 @@ class RenderGraphConfig {
   RenderGraphConfig() = delete;
   RenderGraphConfig(const RenderGraphConfig&) = delete;
   void operator=(const RenderGraphConfig&) = delete;
-};
-enum class BarrierPosType : uint8_t { kPrePass, kPostPass, };
-struct BufferStateChangeInfo {
-  uint32_t barrier_begin_pass_index;
-  uint32_t barrier_end_pass_index;
-  BufferStateFlags state_before;
-  BufferStateFlags state_after;
-  BarrierPosType barrier_begin_pass_pos_type;
-  BarrierPosType barrier_end_pass_pos_type;
-  std::byte _pad[2]{};
 };
 static std::tuple<vector<BufferId>, vector<vector<BufferId>>, vector<vector<BufferStateFlags>>> InitBufferIdList(const uint32_t pass_num, const RenderPassBufferStateList& render_pass_buffer_state_list, std::pmr::memory_resource* memory_resource) {
   vector<BufferId> buffer_id_list{memory_resource};
@@ -94,7 +91,11 @@ static std::tuple<vector<BufferId>, vector<vector<BufferId>>, vector<vector<Buff
         buffer_id_list.push_back(buffer_id);
       }
       render_pass_buffer_id_list.back().push_back(used_buffer_name.at(buffer_state.buffer_name));
-      render_pass_buffer_state_flag_list.back().push_back(buffer_state.state);
+      if (buffer_state.state == kBufferStateFlagUav) {
+        render_pass_buffer_state_flag_list.back().push_back(MergeReadWriteFlag(buffer_state.state, buffer_state.read_write_flag));
+      } else {
+        render_pass_buffer_state_flag_list.back().push_back(buffer_state.state);
+      }
     }
   }
   return {buffer_id_list, render_pass_buffer_id_list, render_pass_buffer_state_flag_list};
@@ -212,7 +213,59 @@ static uint32_t FindClosestCommonDescendant(const vector<uint32_t>& pass_index_l
 static uint32_t FindClosestCommonAncestor(const vector<uint32_t>& pass_index_list) {
   return *std::min_element(pass_index_list.begin(), pass_index_list.end());
 }
-static unordered_map<BufferId, vector<BufferStateChangeInfo>> CreateBufferStateChangeInfoList(const uint32_t pass_num, const unordered_map<BufferId, vector<BufferStateFlags>>& buffer_state_list, const unordered_map<BufferId, vector<vector<uint32_t>>>& buffer_user_pass_list, std::pmr::memory_resource* memory_resource) {
+enum CommandQueueTypeFlags : uint8_t {
+  kCommandQueueTypeFlagsGraphics        = 0x01,
+  kCommandQueueTypeFlagsCompute         = 0x02,
+  kCommandQueueTypeFlagsTransfer        = 0x04,
+  kCommandQueueTypeFlagsGraphicsCompute = kCommandQueueTypeFlagsGraphics | kCommandQueueTypeFlagsCompute,
+  kCommandQueueTypeFlagsAll             = kCommandQueueTypeFlagsGraphicsCompute | kCommandQueueTypeFlagsTransfer,
+};
+static CommandQueueTypeFlags GetBufferStateValidCommandQueueTypeFlags(const BufferStateFlags state) {
+  if (!(state & ~(kBufferStateFlagCopySrc | kBufferStateFlagCopyDst | kBufferStateFlagCommon))) return kCommandQueueTypeFlagsAll;
+  if (state & kBufferStateFlagSrvPsOnly) return kCommandQueueTypeFlagsGraphics;
+  if (state & kBufferStateFlagRtv) return kCommandQueueTypeFlagsGraphics;
+  if (state & kBufferStateFlagDsvWrite) return kCommandQueueTypeFlagsGraphics;
+  if (state & kBufferStateFlagDsvRead) return kCommandQueueTypeFlagsGraphics;
+  return kCommandQueueTypeFlagsGraphicsCompute;
+}
+static uint32_t FindClosestCommonDescendant(const vector<uint32_t>& ancestors, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>& node_distance_map, const unordered_map<uint32_t, CommandQueueTypeFlags>& render_pass_command_queue_type_list, const CommandQueueTypeFlags valid_queues, std::pmr::memory_resource* memory_resource_work) {
+  if (ancestors.empty()) {
+    // TODO
+  }
+  if (ancestors.size() == 1 && (render_pass_command_queue_type_list.at(ancestors.back()) & valid_queues)) return ancestors.back();
+  unordered_set<uint32_t> merged_ancestors{memory_resource_work};
+  merged_ancestors.reserve(ancestors.size());
+  merged_ancestors.insert(ancestors.begin(), ancestors.end());
+  for (auto& a : ancestors) {
+    auto& distance_map = node_distance_map.at(a);
+    for (auto& b : ancestors) {
+      if (merged_ancestors.contains(a) && distance_map.contains(b) && distance_map.at(b) > 0) {
+        merged_ancestors.erase(a);
+        break;
+      }
+      if (merged_ancestors.contains(b)) {
+        auto& distance_map_b = node_distance_map.at(b);
+        if (distance_map_b.contains(a) && distance_map_b.at(a) > 0) {
+          merged_ancestors.erase(b);
+          break;
+        }
+      }
+    }
+  }
+  if (merged_ancestors.size() == 1 && (render_pass_command_queue_type_list.at(*merged_ancestors.begin()) & valid_queues)) return *merged_ancestors.begin();
+  return ~0u;
+}
+enum class BarrierPosType : uint8_t { kPrePass, kPostPass, };
+struct BufferStateChangeInfo {
+  uint32_t barrier_begin_pass_index;
+  uint32_t barrier_end_pass_index;
+  BufferStateFlags state_before;
+  BufferStateFlags state_after;
+  BarrierPosType barrier_begin_pass_pos_type;
+  BarrierPosType barrier_end_pass_pos_type;
+  std::byte _pad[2]{};
+};
+static unordered_map<BufferId, vector<BufferStateChangeInfo>> CreateBufferStateChangeInfoList(const uint32_t pass_num, const vector<CommandQueueType>& render_pass_command_queue_type_list, const unordered_map<BufferId, vector<BufferStateFlags>>& buffer_state_list, const unordered_map<BufferId, vector<vector<uint32_t>>>& buffer_user_pass_list, std::pmr::memory_resource* memory_resource) {
   unordered_map<BufferId, vector<BufferStateChangeInfo>> buffer_state_change_info_list_map{memory_resource};
   for (auto& [buffer_id, current_buffer_state_list] : buffer_state_list) {
     buffer_state_change_info_list_map.insert_or_assign(buffer_id, vector<BufferStateChangeInfo>{memory_resource});
@@ -220,6 +273,9 @@ static unordered_map<BufferId, vector<BufferStateChangeInfo>> CreateBufferStateC
     auto& current_buffer_user_pass_list = buffer_user_pass_list.at(buffer_id);
     const auto buffer_state_num = static_cast<uint32_t>(current_buffer_user_pass_list.size());
     for (uint32_t buffer_index = 0; buffer_index < buffer_state_num - 1; buffer_index++) {
+      auto& current_state = current_buffer_state_list[buffer_index];
+      auto& next_state = current_buffer_state_list[buffer_index + 1];
+      auto valid_command_queue_type_flag = (GetBufferStateValidCommandQueueTypeFlags(current_state) & GetBufferStateValidCommandQueueTypeFlags(next_state));
       auto& current_users = current_buffer_user_pass_list[buffer_index];
       auto& next_users = current_buffer_user_pass_list[buffer_index + 1];
       auto begin_pass = (buffer_index == 0 && current_users.empty()) ? 0 :FindClosestCommonDescendant(current_users);
@@ -227,8 +283,8 @@ static unordered_map<BufferId, vector<BufferStateChangeInfo>> CreateBufferStateC
       current_buffer_state_change_info_list.push_back({
           .barrier_begin_pass_index = begin_pass,
           .barrier_end_pass_index = end_pass,
-          .state_before = current_buffer_state_list[buffer_index],
-          .state_after = current_buffer_state_list[buffer_index + 1],
+          .state_before = current_state,
+          .state_after = next_state,
           .barrier_begin_pass_pos_type = core::IsContaining(current_users, begin_pass) ? BarrierPosType::kPostPass : BarrierPosType::kPrePass,
           .barrier_end_pass_pos_type = core::IsContaining(next_users, end_pass) ? BarrierPosType::kPrePass : BarrierPosType::kPostPass,
         });
@@ -257,7 +313,10 @@ class RenderGraph {
     auto final_state_flag_list = ConvertBufferNameToBufferIdForFinalFlagList(render_pass_num_, config.GetRenderPassBufferStateList(), render_pass_buffer_id_list, config.GetBufferFinalStateList(), memory_resource_work, memory_resource_work);
     std::tie(buffer_state_list, buffer_user_pass_list) = MergeFinalBufferState(final_state_flag_list, std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work);
     std::tie(buffer_state_list, buffer_user_pass_list) = RevertBufferStateToInitialState(std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work);
+#if 0
+    // TODO
     buffer_state_change_info_list_map_ = CreateBufferStateChangeInfoList(render_pass_num_, buffer_state_list, buffer_user_pass_list, memory_resource);
+#endif
   }
   constexpr uint32_t GetRenderPassNum() const { return render_pass_num_; }
   constexpr const auto& GetBufferIdList() const { return buffer_id_list_; }
@@ -470,6 +529,66 @@ std::byte buffer[buffer_offset_in_bytes_work + buffer_size_in_bytes_work]{};
 #pragma clang diagnostic ignored "-Wfloat-equal"
 #endif
 #include "doctest/doctest.h"
+TEST_CASE("graph node test") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  unordered_map<uint32_t, unordered_map<uint32_t, int32_t>> node_distance_map;
+  node_distance_map.insert_or_assign(0, unordered_map<uint32_t, int32_t>{});
+  node_distance_map.at(0).insert_or_assign(0, 0);
+  node_distance_map.at(0).insert_or_assign(1, 1);
+  node_distance_map.at(0).insert_or_assign(2, 2);
+  node_distance_map.insert_or_assign(1, unordered_map<uint32_t, int32_t>{});
+  node_distance_map.at(1).insert_or_assign(0, -1);
+  node_distance_map.at(1).insert_or_assign(1, 0);
+  node_distance_map.at(1).insert_or_assign(2, 1);
+  node_distance_map.insert_or_assign(2, unordered_map<uint32_t, int32_t>{});
+  node_distance_map.at(2).insert_or_assign(0, -2);
+  node_distance_map.at(2).insert_or_assign(1, -1);
+  node_distance_map.at(2).insert_or_assign(2, 0);
+  vector<uint32_t> ancestors;
+  ancestors.push_back(0);
+  unordered_map<uint32_t, CommandQueueTypeFlags> render_pass_command_queue_type_list;
+  render_pass_command_queue_type_list.insert_or_assign(0, kCommandQueueTypeFlagsGraphics);
+  render_pass_command_queue_type_list.insert_or_assign(1, kCommandQueueTypeFlagsGraphics);
+  render_pass_command_queue_type_list.insert_or_assign(2, kCommandQueueTypeFlagsGraphics);
+  CommandQueueTypeFlags valid_queues{kCommandQueueTypeFlagsAll};
+  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 0);
+  ancestors.push_back(1);
+  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 1);
+  ancestors.push_back(2);
+  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 2);
+  ancestors.clear();
+  ancestors.push_back(0);
+  render_pass_command_queue_type_list.insert_or_assign(0, kCommandQueueTypeFlagsCompute);
+  valid_queues = kCommandQueueTypeFlagsGraphics;
+  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 1);
+  node_distance_map.insert_or_assign(3, unordered_map<uint32_t, int32_t>{});
+  node_distance_map.at(3).insert_or_assign(3, 0);
+  node_distance_map.at(3).insert_or_assign(1, 1);
+  node_distance_map.at(3).insert_or_assign(2, 2);
+  node_distance_map.at(1).insert_or_assign(3, -1);
+  node_distance_map.at(2).insert_or_assign(3, -2);
+  render_pass_command_queue_type_list.insert_or_assign(3, kCommandQueueTypeFlagsGraphics);
+  ancestors.clear();
+  ancestors.push_back(0);
+  ancestors.push_back(3);
+  valid_queues = kCommandQueueTypeFlagsAll;
+  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 1);
+  valid_queues = kCommandQueueTypeFlagsGraphics;
+  render_pass_command_queue_type_list.insert_or_assign(1, kCommandQueueTypeFlagsCompute);
+  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 2);
+  ancestors.clear();
+  ancestors.push_back(0);
+  ancestors.push_back(1);
+  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 2);
+  ancestors.clear();
+  valid_queues = kCommandQueueTypeFlagsAll;
+  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 0);
+  ancestors.clear();
+  valid_queues = kCommandQueueTypeFlagsGraphics;
+  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 3);
+}
 TEST_CASE("barrier for load from srv") {
   using namespace illuminate;
   using namespace illuminate::gfx;

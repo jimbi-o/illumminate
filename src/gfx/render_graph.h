@@ -31,8 +31,10 @@ enum BufferStateFlags : uint32_t {
   kBufferStateFlagCopyDst   = 0x0100,
   kBufferStateFlagPresent   = 0x0200,
   kBufferStateFlagCommon    = kBufferStateFlagPresent,
-  kBufferStateFlagUavRead   = (kBufferStateFlagUav | 0x10000000),
-  kBufferStateFlagUavWrite  = (kBufferStateFlagUav | 0x20000000),
+  kBufferStateReadFlag      = 0x10000000,
+  kBufferStateWriteFlag     = 0x20000000,
+  kBufferStateFlagUavRead   = (kBufferStateFlagUav | kBufferStateReadFlag),
+  kBufferStateFlagUavWrite  = (kBufferStateFlagUav | kBufferStateWriteFlag),
   kBufferStateFlagUavRW     = (kBufferStateFlagUavRead | kBufferStateFlagUavWrite),
 };
 constexpr bool IsBufferStateFlagMergeAcceptable(const BufferStateFlags& state) {
