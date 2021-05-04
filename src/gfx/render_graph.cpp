@@ -301,6 +301,10 @@ static uint32_t FindClosestCommonDescendant(const vector<uint32_t>& ancestors, c
   }
   return retval;
 }
+static uint32_t FindClosestCommonAncestor(const vector<uint32_t>& descendants, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>& node_distance_map, const unordered_map<uint32_t, CommandQueueTypeFlags>& render_pass_command_queue_type_list, const CommandQueueTypeFlags valid_queues, std::pmr::memory_resource* memory_resource_work) {
+  // TODO
+  return ~0u;
+}
 enum class BarrierPosType : uint8_t { kPrePass, kPostPass, };
 struct BufferStateChangeInfo {
   uint32_t barrier_begin_pass_index;
@@ -575,7 +579,7 @@ std::byte buffer[buffer_offset_in_bytes_work + buffer_size_in_bytes_work]{};
 #pragma clang diagnostic ignored "-Wfloat-equal"
 #endif
 #include "doctest/doctest.h"
-TEST_CASE("graph node test") {
+TEST_CASE("graph node test / find descendant") {
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
@@ -602,6 +606,12 @@ TEST_CASE("graph node test") {
   CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 0);
   ancestors.push_back(1);
   CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 1);
+  ancestors.push_back(2);
+  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 2);
+  ancestors.clear();
+  ancestors.push_back(1);
+  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 1);
+  ancestors.clear();
   ancestors.push_back(2);
   CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 2);
   ancestors.clear();
@@ -634,6 +644,72 @@ TEST_CASE("graph node test") {
   ancestors.clear();
   valid_queues = kCommandQueueTypeFlagsGraphics;
   CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 3);
+}
+TEST_CASE("graph node test / find ancestor") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  unordered_map<uint32_t, unordered_map<uint32_t, int32_t>> node_distance_map;
+  node_distance_map.insert_or_assign(0, unordered_map<uint32_t, int32_t>{});
+  node_distance_map.at(0).insert_or_assign(0, 0);
+  node_distance_map.at(0).insert_or_assign(1, 1);
+  node_distance_map.at(0).insert_or_assign(2, 2);
+  node_distance_map.insert_or_assign(1, unordered_map<uint32_t, int32_t>{});
+  node_distance_map.at(1).insert_or_assign(0, -1);
+  node_distance_map.at(1).insert_or_assign(1, 0);
+  node_distance_map.at(1).insert_or_assign(2, 1);
+  node_distance_map.insert_or_assign(2, unordered_map<uint32_t, int32_t>{});
+  node_distance_map.at(2).insert_or_assign(0, -2);
+  node_distance_map.at(2).insert_or_assign(1, -1);
+  node_distance_map.at(2).insert_or_assign(2, 0);
+  unordered_map<uint32_t, CommandQueueTypeFlags> render_pass_command_queue_type_list;
+  render_pass_command_queue_type_list.insert_or_assign(0, kCommandQueueTypeFlagsGraphics);
+  render_pass_command_queue_type_list.insert_or_assign(1, kCommandQueueTypeFlagsGraphics);
+  render_pass_command_queue_type_list.insert_or_assign(2, kCommandQueueTypeFlagsGraphics);
+  CommandQueueTypeFlags valid_queues{kCommandQueueTypeFlagsAll};
+  vector<uint32_t> descendants;
+  descendants.push_back(2);
+  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 2);
+  descendants.push_back(1);
+  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 1);
+  descendants.push_back(0);
+  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 0);
+  descendants.clear();
+  descendants.push_back(0);
+  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 0);
+  descendants.clear();
+  descendants.push_back(1);
+  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 1);
+  descendants.clear();
+  descendants.push_back(2);
+  render_pass_command_queue_type_list.insert_or_assign(2, kCommandQueueTypeFlagsCompute);
+  valid_queues = kCommandQueueTypeFlagsGraphics;
+  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 1);
+  node_distance_map.insert_or_assign(3, unordered_map<uint32_t, int32_t>{});
+  render_pass_command_queue_type_list.insert_or_assign(3, kCommandQueueTypeFlagsGraphics);
+  node_distance_map.at(3).insert_or_assign(3, 0);
+  node_distance_map.at(3).insert_or_assign(0, -2);
+  node_distance_map.at(3).insert_or_assign(1, -1);
+  node_distance_map.at(0).insert_or_assign(3, 2);
+  node_distance_map.at(1).insert_or_assign(3, 1);
+  descendants.clear();
+  descendants.push_back(2);
+  descendants.push_back(3);
+  valid_queues = kCommandQueueTypeFlagsAll;
+  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 1);
+  valid_queues = kCommandQueueTypeFlagsGraphics;
+  render_pass_command_queue_type_list.insert_or_assign(1, kCommandQueueTypeFlagsCompute);
+  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 0);
+  descendants.clear();
+  descendants.push_back(2);
+  descendants.push_back(1);
+  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 0);
+  descendants.clear();
+  valid_queues = kCommandQueueTypeFlagsAll;
+  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 2);
+  descendants.clear();
+  valid_queues = kCommandQueueTypeFlagsGraphics;
+  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 3);
 }
 TEST_CASE("barrier for load from srv") {
   using namespace illuminate;
