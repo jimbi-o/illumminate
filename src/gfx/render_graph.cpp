@@ -232,17 +232,10 @@ static uint32_t FindClosestCommonDescendant(const vector<uint32_t>& ancestors, c
   if (ancestors.empty()) {
     // return pass without ancestor
     uint32_t retval = ~0u;
-    for (auto& [pass_index, distance_map] :node_distance_map) {
+    for (auto& [pass_index, distance_map] : node_distance_map) {
       if (pass_index > retval) continue;
       if (!(render_pass_command_queue_type_list.at(pass_index) & valid_queues)) continue;
-      bool valid = true;
-      for (auto& [target, distance] : distance_map) {
-        if (distance < 0) {
-          valid = false;
-          break;
-        }
-      }
-      if (valid) {
+      if (std::find_if(distance_map.begin(), distance_map.end(), [](const auto& pair) { return pair.second < 0; }) == distance_map.end()) {
         retval = pass_index;
       }
     }
@@ -272,12 +265,39 @@ static uint32_t FindClosestCommonDescendant(const vector<uint32_t>& ancestors, c
 }
 static uint32_t FindClosestCommonAncestor(const vector<uint32_t>& descendants, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>& node_distance_map, const unordered_map<uint32_t, CommandQueueTypeFlags>& render_pass_command_queue_type_list, const CommandQueueTypeFlags valid_queues) {
   if (descendants.empty()) {
-    // TODO
-    return ~0u;
+    // return pass without descendants
+    uint32_t retval = ~0u;
+    for (auto& [pass_index, distance_map] : node_distance_map) {
+      if (pass_index > retval) continue;
+      if (!(render_pass_command_queue_type_list.at(pass_index) & valid_queues)) continue;
+      if (std::find_if(distance_map.begin(), distance_map.end(), [](const auto& pair) { return pair.second > 0; }) == distance_map.end()) {
+        retval = pass_index;
+      }
+    }
+    return retval;
   }
-  if (descendants.size() == 1 && (render_pass_command_queue_type_list.at(descendants.back()) & valid_queues)) return descendants.back();
-  // TODO
-  return ~0u;
+  if (descendants.size() == 1 && (render_pass_command_queue_type_list.at(descendants[0]) & valid_queues)) return descendants[0];
+  // find closest pass to all descendants
+  auto& cand_map = node_distance_map.at(descendants[0]);
+  int32_t min_distance = std::numeric_limits<int>::min();
+  uint32_t ret_pass = ~0u;
+  for (auto& [cand_pass, distance] : cand_map) {
+    if (distance > 0) continue;
+    if (distance < min_distance) continue;
+    if (!(render_pass_command_queue_type_list.at(cand_pass) & valid_queues)) continue;
+    bool valid = true;
+    for (uint32_t i = 1; i < descendants.size(); i++) {
+      auto& current_distance_map = node_distance_map.at(descendants[i]);
+      if (!current_distance_map.contains(cand_pass) || current_distance_map.at(cand_pass) > 0) {
+        valid = false;
+        break;
+      }
+    }
+    if (!valid) continue;
+    ret_pass = cand_pass;
+    min_distance = distance;
+  }
+  return ret_pass;
 }
 enum class BarrierPosType : uint8_t { kPrePass, kPostPass, };
 struct BufferStateChangeInfo {
