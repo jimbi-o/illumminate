@@ -228,7 +228,7 @@ static CommandQueueTypeFlags GetBufferStateValidCommandQueueTypeFlags(const Buff
   if (state & kBufferStateFlagDsvRead) return kCommandQueueTypeFlagsGraphics;
   return kCommandQueueTypeFlagsGraphicsCompute;
 }
-static uint32_t FindClosestCommonDescendant(const vector<uint32_t>& ancestors, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>& node_distance_map, const unordered_map<uint32_t, CommandQueueTypeFlags>& render_pass_command_queue_type_list, const CommandQueueTypeFlags valid_queues, std::pmr::memory_resource* memory_resource_work) {
+static uint32_t FindClosestCommonDescendant(const vector<uint32_t>& ancestors, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>& node_distance_map, const unordered_map<uint32_t, CommandQueueTypeFlags>& render_pass_command_queue_type_list, const CommandQueueTypeFlags valid_queues) {
   if (ancestors.empty()) {
     // return pass without ancestor
     uint32_t retval = ~0u;
@@ -248,60 +248,34 @@ static uint32_t FindClosestCommonDescendant(const vector<uint32_t>& ancestors, c
     }
     return retval;
   }
-  if (ancestors.size() == 1 && (render_pass_command_queue_type_list.at(ancestors.back()) & valid_queues)) return ancestors.back();
-  unordered_set<uint32_t> merged_ancestors{memory_resource_work};
-  merged_ancestors.reserve(ancestors.size());
-  merged_ancestors.insert(ancestors.begin(), ancestors.end());
-  // erase ancestors within ancestors
-  for (auto& a : ancestors) {
-    auto& distance_map = node_distance_map.at(a);
-    for (auto& b : ancestors) {
-      if (merged_ancestors.contains(a) && distance_map.contains(b) && distance_map.at(b) > 0) {
-        merged_ancestors.erase(a);
+  if (ancestors.size() == 1 && (render_pass_command_queue_type_list.at(ancestors[0]) & valid_queues)) return ancestors[0];
+  // find closest pass to all ancestors
+  auto& cand_map = node_distance_map.at(ancestors[0]);
+  int32_t min_distance = std::numeric_limits<int>::max();
+  uint32_t ret_pass = ~0u;
+  for (auto& [cand_pass, distance] : cand_map) {
+    if (distance > min_distance) continue;
+    if (!(render_pass_command_queue_type_list.at(cand_pass) & valid_queues)) continue;
+    bool valid = true;
+    for (uint32_t i = 1; i < ancestors.size(); i++) {
+      auto& current_distance_map = node_distance_map.at(ancestors[i]);
+      if (!current_distance_map.contains(cand_pass) || current_distance_map.at(cand_pass) < 0) {
+        valid = false;
         break;
       }
     }
+    if (!valid) continue;
+    ret_pass = cand_pass;
+    min_distance = distance;
   }
-  if (merged_ancestors.size() == 1 && (render_pass_command_queue_type_list.at(*merged_ancestors.begin()) & valid_queues)) return *merged_ancestors.begin();
-  // gather all descendants of merged_ancestors
-  unordered_set<uint32_t> cands{memory_resource_work};
-  for (auto& ancestor : merged_ancestors) {
-    auto& distance_map = node_distance_map.at(ancestor);
-    for (auto& [pass_index, distance] : distance_map) {
-      if (distance < 0) continue;
-      if (render_pass_command_queue_type_list.at(pass_index) & valid_queues) cands.insert(pass_index);
-    }
-  }
-  // remove descendants not in all merged_ancestors
-  auto cands_it = cands.begin();
-  while (cands_it != cands.end()) {
-    bool succeed_to_next = true;
-    for (auto& ancestor : merged_ancestors) {
-      auto& distance_map = node_distance_map.at(ancestor);
-      if (!distance_map.contains(*cands_it) || distance_map.at(*cands_it) < 0) {
-        cands_it = cands.erase(cands_it);
-        succeed_to_next = false;
-        break;
-      }
-    }
-    if (succeed_to_next) cands_it++;
-  }
-  if (cands.size() == 1) return *cands.begin();
-  // select descendant closest to any merged_ancestors
-  auto retval = *cands.begin();
-  auto min_dist = std::numeric_limits<int>::min();
-  for (auto& cand : cands) {
-    auto& dist_from_cand = node_distance_map.at(cand);
-    for (auto& ancestor : merged_ancestors) {
-      if (dist_from_cand.at(ancestor) > min_dist) {
-        min_dist = dist_from_cand.at(ancestor);
-        retval = cand;
-      }
-    }
-  }
-  return retval;
+  return ret_pass;
 }
-static uint32_t FindClosestCommonAncestor(const vector<uint32_t>& descendants, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>& node_distance_map, const unordered_map<uint32_t, CommandQueueTypeFlags>& render_pass_command_queue_type_list, const CommandQueueTypeFlags valid_queues, std::pmr::memory_resource* memory_resource_work) {
+static uint32_t FindClosestCommonAncestor(const vector<uint32_t>& descendants, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>& node_distance_map, const unordered_map<uint32_t, CommandQueueTypeFlags>& render_pass_command_queue_type_list, const CommandQueueTypeFlags valid_queues) {
+  if (descendants.empty()) {
+    // TODO
+    return ~0u;
+  }
+  if (descendants.size() == 1 && (render_pass_command_queue_type_list.at(descendants.back()) & valid_queues)) return descendants.back();
   // TODO
   return ~0u;
 }
@@ -603,22 +577,22 @@ TEST_CASE("graph node test / find descendant") {
   render_pass_command_queue_type_list.insert_or_assign(1, kCommandQueueTypeFlagsGraphics);
   render_pass_command_queue_type_list.insert_or_assign(2, kCommandQueueTypeFlagsGraphics);
   CommandQueueTypeFlags valid_queues{kCommandQueueTypeFlagsAll};
-  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 0);
+  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 0);
   ancestors.push_back(1);
-  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 1);
+  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 1);
   ancestors.push_back(2);
-  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 2);
+  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 2);
   ancestors.clear();
   ancestors.push_back(1);
-  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 1);
+  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 1);
   ancestors.clear();
   ancestors.push_back(2);
-  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 2);
+  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 2);
   ancestors.clear();
   ancestors.push_back(0);
   render_pass_command_queue_type_list.insert_or_assign(0, kCommandQueueTypeFlagsCompute);
   valid_queues = kCommandQueueTypeFlagsGraphics;
-  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 1);
+  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 1);
   node_distance_map.insert_or_assign(3, unordered_map<uint32_t, int32_t>{});
   node_distance_map.at(3).insert_or_assign(3, 0);
   node_distance_map.at(3).insert_or_assign(1, 1);
@@ -630,20 +604,20 @@ TEST_CASE("graph node test / find descendant") {
   ancestors.push_back(0);
   ancestors.push_back(3);
   valid_queues = kCommandQueueTypeFlagsAll;
-  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 1);
+  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 1);
   valid_queues = kCommandQueueTypeFlagsGraphics;
   render_pass_command_queue_type_list.insert_or_assign(1, kCommandQueueTypeFlagsCompute);
-  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 2);
+  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 2);
   ancestors.clear();
   ancestors.push_back(0);
   ancestors.push_back(1);
-  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 2);
+  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 2);
   ancestors.clear();
   valid_queues = kCommandQueueTypeFlagsAll;
-  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 0);
+  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 0);
   ancestors.clear();
   valid_queues = kCommandQueueTypeFlagsGraphics;
-  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 3);
+  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 3);
 }
 TEST_CASE("graph node test / find ancestor") {
   using namespace illuminate;
@@ -669,22 +643,22 @@ TEST_CASE("graph node test / find ancestor") {
   CommandQueueTypeFlags valid_queues{kCommandQueueTypeFlagsAll};
   vector<uint32_t> descendants;
   descendants.push_back(2);
-  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 2);
+  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 2);
   descendants.push_back(1);
-  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 1);
+  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 1);
   descendants.push_back(0);
-  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 0);
+  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 0);
   descendants.clear();
   descendants.push_back(0);
-  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 0);
+  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 0);
   descendants.clear();
   descendants.push_back(1);
-  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 1);
+  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 1);
   descendants.clear();
   descendants.push_back(2);
   render_pass_command_queue_type_list.insert_or_assign(2, kCommandQueueTypeFlagsCompute);
   valid_queues = kCommandQueueTypeFlagsGraphics;
-  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 1);
+  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 1);
   node_distance_map.insert_or_assign(3, unordered_map<uint32_t, int32_t>{});
   render_pass_command_queue_type_list.insert_or_assign(3, kCommandQueueTypeFlagsGraphics);
   node_distance_map.at(3).insert_or_assign(3, 0);
@@ -696,20 +670,20 @@ TEST_CASE("graph node test / find ancestor") {
   descendants.push_back(2);
   descendants.push_back(3);
   valid_queues = kCommandQueueTypeFlagsAll;
-  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 1);
+  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 1);
   valid_queues = kCommandQueueTypeFlagsGraphics;
   render_pass_command_queue_type_list.insert_or_assign(1, kCommandQueueTypeFlagsCompute);
-  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 0);
+  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 0);
   descendants.clear();
   descendants.push_back(2);
   descendants.push_back(1);
-  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 0);
+  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 0);
   descendants.clear();
   valid_queues = kCommandQueueTypeFlagsAll;
-  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 2);
+  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 2);
   descendants.clear();
   valid_queues = kCommandQueueTypeFlagsGraphics;
-  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues, &memory_resource_work) == 3);
+  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 3);
 }
 TEST_CASE("barrier for load from srv") {
   using namespace illuminate;
