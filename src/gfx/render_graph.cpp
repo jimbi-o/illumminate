@@ -213,7 +213,7 @@ static uint32_t FindClosestCommonDescendant(const vector<uint32_t>& pass_index_l
 static uint32_t FindClosestCommonAncestor(const vector<uint32_t>& pass_index_list) {
   return *std::min_element(pass_index_list.begin(), pass_index_list.end());
 }
-static unordered_map<uint32_t, unordered_map<uint32_t, int32_t>> CreateNodeDistanceMap(const uint32_t pass_num, const unordered_map<uint32_t, CommandQueueType>& render_pass_command_queue_type_list, const unordered_map<uint32_t, unordered_set<uint32_t>>& inter_queue_pass_dependency, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
+static unordered_map<uint32_t, unordered_map<uint32_t, int32_t>> CreateNodeDistanceMapInSameCommandQueueType(const uint32_t pass_num, const unordered_map<uint32_t, CommandQueueType>& render_pass_command_queue_type_list, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
   unordered_map<uint32_t, unordered_map<uint32_t, int32_t>> node_distance_map{memory_resource};
   unordered_map<CommandQueueType, uint32_t> last_pass_index_per_command_queue_type{memory_resource_work};
   last_pass_index_per_command_queue_type.reserve(kCommandQueueTypeNum);
@@ -221,7 +221,7 @@ static unordered_map<uint32_t, unordered_map<uint32_t, int32_t>> CreateNodeDista
     auto [it, result] = node_distance_map.insert_or_assign(pass_index, unordered_map<uint32_t, int32_t>{memory_resource});
     auto& distance_map = it->second;
     distance_map.insert_or_assign(pass_index, 0);
-    // insert pass from same queue type
+    // insert info from previous pass in same queue type
     auto& command_queue_type = render_pass_command_queue_type_list.at(pass_index);
     if (last_pass_index_per_command_queue_type.contains(command_queue_type)) {
       auto& src_distance_map = node_distance_map.at(last_pass_index_per_command_queue_type.at(command_queue_type));
@@ -231,14 +231,6 @@ static unordered_map<uint32_t, unordered_map<uint32_t, int32_t>> CreateNodeDista
       }
     }
     last_pass_index_per_command_queue_type.insert_or_assign(command_queue_type, pass_index);
-    // insert pass from different queue type
-    if (inter_queue_pass_dependency.contains(pass_index)) {
-      for (auto& pass_index_in_other_queue : inter_queue_pass_dependency.at(pass_index)) {
-        if (!distance_map.contains(pass_index_in_other_queue)) {
-          distance_map.insert_or_assign(pass_index_in_other_queue, -1);
-        }
-      }
-    }
   }
   return node_distance_map;
 }
@@ -247,6 +239,23 @@ static unordered_map<uint32_t, unordered_map<uint32_t, int32_t>> AddNodeDistance
     for (auto& [pass_index, distance] : distance_map) {
       if (node_distance_map.at(pass_index).contains(root_index)) continue;
       node_distance_map.at(pass_index).insert_or_assign(root_index, -distance);
+    }
+  }
+  return std::move(node_distance_map);
+}
+static unordered_map<uint32_t, unordered_map<uint32_t, int32_t>> AppendInterQueueNodeDistanceMap(const unordered_map<uint32_t, unordered_set<uint32_t>>& inter_queue_pass_dependency, unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>&& node_distance_map) {
+  for (auto& [consumer_pass, producers] : inter_queue_pass_dependency) {
+    auto&& distance_map = node_distance_map.at(consumer_pass);
+    for (auto& producer : producers) {
+      if (!distance_map.contains(producer)) {
+        distance_map.insert_or_assign(producer, -1);
+        for (auto& [descendant, distance] : distance_map) {
+          if (distance <= 0) continue; // i.e. ancestor or self
+          if (!node_distance_map.at(descendant).contains(producer)) {
+            node_distance_map.at(descendant).insert_or_assign(producer, - distance - 1);
+          }
+        }
+      }
     }
   }
   return std::move(node_distance_map);
@@ -743,27 +752,27 @@ TEST_CASE("graph node test / find ancestor") {
   valid_queues = kCommandQueueTypeFlagsGraphics;
   CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 3);
 }
-TEST_CASE("CreateNodeDistanceMap - single pass") {
+TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - single pass") {
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
   unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
-  auto node_distance_map = CreateNodeDistanceMap(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, {}, &memory_resource_work, &memory_resource_work);
+  auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
   CHECK(node_distance_map.size() == 1);
   CHECK(node_distance_map.contains(0));
   CHECK(node_distance_map.at(0).size() == 1);
   CHECK(node_distance_map.at(0).contains(0));
   CHECK(node_distance_map.at(0).at(0) == 0);
 }
-TEST_CASE("CreateNodeDistanceMap - two pass (graphics only)") {
+TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - two pass (graphics only)") {
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
   unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kGraphics);
-  auto node_distance_map = CreateNodeDistanceMap(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, {}, &memory_resource_work, &memory_resource_work);
+  auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
   CHECK(node_distance_map.size() == 2);
   CHECK(node_distance_map.contains(0));
   CHECK(node_distance_map.at(0).size() == 1);
@@ -791,14 +800,14 @@ TEST_CASE("CreateNodeDistanceMap - two pass (graphics only)") {
   CHECK(node_distance_map.at(1).at(1) == 0);
 }
 // TODO configure pass dependence from buffer dependence on different queue
-TEST_CASE("CreateNodeDistanceMap - two independent pass (graphics+compute)") {
+TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - two independent pass (graphics+compute)") {
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
   unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
-  auto node_distance_map = CreateNodeDistanceMap(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, {}, &memory_resource_work, &memory_resource_work);
+  auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
   CHECK(node_distance_map.size() == 2);
   CHECK(node_distance_map.contains(0));
   CHECK(node_distance_map.at(0).size() == 1);
@@ -809,22 +818,27 @@ TEST_CASE("CreateNodeDistanceMap - two independent pass (graphics+compute)") {
   CHECK(node_distance_map.at(1).contains(1));
   CHECK(node_distance_map.at(1).at(1) == 0);
 }
-TEST_CASE("CreateNodeDistanceMap - dependent pass (graphics->compute)") {
+TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphics->compute)") {
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
   unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
+  auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
   unordered_map<uint32_t, unordered_set<uint32_t>> inter_queue_pass_dependency{&memory_resource_work};
   inter_queue_pass_dependency.insert_or_assign(1, unordered_set<uint32_t>{&memory_resource_work});
   inter_queue_pass_dependency.at(1).insert(0);
-  auto node_distance_map = CreateNodeDistanceMap(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, inter_queue_pass_dependency, &memory_resource_work, &memory_resource_work);
+  node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
+  node_distance_map = AppendInterQueueNodeDistanceMap(inter_queue_pass_dependency, std::move(node_distance_map));
+  node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
   CHECK(node_distance_map.size() == 2);
   CHECK(node_distance_map.contains(0));
-  CHECK(node_distance_map.at(0).size() == 1);
+  CHECK(node_distance_map.at(0).size() == 2);
   CHECK(node_distance_map.at(0).contains(0));
   CHECK(node_distance_map.at(0).at(0) == 0);
+  CHECK(node_distance_map.at(0).contains(1));
+  CHECK(node_distance_map.at(0).at(1) == 1);
   CHECK(node_distance_map.contains(1));
   CHECK(node_distance_map.at(1).size() == 2);
   CHECK(node_distance_map.at(1).contains(0));
@@ -832,7 +846,7 @@ TEST_CASE("CreateNodeDistanceMap - dependent pass (graphics->compute)") {
   CHECK(node_distance_map.at(1).contains(1));
   CHECK(node_distance_map.at(1).at(1) == 0);
 }
-TEST_CASE("CreateNodeDistanceMap - dependent pass (graphics->compute(+graphics))") {
+TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphics->compute(+graphics))") {
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
@@ -840,15 +854,22 @@ TEST_CASE("CreateNodeDistanceMap - dependent pass (graphics->compute(+graphics))
   render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.insert_or_assign(2, CommandQueueType::kCompute);
+  auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
   unordered_map<uint32_t, unordered_set<uint32_t>> inter_queue_pass_dependency{&memory_resource_work};
   inter_queue_pass_dependency.insert_or_assign(2, unordered_set<uint32_t>{&memory_resource_work});
   inter_queue_pass_dependency.at(2).insert(0);
-  auto node_distance_map = CreateNodeDistanceMap(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, inter_queue_pass_dependency, &memory_resource_work, &memory_resource_work);
+  node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
+  node_distance_map = AppendInterQueueNodeDistanceMap(inter_queue_pass_dependency, std::move(node_distance_map));
+  node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
   CHECK(node_distance_map.size() == 3);
   CHECK(node_distance_map.contains(0));
-  CHECK(node_distance_map.at(0).size() == 1);
+  CHECK(node_distance_map.at(0).size() == 3);
   CHECK(node_distance_map.at(0).contains(0));
   CHECK(node_distance_map.at(0).at(0) == 0);
+  CHECK(node_distance_map.at(0).contains(1));
+  CHECK(node_distance_map.at(0).at(1) == 1);
+  CHECK(node_distance_map.at(0).contains(2));
+  CHECK(node_distance_map.at(0).at(2) == 1);
   CHECK(node_distance_map.contains(1));
   CHECK(node_distance_map.at(1).size() == 2);
   CHECK(node_distance_map.at(1).contains(0));
@@ -862,7 +883,7 @@ TEST_CASE("CreateNodeDistanceMap - dependent pass (graphics->compute(+graphics))
   CHECK(node_distance_map.at(2).contains(2));
   CHECK(node_distance_map.at(2).at(2) == 0);
 }
-TEST_CASE("CreateNodeDistanceMap - dependent pass (graphics+compute->graphics)") {
+TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphics+compute->graphics)") {
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
@@ -870,19 +891,26 @@ TEST_CASE("CreateNodeDistanceMap - dependent pass (graphics+compute->graphics)")
   render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
   render_pass_command_queue_type_list.insert_or_assign(2, CommandQueueType::kGraphics);
+  auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
   unordered_map<uint32_t, unordered_set<uint32_t>> inter_queue_pass_dependency{&memory_resource_work};
   inter_queue_pass_dependency.insert_or_assign(2, unordered_set<uint32_t>{&memory_resource_work});
   inter_queue_pass_dependency.at(2).insert(1);
-  auto node_distance_map = CreateNodeDistanceMap(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, inter_queue_pass_dependency, &memory_resource_work, &memory_resource_work);
+  node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
+  node_distance_map = AppendInterQueueNodeDistanceMap(inter_queue_pass_dependency, std::move(node_distance_map));
+  node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
   CHECK(node_distance_map.size() == 3);
   CHECK(node_distance_map.contains(0));
-  CHECK(node_distance_map.at(0).size() == 1);
+  CHECK(node_distance_map.at(0).size() == 2);
   CHECK(node_distance_map.at(0).contains(0));
   CHECK(node_distance_map.at(0).at(0) == 0);
-  CHECK(node_distance_map.contains(1));
-  CHECK(node_distance_map.at(1).size() == 1);
+  CHECK(node_distance_map.at(0).contains(2));
+  CHECK(node_distance_map.at(0).at(2) == 1);
+  CHECK(node_distance_map.contains(2));
+  CHECK(node_distance_map.at(1).size() == 2);
   CHECK(node_distance_map.at(1).contains(1));
   CHECK(node_distance_map.at(1).at(1) == 0);
+  CHECK(node_distance_map.at(1).contains(2));
+  CHECK(node_distance_map.at(1).at(2) == 1);
   CHECK(node_distance_map.contains(2));
   CHECK(node_distance_map.at(2).size() == 3);
   CHECK(node_distance_map.at(2).contains(0));
@@ -892,7 +920,7 @@ TEST_CASE("CreateNodeDistanceMap - dependent pass (graphics+compute->graphics)")
   CHECK(node_distance_map.at(2).contains(2));
   CHECK(node_distance_map.at(2).at(2) == 0);
 }
-TEST_CASE("CreateNodeDistanceMap - dependent pass (graphics+compute->graphics+compute)") {
+TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphics+compute->graphics+compute)") {
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
@@ -902,21 +930,36 @@ TEST_CASE("CreateNodeDistanceMap - dependent pass (graphics+compute->graphics+co
   render_pass_command_queue_type_list.insert_or_assign(2, CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.insert_or_assign(3, CommandQueueType::kCompute);
   render_pass_command_queue_type_list.insert_or_assign(4, CommandQueueType::kCompute);
+  auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
   unordered_map<uint32_t, unordered_set<uint32_t>> inter_queue_pass_dependency{&memory_resource_work};
   inter_queue_pass_dependency.insert_or_assign(2, unordered_set<uint32_t>{&memory_resource_work});
   inter_queue_pass_dependency.at(2).insert(1);
   inter_queue_pass_dependency.insert_or_assign(3, unordered_set<uint32_t>{&memory_resource_work});
   inter_queue_pass_dependency.at(3).insert(0);
-  auto node_distance_map = CreateNodeDistanceMap(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, inter_queue_pass_dependency, &memory_resource_work, &memory_resource_work);
+  node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
+  node_distance_map = AppendInterQueueNodeDistanceMap(inter_queue_pass_dependency, std::move(node_distance_map));
+  node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
   CHECK(node_distance_map.size() == 5);
   CHECK(node_distance_map.contains(0));
-  CHECK(node_distance_map.at(0).size() == 1);
+  CHECK(node_distance_map.at(0).size() == 4);
   CHECK(node_distance_map.at(0).contains(0));
   CHECK(node_distance_map.at(0).at(0) == 0);
+  CHECK(node_distance_map.at(0).contains(2));
+  CHECK(node_distance_map.at(0).at(2) == 1);
+  CHECK(node_distance_map.at(0).contains(3));
+  CHECK(node_distance_map.at(0).at(3) == 1);
+  CHECK(node_distance_map.at(0).contains(4));
+  CHECK(node_distance_map.at(0).at(4) == 2);
   CHECK(node_distance_map.contains(1));
-  CHECK(node_distance_map.at(1).size() == 1);
+  CHECK(node_distance_map.at(1).size() == 4);
   CHECK(node_distance_map.at(1).contains(1));
   CHECK(node_distance_map.at(1).at(1) == 0);
+  CHECK(node_distance_map.at(1).contains(2));
+  CHECK(node_distance_map.at(1).at(2) == 1);
+  CHECK(node_distance_map.at(1).contains(3));
+  CHECK(node_distance_map.at(1).at(3) == 1);
+  CHECK(node_distance_map.at(1).contains(4));
+  CHECK(node_distance_map.at(1).at(4) == 2);
   CHECK(node_distance_map.contains(2));
   CHECK(node_distance_map.at(2).size() == 3);
   CHECK(node_distance_map.at(2).contains(0));
@@ -926,13 +969,15 @@ TEST_CASE("CreateNodeDistanceMap - dependent pass (graphics+compute->graphics+co
   CHECK(node_distance_map.at(2).contains(2));
   CHECK(node_distance_map.at(2).at(2) == 0);
   CHECK(node_distance_map.contains(3));
-  CHECK(node_distance_map.at(3).size() == 3);
+  CHECK(node_distance_map.at(3).size() == 4);
   CHECK(node_distance_map.at(3).contains(0));
   CHECK(node_distance_map.at(3).at(0) == -1);
   CHECK(node_distance_map.at(3).contains(1));
   CHECK(node_distance_map.at(3).at(1) == -1);
   CHECK(node_distance_map.at(3).contains(3));
   CHECK(node_distance_map.at(3).at(3) == 0);
+  CHECK(node_distance_map.at(3).contains(4));
+  CHECK(node_distance_map.at(3).at(4) == 1);
   CHECK(node_distance_map.contains(3));
   CHECK(node_distance_map.at(4).size() == 4);
   CHECK(node_distance_map.at(4).contains(0));
@@ -944,6 +989,21 @@ TEST_CASE("CreateNodeDistanceMap - dependent pass (graphics+compute->graphics+co
   CHECK(node_distance_map.at(4).contains(4));
   CHECK(node_distance_map.at(4).at(4) == 0);
 }
+#if 0
+TEST_CASE("ConfigureInterPassDependency") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
+  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
+  auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+  auto pass_dependency = ConfigurePassDependency(buffer_user_pass_list, intra_queue_node_distance_map, &memory_resource_work);
+  auto inter_queue_pass_dependency = ConfigureInterQueuePassDependency(inter_pass_dependency, &memory_resource_work);
+  // TODO
+}
+#endif
 TEST_CASE("barrier for load from srv") {
   using namespace illuminate;
   using namespace illuminate::gfx;
