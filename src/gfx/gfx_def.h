@@ -26,29 +26,7 @@ constexpr uint32_t GetPhysicalBufferSize(const BufferSizeType size_type, const f
 struct ClearValueDepthStencil { float depth; uint8_t stencil; uint8_t _dmy[3]; };
 using ClearValue = std::variant<std::array<float, 4>, ClearValueDepthStencil>;
 enum class CommandQueueType : uint8_t { kGraphics = 0, kCompute, kTransfer, };
-static const CommandQueueType kCommandQueueTypeSet[]{CommandQueueType::kGraphics, CommandQueueType::kCompute, CommandQueueType::kTransfer};
 static const auto kCommandQueueTypeNum = static_cast<uint32_t>(CommandQueueType::kTransfer) + 1;
-enum CommandQueueTypeFlag : uint8_t {
-  kCommandQueueTypeNone     = 0x0,
-  kCommandQueueTypeGraphics = 0x1,
-  kCommandQueueTypeCompute  = 0x2,
-  kCommandQueueTypeTransfer = 0x4,
-  kCommandQueueTypeAll      = (0x4 | 0x2 | 0x1),
-  kCommandQueueTypeGC       = (0x2 | 0x1),
-};
-constexpr CommandQueueTypeFlag ConvertCommandQueueTypeToFlag(const CommandQueueType& type) {
-  switch (type) {
-    case CommandQueueType::kGraphics: return kCommandQueueTypeGraphics;
-    case CommandQueueType::kCompute:  return kCommandQueueTypeCompute;
-    case CommandQueueType::kTransfer: return kCommandQueueTypeTransfer;
-  }
-}
-constexpr bool IsContainingCommandQueueType(const int32_t& flag, const CommandQueueType& type) {
-  return flag & ConvertCommandQueueTypeToFlag(type);
-}
-constexpr void MergeCommandQueueTypeFlag(CommandQueueTypeFlag* const a, const CommandQueueType& b) {
-  *a = static_cast<CommandQueueTypeFlag>(*a | ConvertCommandQueueTypeToFlag(b));
-}
 constexpr auto CreateClearValueColorBuffer(float&& r, float&& g, float&& b, float&& a) {
   return ClearValue(std::array<float, 4>{std::move(r), std::move(g), std::move(b), std::move(a)});
 }

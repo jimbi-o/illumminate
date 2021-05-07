@@ -207,13 +207,7 @@ static std::tuple<unordered_map<BufferId, vector<BufferStateFlags>>, unordered_m
   }
   return {buffer_state_list, buffer_user_pass_list};
 }
-static uint32_t FindClosestCommonDescendant(const vector<uint32_t>& pass_index_list) {
-  return *std::max_element(pass_index_list.begin(), pass_index_list.end());
-}
-static uint32_t FindClosestCommonAncestor(const vector<uint32_t>& pass_index_list) {
-  return *std::min_element(pass_index_list.begin(), pass_index_list.end());
-}
-static unordered_map<uint32_t, unordered_map<uint32_t, int32_t>> CreateNodeDistanceMapInSameCommandQueueType(const uint32_t pass_num, const unordered_map<uint32_t, CommandQueueType>& render_pass_command_queue_type_list, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
+static unordered_map<uint32_t, unordered_map<uint32_t, int32_t>> CreateNodeDistanceMapInSameCommandQueueType(const uint32_t pass_num, const vector<CommandQueueType>& render_pass_command_queue_type_list, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
   unordered_map<uint32_t, unordered_map<uint32_t, int32_t>> node_distance_map{memory_resource};
   unordered_map<CommandQueueType, uint32_t> last_pass_index_per_command_queue_type{memory_resource_work};
   last_pass_index_per_command_queue_type.reserve(kCommandQueueTypeNum);
@@ -222,7 +216,7 @@ static unordered_map<uint32_t, unordered_map<uint32_t, int32_t>> CreateNodeDista
     auto& distance_map = it->second;
     distance_map.insert_or_assign(pass_index, 0);
     // insert info from previous pass in same queue type
-    auto& command_queue_type = render_pass_command_queue_type_list.at(pass_index);
+    auto& command_queue_type = render_pass_command_queue_type_list[pass_index];
     if (last_pass_index_per_command_queue_type.contains(command_queue_type)) {
       auto& src_distance_map = node_distance_map.at(last_pass_index_per_command_queue_type.at(command_queue_type));
       distance_map.reserve(distance_map.size() + src_distance_map.size());
@@ -260,7 +254,7 @@ static unordered_map<uint32_t, unordered_map<uint32_t, int32_t>> AppendInterQueu
   }
   return std::move(node_distance_map);
 }
-static auto ConfigureInterQueuePassDependency(const unordered_map<BufferId, vector<vector<uint32_t>>>& buffer_user_pass_list, const unordered_map<uint32_t, CommandQueueType>& render_pass_command_queue_type_list, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
+static auto ConfigureInterQueuePassDependency(const unordered_map<BufferId, vector<vector<uint32_t>>>& buffer_user_pass_list, const vector<CommandQueueType>& render_pass_command_queue_type_list, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
   unordered_map<uint32_t, unordered_set<uint32_t>> inter_queue_pass_dependency{memory_resource};
   unordered_map<CommandQueueType, uint32_t> src_pass_index_map{memory_resource_work};
   src_pass_index_map.reserve(kCommandQueueTypeNum);
@@ -275,14 +269,14 @@ static auto ConfigureInterQueuePassDependency(const unordered_map<BufferId, vect
       auto& src_user_pass_list = buffer_user_list[user_pass_list_index];
       for (uint32_t src_user_pass_list_index = 0; src_user_pass_list_index < src_user_pass_list.size(); src_user_pass_list_index++) {
         auto& src_pass_index = src_user_pass_list[src_user_pass_list_index];
-        auto& src_command_queue_type = render_pass_command_queue_type_list.at(src_pass_index);
+        auto& src_command_queue_type = render_pass_command_queue_type_list[src_pass_index];
         if (src_pass_index_map.contains(src_command_queue_type) && src_pass_index_map.at(src_command_queue_type) > src_pass_index) continue;
         src_pass_index_map.insert_or_assign(src_command_queue_type, src_pass_index);
       }
       auto& dst_user_pass_list = buffer_user_list[user_pass_list_index + 1];
       for (uint32_t dst_user_pass_list_index = 0; dst_user_pass_list_index < dst_user_pass_list.size(); dst_user_pass_list_index++) {
         auto& dst_pass_index = dst_user_pass_list[dst_user_pass_list_index];
-        auto& dst_command_queue_type = render_pass_command_queue_type_list.at(dst_pass_index);
+        auto& dst_command_queue_type = render_pass_command_queue_type_list[dst_pass_index];
         if (dst_pass_index_map.contains(dst_command_queue_type) && dst_pass_index_map.at(dst_command_queue_type) < dst_pass_index) continue;
         dst_pass_index_map.insert_or_assign(dst_command_queue_type, dst_pass_index);
       }
@@ -292,7 +286,7 @@ static auto ConfigureInterQueuePassDependency(const unordered_map<BufferId, vect
           bool insert_new_pass = true;
           if (inter_queue_pass_dependency.contains(dst_pass_index)) {
             for (auto& pass_index : inter_queue_pass_dependency.at(dst_pass_index)) {
-              if (render_pass_command_queue_type_list.at(pass_index) != dst_command_queue_type) continue;
+              if (render_pass_command_queue_type_list[pass_index] != dst_command_queue_type) continue;
               insert_new_pass = (pass_index > src_pass_index);
               break;
             }
@@ -308,11 +302,11 @@ static auto ConfigureInterQueuePassDependency(const unordered_map<BufferId, vect
   }
   return inter_queue_pass_dependency;
 }
-static unordered_map<uint32_t, unordered_set<uint32_t>> RemoveRedundantDependencyFromSameQueuePredecessors(const uint32_t pass_num, const unordered_map<uint32_t, CommandQueueType>& render_pass_command_queue_type_list, unordered_map<uint32_t, unordered_set<uint32_t>>&& inter_queue_pass_dependency, std::pmr::memory_resource* memory_resource_work) {
+static unordered_map<uint32_t, unordered_set<uint32_t>> RemoveRedundantDependencyFromSameQueuePredecessors(const uint32_t pass_num, const vector<CommandQueueType>& render_pass_command_queue_type_list, unordered_map<uint32_t, unordered_set<uint32_t>>&& inter_queue_pass_dependency, std::pmr::memory_resource* memory_resource_work) {
   unordered_map<CommandQueueType, unordered_map<CommandQueueType, uint32_t>> processed_pass_per_queue{memory_resource_work};
   for (uint32_t pass_index = 0; pass_index < pass_num; pass_index++) {
     if (!inter_queue_pass_dependency.contains(pass_index)) continue;
-    auto& command_queue_type = render_pass_command_queue_type_list.at(pass_index);
+    auto& command_queue_type = render_pass_command_queue_type_list[pass_index];
     if (!processed_pass_per_queue.contains(command_queue_type)) {
       processed_pass_per_queue.insert_or_assign(command_queue_type, unordered_map<CommandQueueType, uint32_t>{memory_resource_work});
     }
@@ -321,7 +315,7 @@ static unordered_map<uint32_t, unordered_set<uint32_t>> RemoveRedundantDependenc
     auto it = dependant_pass_list.begin();
     while (it != dependant_pass_list.end()) {
       auto& dependant_pass = *it;
-      auto& dependant_pass_command_queue_type = render_pass_command_queue_type_list.at(dependant_pass);
+      auto& dependant_pass_command_queue_type = render_pass_command_queue_type_list[dependant_pass];
       if (processed_pass_list.contains(dependant_pass_command_queue_type) && processed_pass_list.at(dependant_pass_command_queue_type) >= dependant_pass) {
         it = dependant_pass_list.erase(it);
       } else {
@@ -350,27 +344,35 @@ static CommandQueueTypeFlags GetBufferStateValidCommandQueueTypeFlags(const Buff
   if (state & kBufferStateFlagDsvRead) return kCommandQueueTypeFlagsGraphics;
   return kCommandQueueTypeFlagsGraphicsCompute;
 }
-static uint32_t FindClosestCommonDescendant(const vector<uint32_t>& ancestors, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>& node_distance_map, const unordered_map<uint32_t, CommandQueueTypeFlags>& render_pass_command_queue_type_list, const CommandQueueTypeFlags valid_queues) {
+static uint32_t FindClosestCommonDescendant(const vector<uint32_t>& ancestors, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>& node_distance_map, const vector<CommandQueueTypeFlags>& render_pass_command_queue_type_list, const CommandQueueTypeFlags valid_queues) {
   if (ancestors.empty()) {
     // return pass without ancestor
-    uint32_t retval = ~0u;
+    const uint32_t invalid_pass = ~0u;
+    uint32_t retval = invalid_pass;
     for (auto& [pass_index, distance_map] : node_distance_map) {
       if (pass_index > retval) continue;
-      if (!(render_pass_command_queue_type_list.at(pass_index) & valid_queues)) continue;
+      if (!(render_pass_command_queue_type_list[pass_index] & valid_queues)) continue;
       if (std::find_if(distance_map.begin(), distance_map.end(), [](const auto& pair) { return pair.second < 0; }) == distance_map.end()) {
         retval = pass_index;
       }
     }
-    return retval;
+    if (retval != invalid_pass) {
+      return retval;
+    }
+    for (uint32_t i = 0; i < render_pass_command_queue_type_list.size(); i++) {
+      if (render_pass_command_queue_type_list[i] & valid_queues) return i;
+    }
+    logerror("valid pass not found in FindClosestCommonDescendant {}", valid_queues);
+    return invalid_pass;
   }
-  if (ancestors.size() == 1 && (render_pass_command_queue_type_list.at(ancestors[0]) & valid_queues)) return ancestors[0];
+  if (ancestors.size() == 1 && (render_pass_command_queue_type_list[ancestors[0]] & valid_queues)) return ancestors[0];
   // find closest pass to all ancestors
   auto& cand_map = node_distance_map.at(ancestors[0]);
   int32_t min_distance = std::numeric_limits<int>::max();
   uint32_t ret_pass = ~0u;
   for (auto& [cand_pass, distance] : cand_map) {
     if (distance > min_distance) continue;
-    if (!(render_pass_command_queue_type_list.at(cand_pass) & valid_queues)) continue;
+    if (!(render_pass_command_queue_type_list[cand_pass] & valid_queues)) continue;
     bool valid = true;
     for (uint32_t i = 1; i < ancestors.size(); i++) {
       auto& current_distance_map = node_distance_map.at(ancestors[i]);
@@ -385,20 +387,28 @@ static uint32_t FindClosestCommonDescendant(const vector<uint32_t>& ancestors, c
   }
   return ret_pass;
 }
-static uint32_t FindClosestCommonAncestor(const vector<uint32_t>& descendants, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>& node_distance_map, const unordered_map<uint32_t, CommandQueueTypeFlags>& render_pass_command_queue_type_list, const CommandQueueTypeFlags valid_queues) {
+static uint32_t FindClosestCommonAncestor(const vector<uint32_t>& descendants, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>& node_distance_map, const vector<CommandQueueTypeFlags>& render_pass_command_queue_type_list, const CommandQueueTypeFlags valid_queues) {
   if (descendants.empty()) {
     // return pass without descendants
-    uint32_t retval = ~0u;
+    const uint32_t invalid_pass = ~0u;
+    uint32_t retval = invalid_pass;
     for (auto& [pass_index, distance_map] : node_distance_map) {
       if (pass_index > retval) continue;
-      if (!(render_pass_command_queue_type_list.at(pass_index) & valid_queues)) continue;
+      if (!(render_pass_command_queue_type_list[pass_index] & valid_queues)) continue;
       if (std::find_if(distance_map.begin(), distance_map.end(), [](const auto& pair) { return pair.second > 0; }) == distance_map.end()) {
         retval = pass_index;
       }
     }
-    return retval;
+    if (retval != invalid_pass) {
+      return retval;
+    }
+    for (uint32_t i = render_pass_command_queue_type_list.size() - 1; i < render_pass_command_queue_type_list.size()/*i is unsigned*/; i--) {
+      if (render_pass_command_queue_type_list[i] & valid_queues) return i;
+    }
+    logerror("valid pass not found in FindClosestCommonAncestor {}", valid_queues);
+    return invalid_pass;
   }
-  if (descendants.size() == 1 && (render_pass_command_queue_type_list.at(descendants[0]) & valid_queues)) return descendants[0];
+  if (descendants.size() == 1 && (render_pass_command_queue_type_list[descendants[0]] & valid_queues)) return descendants[0];
   // find closest pass to all descendants
   auto& cand_map = node_distance_map.at(descendants[0]);
   int32_t min_distance = std::numeric_limits<int>::min();
@@ -406,7 +416,7 @@ static uint32_t FindClosestCommonAncestor(const vector<uint32_t>& descendants, c
   for (auto& [cand_pass, distance] : cand_map) {
     if (distance > 0) continue;
     if (distance < min_distance) continue;
-    if (!(render_pass_command_queue_type_list.at(cand_pass) & valid_queues)) continue;
+    if (!(render_pass_command_queue_type_list[cand_pass] & valid_queues)) continue;
     bool valid = true;
     for (uint32_t i = 1; i < descendants.size(); i++) {
       auto& current_distance_map = node_distance_map.at(descendants[i]);
@@ -421,6 +431,23 @@ static uint32_t FindClosestCommonAncestor(const vector<uint32_t>& descendants, c
   }
   return ret_pass;
 }
+constexpr CommandQueueTypeFlags ConvertCommandQueueTypeToFlag(const CommandQueueType& type) {
+  switch (type) {
+    case CommandQueueType::kGraphics: return kCommandQueueTypeFlagsGraphics;
+    case CommandQueueType::kCompute:  return kCommandQueueTypeFlagsCompute;
+    case CommandQueueType::kTransfer: return kCommandQueueTypeFlagsTransfer;
+  }
+  return kCommandQueueTypeFlagsGraphics;
+}
+static vector<CommandQueueTypeFlags> ConvertToCommandQueueTypeFlagsList(const vector<CommandQueueType>& render_pass_command_queue_type_list, std::pmr::memory_resource* memory_resource) {
+  auto num = static_cast<uint32_t>(render_pass_command_queue_type_list.size());
+  vector<CommandQueueTypeFlags> retval{memory_resource};
+  retval.resize(num);
+  for (uint32_t i = 0; i < num; i++) {
+    retval[i] = ConvertCommandQueueTypeToFlag(render_pass_command_queue_type_list[i]);
+  }
+  return retval;
+}
 enum class BarrierPosType : uint8_t { kPrePass, kPostPass, };
 struct BufferStateChangeInfo {
   uint32_t barrier_begin_pass_index;
@@ -431,7 +458,7 @@ struct BufferStateChangeInfo {
   BarrierPosType barrier_end_pass_pos_type;
   std::byte _pad[2]{};
 };
-static unordered_map<BufferId, vector<BufferStateChangeInfo>> CreateBufferStateChangeInfoList(const uint32_t pass_num, const vector<CommandQueueType>& render_pass_command_queue_type_list, const unordered_map<BufferId, vector<BufferStateFlags>>& buffer_state_list, const unordered_map<BufferId, vector<vector<uint32_t>>>& buffer_user_pass_list, std::pmr::memory_resource* memory_resource) {
+static unordered_map<BufferId, vector<BufferStateChangeInfo>> CreateBufferStateChangeInfoList(const vector<CommandQueueTypeFlags>& render_pass_command_queue_type_flag_list, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>& node_distance_map, const unordered_map<BufferId, vector<BufferStateFlags>>& buffer_state_list, const unordered_map<BufferId, vector<vector<uint32_t>>>& buffer_user_pass_list, std::pmr::memory_resource* memory_resource) {
   unordered_map<BufferId, vector<BufferStateChangeInfo>> buffer_state_change_info_list_map{memory_resource};
   for (auto& [buffer_id, current_buffer_state_list] : buffer_state_list) {
     buffer_state_change_info_list_map.insert_or_assign(buffer_id, vector<BufferStateChangeInfo>{memory_resource});
@@ -441,11 +468,11 @@ static unordered_map<BufferId, vector<BufferStateChangeInfo>> CreateBufferStateC
     for (uint32_t buffer_index = 0; buffer_index < buffer_state_num - 1; buffer_index++) {
       auto& current_state = current_buffer_state_list[buffer_index];
       auto& next_state = current_buffer_state_list[buffer_index + 1];
-      auto valid_command_queue_type_flag = (GetBufferStateValidCommandQueueTypeFlags(current_state) & GetBufferStateValidCommandQueueTypeFlags(next_state));
+      auto valid_command_queue_type_flag = static_cast<CommandQueueTypeFlags>(GetBufferStateValidCommandQueueTypeFlags(current_state) & GetBufferStateValidCommandQueueTypeFlags(next_state));
       auto& current_users = current_buffer_user_pass_list[buffer_index];
       auto& next_users = current_buffer_user_pass_list[buffer_index + 1];
-      auto begin_pass = (buffer_index == 0 && current_users.empty()) ? 0 :FindClosestCommonDescendant(current_users);
-      auto end_pass = (buffer_index + 2 == buffer_state_num && next_users.empty()) ? (pass_num - 1) : FindClosestCommonAncestor(next_users);
+      auto begin_pass = FindClosestCommonDescendant(current_users, node_distance_map, render_pass_command_queue_type_flag_list, valid_command_queue_type_flag);
+      auto end_pass = FindClosestCommonAncestor(next_users, node_distance_map, render_pass_command_queue_type_flag_list, valid_command_queue_type_flag);
       current_buffer_state_change_info_list.push_back({
           .barrier_begin_pass_index = begin_pass,
           .barrier_end_pass_index = end_pass,
@@ -479,10 +506,15 @@ class RenderGraph {
     auto final_state_flag_list = ConvertBufferNameToBufferIdForFinalFlagList(render_pass_num_, config.GetRenderPassBufferStateList(), render_pass_buffer_id_list, config.GetBufferFinalStateList(), memory_resource_work, memory_resource_work);
     std::tie(buffer_state_list, buffer_user_pass_list) = MergeFinalBufferState(final_state_flag_list, std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work);
     std::tie(buffer_state_list, buffer_user_pass_list) = RevertBufferStateToInitialState(std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work);
-#if 0
-    // TODO
-    buffer_state_change_info_list_map_ = CreateBufferStateChangeInfoList(render_pass_num_, buffer_state_list, buffer_user_pass_list, memory_resource);
-#endif
+    auto render_pass_command_queue_type_list = config.GetRenderPassCommandQueueTypeList();
+    auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(render_pass_num_, render_pass_command_queue_type_list, memory_resource_work, memory_resource_work);
+    node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
+    auto inter_queue_pass_dependency = ConfigureInterQueuePassDependency(buffer_user_pass_list, render_pass_command_queue_type_list, memory_resource_work, memory_resource_work);
+    inter_queue_pass_dependency = RemoveRedundantDependencyFromSameQueuePredecessors(render_pass_num_, render_pass_command_queue_type_list, std::move(inter_queue_pass_dependency), memory_resource_work);
+    node_distance_map = AppendInterQueueNodeDistanceMap(inter_queue_pass_dependency, std::move(node_distance_map));
+    node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
+    auto render_pass_command_queue_type_flag_list = ConvertToCommandQueueTypeFlagsList(render_pass_command_queue_type_list, memory_resource_work);
+    buffer_state_change_info_list_map_ = CreateBufferStateChangeInfoList(render_pass_command_queue_type_flag_list, node_distance_map, buffer_state_list, buffer_user_pass_list, memory_resource);
   }
   constexpr uint32_t GetRenderPassNum() const { return render_pass_num_; }
   constexpr const auto& GetBufferIdList() const { return buffer_id_list_; }
@@ -714,10 +746,10 @@ TEST_CASE("graph node test / find descendant") {
   node_distance_map.at(2).insert_or_assign(2, 0);
   vector<uint32_t> ancestors;
   ancestors.push_back(0);
-  unordered_map<uint32_t, CommandQueueTypeFlags> render_pass_command_queue_type_list;
-  render_pass_command_queue_type_list.insert_or_assign(0, kCommandQueueTypeFlagsGraphics);
-  render_pass_command_queue_type_list.insert_or_assign(1, kCommandQueueTypeFlagsGraphics);
-  render_pass_command_queue_type_list.insert_or_assign(2, kCommandQueueTypeFlagsGraphics);
+  vector<CommandQueueTypeFlags> render_pass_command_queue_type_list;
+  render_pass_command_queue_type_list.push_back(kCommandQueueTypeFlagsGraphics);
+  render_pass_command_queue_type_list.push_back(kCommandQueueTypeFlagsGraphics);
+  render_pass_command_queue_type_list.push_back(kCommandQueueTypeFlagsGraphics);
   CommandQueueTypeFlags valid_queues{kCommandQueueTypeFlagsAll};
   CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 0);
   ancestors.push_back(1);
@@ -732,7 +764,7 @@ TEST_CASE("graph node test / find descendant") {
   CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 2);
   ancestors.clear();
   ancestors.push_back(0);
-  render_pass_command_queue_type_list.insert_or_assign(0, kCommandQueueTypeFlagsCompute);
+  render_pass_command_queue_type_list[0] = kCommandQueueTypeFlagsCompute;
   valid_queues = kCommandQueueTypeFlagsGraphics;
   CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 1);
   node_distance_map.insert_or_assign(3, unordered_map<uint32_t, int32_t>{});
@@ -741,14 +773,14 @@ TEST_CASE("graph node test / find descendant") {
   node_distance_map.at(3).insert_or_assign(2, 2);
   node_distance_map.at(1).insert_or_assign(3, -1);
   node_distance_map.at(2).insert_or_assign(3, -2);
-  render_pass_command_queue_type_list.insert_or_assign(3, kCommandQueueTypeFlagsGraphics);
+  render_pass_command_queue_type_list.push_back(kCommandQueueTypeFlagsGraphics);
   ancestors.clear();
   ancestors.push_back(0);
   ancestors.push_back(3);
   valid_queues = kCommandQueueTypeFlagsAll;
   CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 1);
   valid_queues = kCommandQueueTypeFlagsGraphics;
-  render_pass_command_queue_type_list.insert_or_assign(1, kCommandQueueTypeFlagsCompute);
+  render_pass_command_queue_type_list[1] = kCommandQueueTypeFlagsCompute;
   CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 2);
   ancestors.clear();
   ancestors.push_back(0);
@@ -778,10 +810,10 @@ TEST_CASE("graph node test / find ancestor") {
   node_distance_map.at(2).insert_or_assign(0, -2);
   node_distance_map.at(2).insert_or_assign(1, -1);
   node_distance_map.at(2).insert_or_assign(2, 0);
-  unordered_map<uint32_t, CommandQueueTypeFlags> render_pass_command_queue_type_list;
-  render_pass_command_queue_type_list.insert_or_assign(0, kCommandQueueTypeFlagsGraphics);
-  render_pass_command_queue_type_list.insert_or_assign(1, kCommandQueueTypeFlagsGraphics);
-  render_pass_command_queue_type_list.insert_or_assign(2, kCommandQueueTypeFlagsGraphics);
+  vector<CommandQueueTypeFlags> render_pass_command_queue_type_list;
+  render_pass_command_queue_type_list.push_back(kCommandQueueTypeFlagsGraphics);
+  render_pass_command_queue_type_list.push_back(kCommandQueueTypeFlagsGraphics);
+  render_pass_command_queue_type_list.push_back(kCommandQueueTypeFlagsGraphics);
   CommandQueueTypeFlags valid_queues{kCommandQueueTypeFlagsAll};
   vector<uint32_t> descendants;
   descendants.push_back(2);
@@ -798,11 +830,11 @@ TEST_CASE("graph node test / find ancestor") {
   CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 1);
   descendants.clear();
   descendants.push_back(2);
-  render_pass_command_queue_type_list.insert_or_assign(2, kCommandQueueTypeFlagsCompute);
+  render_pass_command_queue_type_list[2] = kCommandQueueTypeFlagsCompute;
   valid_queues = kCommandQueueTypeFlagsGraphics;
   CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 1);
   node_distance_map.insert_or_assign(3, unordered_map<uint32_t, int32_t>{});
-  render_pass_command_queue_type_list.insert_or_assign(3, kCommandQueueTypeFlagsGraphics);
+  render_pass_command_queue_type_list.push_back(kCommandQueueTypeFlagsGraphics);
   node_distance_map.at(3).insert_or_assign(3, 0);
   node_distance_map.at(3).insert_or_assign(0, -2);
   node_distance_map.at(3).insert_or_assign(1, -1);
@@ -814,7 +846,7 @@ TEST_CASE("graph node test / find ancestor") {
   valid_queues = kCommandQueueTypeFlagsAll;
   CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 1);
   valid_queues = kCommandQueueTypeFlagsGraphics;
-  render_pass_command_queue_type_list.insert_or_assign(1, kCommandQueueTypeFlagsCompute);
+  render_pass_command_queue_type_list[1] = kCommandQueueTypeFlagsCompute;
   CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 0);
   descendants.clear();
   descendants.push_back(2);
@@ -831,8 +863,8 @@ TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - single pass") {
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
-  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
-  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
+  vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
   CHECK(node_distance_map.size() == 1);
   CHECK(node_distance_map.contains(0));
@@ -844,9 +876,9 @@ TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - two pass (graphics only
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
-  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
-  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
-  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kGraphics);
+  vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
   CHECK(node_distance_map.size() == 2);
   CHECK(node_distance_map.contains(0));
@@ -878,9 +910,9 @@ TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - two independent pass (g
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
-  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
-  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
-  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
+  vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
   auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
   CHECK(node_distance_map.size() == 2);
   CHECK(node_distance_map.contains(0));
@@ -896,9 +928,9 @@ TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphic
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
-  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
-  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
-  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
+  vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
   auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
   unordered_map<uint32_t, unordered_set<uint32_t>> inter_queue_pass_dependency{&memory_resource_work};
   inter_queue_pass_dependency.insert_or_assign(1, unordered_set<uint32_t>{&memory_resource_work});
@@ -924,10 +956,10 @@ TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphic
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
-  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
-  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
-  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kGraphics);
-  render_pass_command_queue_type_list.insert_or_assign(2, CommandQueueType::kCompute);
+  vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
   auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
   unordered_map<uint32_t, unordered_set<uint32_t>> inter_queue_pass_dependency{&memory_resource_work};
   inter_queue_pass_dependency.insert_or_assign(2, unordered_set<uint32_t>{&memory_resource_work});
@@ -961,10 +993,10 @@ TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphic
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
-  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
-  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
-  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
-  render_pass_command_queue_type_list.insert_or_assign(2, CommandQueueType::kGraphics);
+  vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
   unordered_map<uint32_t, unordered_set<uint32_t>> inter_queue_pass_dependency{&memory_resource_work};
   inter_queue_pass_dependency.insert_or_assign(2, unordered_set<uint32_t>{&memory_resource_work});
@@ -998,12 +1030,12 @@ TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphic
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
-  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
-  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
-  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
-  render_pass_command_queue_type_list.insert_or_assign(2, CommandQueueType::kGraphics);
-  render_pass_command_queue_type_list.insert_or_assign(3, CommandQueueType::kCompute);
-  render_pass_command_queue_type_list.insert_or_assign(4, CommandQueueType::kCompute);
+  vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
   auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
   unordered_map<uint32_t, unordered_set<uint32_t>> inter_queue_pass_dependency{&memory_resource_work};
   inter_queue_pass_dependency.insert_or_assign(2, unordered_set<uint32_t>{&memory_resource_work});
@@ -1067,9 +1099,9 @@ TEST_CASE("ConfigureInterPassDependency") {
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
-  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
-  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
-  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
+  vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
   unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
   auto inter_queue_pass_dependency = ConfigureInterQueuePassDependency(buffer_user_pass_list, render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
   CHECK(inter_queue_pass_dependency.empty());
@@ -1088,10 +1120,10 @@ TEST_CASE("ConfigureInterPassDependency - multiple buffers") {
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
-  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
-  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
-  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
-  render_pass_command_queue_type_list.insert_or_assign(2, CommandQueueType::kCompute);
+  vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
   unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
   buffer_user_pass_list.insert_or_assign(0, vector<vector<uint32_t>>{&memory_resource_work});
   buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
@@ -1116,10 +1148,10 @@ TEST_CASE("ConfigureInterPassDependency - remove processed dependency from ances
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
-  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
-  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
-  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
-  render_pass_command_queue_type_list.insert_or_assign(2, CommandQueueType::kCompute);
+  vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
   unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
   buffer_user_pass_list.insert_or_assign(0, vector<vector<uint32_t>>{&memory_resource_work});
   buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
@@ -1137,10 +1169,10 @@ TEST_CASE("ConfigureInterPassDependency - remove processed dependency from ances
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
-  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
-  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
-  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
-  render_pass_command_queue_type_list.insert_or_assign(2, CommandQueueType::kCompute);
+  vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
   unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
   buffer_user_pass_list.insert_or_assign(0, vector<vector<uint32_t>>{&memory_resource_work});
   buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
@@ -1164,12 +1196,12 @@ TEST_CASE("ConfigureInterPassDependency - remove processed dependency from ances
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
-  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
-  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
-  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
-  render_pass_command_queue_type_list.insert_or_assign(2, CommandQueueType::kCompute);
-  render_pass_command_queue_type_list.insert_or_assign(3, CommandQueueType::kGraphics);
-  render_pass_command_queue_type_list.insert_or_assign(4, CommandQueueType::kGraphics);
+  vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
   buffer_user_pass_list.insert_or_assign(0, vector<vector<uint32_t>>{&memory_resource_work});
   buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
@@ -1205,10 +1237,10 @@ TEST_CASE("ConfigureInterPassDependency - 3 queue test") {
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
-  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
-  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kTransfer);
-  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
-  render_pass_command_queue_type_list.insert_or_assign(2, CommandQueueType::kGraphics);
+  vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
   buffer_user_pass_list.insert_or_assign(0, vector<vector<uint32_t>>{&memory_resource_work});
   buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
@@ -1233,10 +1265,10 @@ TEST_CASE("ConfigureInterPassDependency - dependent on multiple queue") {
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
-  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
-  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kTransfer);
-  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
-  render_pass_command_queue_type_list.insert_or_assign(2, CommandQueueType::kGraphics);
+  vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
   buffer_user_pass_list.insert_or_assign(0, vector<vector<uint32_t>>{&memory_resource_work});
   buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
@@ -1259,10 +1291,10 @@ TEST_CASE("ConfigureInterPassDependency - dependent on single queue") {
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
-  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
-  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kTransfer);
-  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
-  render_pass_command_queue_type_list.insert_or_assign(2, CommandQueueType::kGraphics);
+  vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
   buffer_user_pass_list.insert_or_assign(0, vector<vector<uint32_t>>{&memory_resource_work});
   buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
@@ -1287,9 +1319,9 @@ TEST_CASE("ConfigureInterPassDependency - remove same queue dependency") {
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
-  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
-  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
-  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kGraphics);
+  vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
   buffer_user_pass_list.insert_or_assign(0, vector<vector<uint32_t>>{&memory_resource_work});
   buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
