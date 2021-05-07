@@ -260,6 +260,54 @@ static unordered_map<uint32_t, unordered_map<uint32_t, int32_t>> AppendInterQueu
   }
   return std::move(node_distance_map);
 }
+static auto ConfigureInterQueuePassDependency(const unordered_map<BufferId, vector<vector<uint32_t>>>& buffer_user_pass_list, const unordered_map<uint32_t, CommandQueueType>& render_pass_command_queue_type_list, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
+  unordered_map<uint32_t, unordered_set<uint32_t>> inter_queue_pass_dependency{memory_resource};
+  unordered_map<CommandQueueType, uint32_t> src_pass_index_map{memory_resource_work};
+  src_pass_index_map.reserve(kCommandQueueTypeNum);
+  unordered_map<CommandQueueType, uint32_t> dst_pass_index_map{memory_resource_work};
+  dst_pass_index_map.reserve(kCommandQueueTypeNum);
+  for (auto& [buffer_id, buffer_user_list] : buffer_user_pass_list) {
+    auto user_pass_list_num = static_cast<uint32_t>(buffer_user_list.size());
+    for (uint32_t user_pass_list_index = 0; user_pass_list_index < user_pass_list_num - 1; user_pass_list_index++) {
+      if (buffer_user_list[user_pass_list_index].empty()) continue;
+      src_pass_index_map.clear();
+      dst_pass_index_map.clear();
+      auto& src_user_pass_list = buffer_user_list[user_pass_list_index];
+      for (uint32_t src_user_pass_list_index = 0; src_user_pass_list_index < src_user_pass_list.size(); src_user_pass_list_index++) {
+        auto& src_pass_index = src_user_pass_list[src_user_pass_list_index];
+        auto& src_command_queue_type = render_pass_command_queue_type_list.at(src_pass_index);
+        if (src_pass_index_map.contains(src_command_queue_type) && src_pass_index_map.at(src_command_queue_type) > src_pass_index) continue;
+        src_pass_index_map.insert_or_assign(src_command_queue_type, src_pass_index);
+      }
+      auto& dst_user_pass_list = buffer_user_list[user_pass_list_index + 1];
+      for (uint32_t dst_user_pass_list_index = 0; dst_user_pass_list_index < dst_user_pass_list.size(); dst_user_pass_list_index++) {
+        auto& dst_pass_index = dst_user_pass_list[dst_user_pass_list_index];
+        auto& dst_command_queue_type = render_pass_command_queue_type_list.at(dst_pass_index);
+        if (dst_pass_index_map.contains(dst_command_queue_type) && dst_pass_index_map.at(dst_command_queue_type) < dst_pass_index) continue;
+        dst_pass_index_map.insert_or_assign(dst_command_queue_type, dst_pass_index);
+      }
+      for (auto& [src_command_queue_type, src_pass_index] : src_pass_index_map) {
+        for (auto& [dst_command_queue_type, dst_pass_index] : dst_pass_index_map) {
+          if (src_command_queue_type == dst_command_queue_type) continue;
+          bool insert_new_pass = true;
+          if (inter_queue_pass_dependency.contains(dst_pass_index)) {
+            for (auto& pass_index : inter_queue_pass_dependency.at(dst_pass_index)) {
+              if (render_pass_command_queue_type_list.at(pass_index) != dst_command_queue_type) continue;
+              insert_new_pass = (pass_index > src_pass_index);
+              break;
+            }
+          } else {
+            inter_queue_pass_dependency.insert_or_assign(dst_pass_index, unordered_set<uint32_t>{memory_resource});
+          }
+          if (insert_new_pass) {
+            inter_queue_pass_dependency.at(dst_pass_index).insert(src_pass_index);
+          }
+        }
+      }
+    }
+  }
+  return inter_queue_pass_dependency;
+}
 enum CommandQueueTypeFlags : uint8_t {
   kCommandQueueTypeFlagsGraphics        = 0x01,
   kCommandQueueTypeFlagsCompute         = 0x02,
@@ -799,7 +847,6 @@ TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - two pass (graphics only
   CHECK(node_distance_map.at(1).contains(1));
   CHECK(node_distance_map.at(1).at(1) == 0);
 }
-// TODO configure pass dependence from buffer dependence on different queue
 TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - two independent pass (graphics+compute)") {
   using namespace illuminate;
   using namespace illuminate::gfx;
@@ -989,21 +1036,37 @@ TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphic
   CHECK(node_distance_map.at(4).contains(4));
   CHECK(node_distance_map.at(4).at(4) == 0);
 }
-#if 0
 TEST_CASE("ConfigureInterPassDependency") {
   using namespace illuminate;
   using namespace illuminate::gfx;
   PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
-  unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
   unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
-  auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
-  auto pass_dependency = ConfigurePassDependency(buffer_user_pass_list, intra_queue_node_distance_map, &memory_resource_work);
-  auto inter_queue_pass_dependency = ConfigureInterQueuePassDependency(inter_pass_dependency, &memory_resource_work);
-  // TODO
+  unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
+  auto inter_queue_pass_dependency = ConfigureInterQueuePassDependency(buffer_user_pass_list, render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+  CHECK(inter_queue_pass_dependency.empty());
+  buffer_user_pass_list.insert_or_assign(0, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(0).back().push_back(0);
+  SUBCASE("buffer used in different state") {
+    buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
+  }
+  buffer_user_pass_list.at(0).back().push_back(1);
+  inter_queue_pass_dependency = ConfigureInterQueuePassDependency(buffer_user_pass_list, render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+  CHECK(inter_queue_pass_dependency.size() == 1);
+  CHECK(inter_queue_pass_dependency.contains(1));
+  CHECK(inter_queue_pass_dependency.at(1).size() == 1);
+  CHECK(inter_queue_pass_dependency.at(1).contains(0));
 }
-#endif
+TEST_CASE("ConfigureInterPassDependency - multiple buffers") {
+}
+TEST_CASE("ConfigureInterPassDependency - 3 pass") {
+}
+TEST_CASE("ConfigureInterPassDependency - remove processed dependency from ancestor pass") {
+}
+TEST_CASE("ConfigureInterPassDependency - remove same queue dependency") {
+}
 TEST_CASE("barrier for load from srv") {
   using namespace illuminate;
   using namespace illuminate::gfx;
