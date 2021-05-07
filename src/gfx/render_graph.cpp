@@ -1049,9 +1049,7 @@ TEST_CASE("ConfigureInterPassDependency") {
   buffer_user_pass_list.insert_or_assign(0, vector<vector<uint32_t>>{&memory_resource_work});
   buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
   buffer_user_pass_list.at(0).back().push_back(0);
-  SUBCASE("buffer used in different state") {
-    buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
-  }
+  buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
   buffer_user_pass_list.at(0).back().push_back(1);
   inter_queue_pass_dependency = ConfigureInterQueuePassDependency(buffer_user_pass_list, render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
   CHECK(inter_queue_pass_dependency.size() == 1);
@@ -1060,12 +1058,219 @@ TEST_CASE("ConfigureInterPassDependency") {
   CHECK(inter_queue_pass_dependency.at(1).contains(0));
 }
 TEST_CASE("ConfigureInterPassDependency - multiple buffers") {
-}
-TEST_CASE("ConfigureInterPassDependency - 3 pass") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
+  render_pass_command_queue_type_list.insert_or_assign(2, CommandQueueType::kCompute);
+  unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
+  buffer_user_pass_list.insert_or_assign(0, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(0).back().push_back(0);
+  buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(0).back().push_back(1);
+  buffer_user_pass_list.insert_or_assign(1, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_user_pass_list.at(1).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(1).back().push_back(0);
+  buffer_user_pass_list.at(1).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(1).back().push_back(2);
+  auto inter_queue_pass_dependency = ConfigureInterQueuePassDependency(buffer_user_pass_list, render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+  CHECK(inter_queue_pass_dependency.size() == 2);
+  CHECK(inter_queue_pass_dependency.contains(1));
+  CHECK(inter_queue_pass_dependency.at(1).size() == 1);
+  CHECK(inter_queue_pass_dependency.at(1).contains(0));
+  CHECK(inter_queue_pass_dependency.contains(2));
+  CHECK(inter_queue_pass_dependency.at(2).size() == 1);
+  CHECK(inter_queue_pass_dependency.at(2).contains(0));
 }
 TEST_CASE("ConfigureInterPassDependency - remove processed dependency from ancestor pass") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
+  render_pass_command_queue_type_list.insert_or_assign(2, CommandQueueType::kCompute);
+  unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
+  buffer_user_pass_list.insert_or_assign(0, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(0).back().push_back(0);
+  buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(0).back().push_back(1);
+  buffer_user_pass_list.at(0).back().push_back(2);
+  auto inter_queue_pass_dependency = ConfigureInterQueuePassDependency(buffer_user_pass_list, render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+  CHECK(inter_queue_pass_dependency.size() == 1);
+  CHECK(inter_queue_pass_dependency.contains(1));
+  CHECK(inter_queue_pass_dependency.at(1).size() == 1);
+  CHECK(inter_queue_pass_dependency.at(1).contains(0));
+}
+TEST_CASE("ConfigureInterPassDependency - remove processed dependency from ancestor pass with multiple buffers") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
+  render_pass_command_queue_type_list.insert_or_assign(2, CommandQueueType::kCompute);
+  unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
+  buffer_user_pass_list.insert_or_assign(0, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(0).back().push_back(0);
+  buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(0).back().push_back(2);
+  buffer_user_pass_list.insert_or_assign(1, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_user_pass_list.at(1).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(1).back().push_back(0);
+  buffer_user_pass_list.at(1).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(1).back().push_back(1);
+  auto inter_queue_pass_dependency = ConfigureInterQueuePassDependency(buffer_user_pass_list, render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+  CHECK(inter_queue_pass_dependency.size() == 1);
+  CHECK(inter_queue_pass_dependency.contains(1));
+  CHECK(inter_queue_pass_dependency.at(1).size() == 1);
+  CHECK(inter_queue_pass_dependency.at(1).contains(0));
+  CHECK(!inter_queue_pass_dependency.contains(2));
+}
+TEST_CASE("ConfigureInterPassDependency - remove processed dependency from ancestor pass with different queue type") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
+  render_pass_command_queue_type_list.insert_or_assign(2, CommandQueueType::kCompute);
+  render_pass_command_queue_type_list.insert_or_assign(3, CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.insert_or_assign(4, CommandQueueType::kGraphics);
+  unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
+  buffer_user_pass_list.insert_or_assign(0, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(0).back().push_back(0);
+  buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(0).back().push_back(1);
+  buffer_user_pass_list.at(0).back().push_back(3);
+  buffer_user_pass_list.insert_or_assign(1, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_user_pass_list.at(1).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(1).back().push_back(1);
+  buffer_user_pass_list.at(1).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(1).back().push_back(2);
+  buffer_user_pass_list.at(1).back().push_back(4);
+  buffer_user_pass_list.insert_or_assign(2, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_user_pass_list.at(2).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(2).back().push_back(2);
+  buffer_user_pass_list.at(2).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(2).back().push_back(3);
+  auto inter_queue_pass_dependency = ConfigureInterQueuePassDependency(buffer_user_pass_list, render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+  CHECK(inter_queue_pass_dependency.size() == 2);
+  CHECK(inter_queue_pass_dependency.contains(1));
+  CHECK(inter_queue_pass_dependency.at(1).size() == 1);
+  CHECK(inter_queue_pass_dependency.at(1).contains(0));
+  CHECK(inter_queue_pass_dependency.contains(3));
+  CHECK(inter_queue_pass_dependency.at(3).size() == 1);
+  CHECK(inter_queue_pass_dependency.at(3).contains(2));
+  CHECK(!inter_queue_pass_dependency.contains(0));
+  CHECK(!inter_queue_pass_dependency.contains(2));
+  CHECK(!inter_queue_pass_dependency.contains(4));
+}
+TEST_CASE("ConfigureInterPassDependency - 3 queue test") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kTransfer);
+  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
+  render_pass_command_queue_type_list.insert_or_assign(2, CommandQueueType::kGraphics);
+  unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
+  buffer_user_pass_list.insert_or_assign(0, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(0).back().push_back(0);
+  buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(0).back().push_back(2);
+  buffer_user_pass_list.insert_or_assign(1, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_user_pass_list.at(1).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(1).back().push_back(0);
+  buffer_user_pass_list.at(1).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(1).back().push_back(1);
+  auto inter_queue_pass_dependency = ConfigureInterQueuePassDependency(buffer_user_pass_list, render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+  CHECK(inter_queue_pass_dependency.size() == 2);
+  CHECK(inter_queue_pass_dependency.contains(1));
+  CHECK(inter_queue_pass_dependency.at(1).size() == 1);
+  CHECK(inter_queue_pass_dependency.at(1).contains(0));
+  CHECK(inter_queue_pass_dependency.contains(2));
+  CHECK(inter_queue_pass_dependency.at(2).size() == 1);
+  CHECK(inter_queue_pass_dependency.at(2).contains(0));
+}
+TEST_CASE("ConfigureInterPassDependency - dependent on multiple queue") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kTransfer);
+  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
+  render_pass_command_queue_type_list.insert_or_assign(2, CommandQueueType::kGraphics);
+  unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
+  buffer_user_pass_list.insert_or_assign(0, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(0).back().push_back(0);
+  buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(0).back().push_back(2);
+  buffer_user_pass_list.insert_or_assign(1, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_user_pass_list.at(1).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(1).back().push_back(1);
+  buffer_user_pass_list.at(1).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(1).back().push_back(2);
+  auto inter_queue_pass_dependency = ConfigureInterQueuePassDependency(buffer_user_pass_list, render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+  CHECK(inter_queue_pass_dependency.size() == 1);
+  CHECK(inter_queue_pass_dependency.contains(2));
+  CHECK(inter_queue_pass_dependency.at(2).size() == 2);
+  CHECK(inter_queue_pass_dependency.at(2).contains(0));
+  CHECK(inter_queue_pass_dependency.at(2).contains(1));
+}
+TEST_CASE("ConfigureInterPassDependency - dependent on single queue") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kTransfer);
+  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kCompute);
+  render_pass_command_queue_type_list.insert_or_assign(2, CommandQueueType::kGraphics);
+  unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
+  buffer_user_pass_list.insert_or_assign(0, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(0).back().push_back(0);
+  buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(0).back().push_back(1);
+  buffer_user_pass_list.insert_or_assign(1, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_user_pass_list.at(1).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(1).back().push_back(1);
+  buffer_user_pass_list.at(1).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(1).back().push_back(2);
+  auto inter_queue_pass_dependency = ConfigureInterQueuePassDependency(buffer_user_pass_list, render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+  CHECK(inter_queue_pass_dependency.size() == 2);
+  CHECK(inter_queue_pass_dependency.contains(1));
+  CHECK(inter_queue_pass_dependency.at(1).size() == 1);
+  CHECK(inter_queue_pass_dependency.at(1).contains(0));
+  CHECK(inter_queue_pass_dependency.contains(2));
+  CHECK(inter_queue_pass_dependency.at(2).size() == 1);
+  CHECK(inter_queue_pass_dependency.at(2).contains(1));
 }
 TEST_CASE("ConfigureInterPassDependency - remove same queue dependency") {
+  using namespace illuminate;
+  using namespace illuminate::gfx;
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  unordered_map<uint32_t, CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.insert_or_assign(0, CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.insert_or_assign(1, CommandQueueType::kGraphics);
+  unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
+  buffer_user_pass_list.insert_or_assign(0, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(0).back().push_back(0);
+  SUBCASE("buffer used in different state") {
+    buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
+  }
+  buffer_user_pass_list.at(0).back().push_back(1);
+  auto inter_queue_pass_dependency = ConfigureInterQueuePassDependency(buffer_user_pass_list, render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+  CHECK(inter_queue_pass_dependency.empty());
 }
 TEST_CASE("barrier for load from srv") {
   using namespace illuminate;
