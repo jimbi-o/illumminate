@@ -308,6 +308,33 @@ static auto ConfigureInterQueuePassDependency(const unordered_map<BufferId, vect
   }
   return inter_queue_pass_dependency;
 }
+static unordered_map<uint32_t, unordered_set<uint32_t>> RemoveRedundantDependencyFromSameQueuePredecessors(const uint32_t pass_num, const unordered_map<uint32_t, CommandQueueType>& render_pass_command_queue_type_list, unordered_map<uint32_t, unordered_set<uint32_t>>&& inter_queue_pass_dependency, std::pmr::memory_resource* memory_resource_work) {
+  unordered_map<CommandQueueType, unordered_map<CommandQueueType, uint32_t>> processed_pass_per_queue{memory_resource_work};
+  for (uint32_t pass_index = 0; pass_index < pass_num; pass_index++) {
+    if (!inter_queue_pass_dependency.contains(pass_index)) continue;
+    auto& command_queue_type = render_pass_command_queue_type_list.at(pass_index);
+    if (!processed_pass_per_queue.contains(command_queue_type)) {
+      processed_pass_per_queue.insert_or_assign(command_queue_type, unordered_map<CommandQueueType, uint32_t>{memory_resource_work});
+    }
+    auto& processed_pass_list = processed_pass_per_queue.at(command_queue_type);
+    auto& dependant_pass_list = inter_queue_pass_dependency.at(pass_index);
+    auto it = dependant_pass_list.begin();
+    while (it != dependant_pass_list.end()) {
+      auto& dependant_pass = *it;
+      auto& dependant_pass_command_queue_type = render_pass_command_queue_type_list.at(dependant_pass);
+      if (processed_pass_list.contains(dependant_pass_command_queue_type) && processed_pass_list.at(dependant_pass_command_queue_type) >= dependant_pass) {
+        it = dependant_pass_list.erase(it);
+      } else {
+        processed_pass_list.insert_or_assign(dependant_pass_command_queue_type, dependant_pass);
+        it++;
+      }
+    }
+    if (dependant_pass_list.empty()) {
+      inter_queue_pass_dependency.erase(pass_index);
+    }
+  }
+  return std::move(inter_queue_pass_dependency);
+}
 enum CommandQueueTypeFlags : uint8_t {
   kCommandQueueTypeFlagsGraphics        = 0x01,
   kCommandQueueTypeFlagsCompute         = 0x02,
@@ -1126,6 +1153,7 @@ TEST_CASE("ConfigureInterPassDependency - remove processed dependency from ances
   buffer_user_pass_list.at(1).push_back(vector<uint32_t>{&memory_resource_work});
   buffer_user_pass_list.at(1).back().push_back(1);
   auto inter_queue_pass_dependency = ConfigureInterQueuePassDependency(buffer_user_pass_list, render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+  inter_queue_pass_dependency = RemoveRedundantDependencyFromSameQueuePredecessors(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, std::move(inter_queue_pass_dependency), &memory_resource_work);
   CHECK(inter_queue_pass_dependency.size() == 1);
   CHECK(inter_queue_pass_dependency.contains(1));
   CHECK(inter_queue_pass_dependency.at(1).size() == 1);
@@ -1161,6 +1189,7 @@ TEST_CASE("ConfigureInterPassDependency - remove processed dependency from ances
   buffer_user_pass_list.at(2).push_back(vector<uint32_t>{&memory_resource_work});
   buffer_user_pass_list.at(2).back().push_back(3);
   auto inter_queue_pass_dependency = ConfigureInterQueuePassDependency(buffer_user_pass_list, render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+  inter_queue_pass_dependency = RemoveRedundantDependencyFromSameQueuePredecessors(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, std::move(inter_queue_pass_dependency), &memory_resource_work);
   CHECK(inter_queue_pass_dependency.size() == 2);
   CHECK(inter_queue_pass_dependency.contains(1));
   CHECK(inter_queue_pass_dependency.at(1).size() == 1);
