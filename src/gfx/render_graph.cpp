@@ -402,7 +402,8 @@ static uint32_t FindClosestCommonAncestor(const vector<uint32_t>& descendants, c
     if (retval != invalid_pass) {
       return retval;
     }
-    for (uint32_t i = render_pass_command_queue_type_list.size() - 1; i < render_pass_command_queue_type_list.size()/*i is unsigned*/; i--) {
+    const auto len = static_cast<uint32_t>(render_pass_command_queue_type_list.size());
+    for (uint32_t i = len - 1; i < len/*i is unsigned*/; i--) {
       if (render_pass_command_queue_type_list[i] & valid_queues) return i;
     }
     logerror("valid pass not found in FindClosestCommonAncestor {}", valid_queues);
@@ -544,13 +545,27 @@ static std::tuple<BarrierListPerPass, BarrierListPerPass> ConfigureBarriers(cons
       BarrierConfig barrier{
         .buffer_id = buffer_id,
         .split_type = BarrierSplitType::kNone,
-        .params = BarrierTransition{
+      };
+      bool disable_split = false;
+      if ((buffer_state_change_info.state_before & kBufferStateFlagUav) && (buffer_state_change_info.state_after & kBufferStateFlagUav)) {
+        if ((buffer_state_change_info.state_before == kBufferStateFlagUavWrite && !(buffer_state_change_info.state_before & kBufferStateReadFlag) &&
+             buffer_state_change_info.state_after == kBufferStateFlagUavRead && !(buffer_state_change_info.state_after & kBufferStateWriteFlag)) ||
+            (buffer_state_change_info.state_before == kBufferStateFlagUavRead && !(buffer_state_change_info.state_before & kBufferStateWriteFlag) &&
+             buffer_state_change_info.state_after == kBufferStateFlagUavWrite && !(buffer_state_change_info.state_after & kBufferStateReadFlag))) {
+          barrier.params = BarrierUav{};
+          disable_split = true;
+        } else {
+          continue;
+        }
+      } else {
+        barrier.params = BarrierTransition{
           .state_before = buffer_state_change_info.state_before,
           .state_after  = buffer_state_change_info.state_after,
-        },
-      };
-      if (buffer_state_change_info.barrier_begin_pass_index == buffer_state_change_info.barrier_end_pass_index &&
-          buffer_state_change_info.barrier_begin_pass_pos_type == buffer_state_change_info.barrier_end_pass_pos_type) {
+        };
+      }
+      if (disable_split ||
+          (buffer_state_change_info.barrier_begin_pass_index == buffer_state_change_info.barrier_end_pass_index &&
+           buffer_state_change_info.barrier_begin_pass_pos_type == buffer_state_change_info.barrier_end_pass_pos_type)) {
         if (buffer_state_change_info.barrier_begin_pass_pos_type == BarrierPosType::kPrePass) {
           barriers_pre_pass[buffer_state_change_info.barrier_begin_pass_index].push_back(barrier);
         } else {
@@ -1517,12 +1532,15 @@ TEST_CASE("barrier for use compute queue") {
   CHECK(std::get<BarrierTransition>(barriers_prepass[1][1].params).state_after  == kBufferStateFlagRtv);
   CHECK(barriers_postpass.size() == 2);
   CHECK(barriers_postpass[0].empty());
-  CHECK(barriers_postpass[1].size() == 1);
-  CHECK(barriers_postpass[1][0].buffer_id == 1);
+  CHECK(barriers_postpass[1].size() == 2);
+  CHECK(barriers_postpass[1][0].buffer_id == 0);
   CHECK(barriers_postpass[1][0].split_type == BarrierSplitType::kNone);
-  CHECK(std::holds_alternative<BarrierTransition>(barriers_postpass[1][0].params));
-  CHECK(std::get<BarrierTransition>(barriers_postpass[1][0].params).state_before == kBufferStateFlagRtv);
-  CHECK(std::get<BarrierTransition>(barriers_postpass[1][0].params).state_after  == kBufferStateFlagPresent);
+  CHECK(std::holds_alternative<BarrierUav>(barriers_postpass[1][0].params));
+  CHECK(barriers_postpass[1][1].buffer_id == 1);
+  CHECK(barriers_postpass[1][1].split_type == BarrierSplitType::kNone);
+  CHECK(std::holds_alternative<BarrierTransition>(barriers_postpass[1][1].params));
+  CHECK(std::get<BarrierTransition>(barriers_postpass[1][1].params).state_before == kBufferStateFlagRtv);
+  CHECK(std::get<BarrierTransition>(barriers_postpass[1][1].params).state_after  == kBufferStateFlagPresent);
 }
 #if 0
 TEST_CASE("barrier for load from srv") {
