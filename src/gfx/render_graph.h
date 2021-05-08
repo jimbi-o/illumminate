@@ -161,40 +161,5 @@ struct BarrierConfig {
 using BarrierListPerPass = vector<vector<BarrierConfig>>;
 std::tuple<BarrierListPerPass, BarrierListPerPass> ConfigureBarriers(const RenderGraph& render_graph, std::pmr::memory_resource* memory_resource_barriers);
 unordered_map<uint32_t, unordered_set<uint32_t>> ConfigureQueueSignals(const RenderGraph& render_graph, std::pmr::memory_resource* memory_resource_signals, std::pmr::memory_resource* memory_resource_work);
-#if 0
-struct BufferStateSet {
-  BufferId buffer_id;
-  BufferStateFlags state;
-};
-using RenderPassBufferInfo = vector<BufferStateSet>;
-using RenderPassBufferInfoList = vector<RenderPassBufferInfo>;
-struct BarrierTransition {
-  BufferStateFlags state_before;
-  BufferStateFlags state_after;
-};
-enum class BarrierSplitType : uint8_t { kNone = 0, kBegin, kEnd, };
-struct BarrierConfig {
-  BufferId buffer_id;
-  BarrierSplitType split_type;
-  std::byte _pad[3]{};
-  std::variant<BarrierTransition> params;
-};
-vector<vector<BarrierConfig>> ConfigureBarrier(const RenderPassBufferInfoList& pass_buffer_info_list, std::pmr::memory_resource* memory_resource_barrier, std::pmr::memory_resource* memory_resource);
-using SignalQueueRenderPassInfo = unordered_map<uint32_t, uint32_t>;
-enum class BufferReadWriteFlag : uint8_t {
-  kRead      = 0x1,
-  kWrite     = 0x2,
-  kReadWrite = (kRead | kWrite),
-};
-struct RenderPassBufferReadWriteInfo {
-  BufferId buffer_id;
-  BufferReadWriteFlag read_write_flag;
-  std::byte _pad[3]{};
-};
-using RenderPassBufferReadWriteInfoListPerPass = vector<RenderPassBufferReadWriteInfo>;
-using RenderPassBufferReadWriteInfoList        = vector<RenderPassBufferReadWriteInfoListPerPass>;
-enum class RenderFrameLoopSetting :uint8_t { kNoLoop = 0, kWithLoop, };
-SignalQueueRenderPassInfo ConfigureQueueSignal(const vector<CommandQueueType>& render_pass_command_queue_type, const RenderPassBufferReadWriteInfoList& pass_buffer_info_list, const RenderFrameLoopSetting loop_type, std::pmr::memory_resource* memory_resource_signal_info, std::pmr::memory_resource* memory_resource_work);
-#endif
 }
 #endif
