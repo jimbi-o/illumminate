@@ -1,76 +1,27 @@
 #include "render_graph.h"
 namespace illuminate::gfx {
-enum ReadWriteFlag : uint8_t {
-  kReadFlag      = 0x1,
-  kWriteFlag     = 0x2,
-  kReadWriteFlag = (kReadFlag | kWriteFlag),
-};
+constexpr bool IsBufferStateFlagMergeAcceptable(const BufferStateFlags& state) {
+  if (state & kBufferStateFlagUav) return false;
+  if (state & kBufferStateFlagRtv) return false;
+  if (state & kBufferStateFlagDsvWrite) return false;
+  if (state & kBufferStateFlagCopyDst) return false;
+  if (state & kBufferStateFlagPresent) return false;
+  return true;
+}
+constexpr bool IsBufferStateFlagsMergeable(const BufferStateFlags& a, const BufferStateFlags& b) {
+  if (!IsBufferStateFlagMergeAcceptable(a)) return false;
+  if (!IsBufferStateFlagMergeAcceptable(b)) return false;
+  return true;
+}
+constexpr BufferStateFlags MergeBufferStateFlags(const BufferStateFlags& a, const BufferStateFlags& b) {
+  return static_cast<BufferStateFlags>(a | b);
+}
 static BufferStateFlags MergeReadWriteFlag(const BufferStateFlags& state, const ReadWriteFlag& rw_flag) {
   BufferStateFlags ret = state;
   if (rw_flag & kReadFlag) ret = static_cast<BufferStateFlags>(ret | kBufferStateReadFlag);
   if (rw_flag & kWriteFlag) ret = static_cast<BufferStateFlags>(ret | kBufferStateWriteFlag);
   return ret;
 }
-struct RenderGraphBufferStateConfig {
-  StrId buffer_name;
-  BufferStateFlags state;
-  ReadWriteFlag read_write_flag;
-  std::byte _pad[3]{};
-};
-struct RenderPassConfig {
-  StrId pass_name;
-  CommandQueueType command_queue_type;
-  std::byte _pad[7]{};
-};
-using RenderPassBufferStateList = vector<vector<RenderGraphBufferStateConfig>>;
-class RenderGraphConfig {
- public:
-  RenderGraphConfig(std::pmr::memory_resource* memory_resource)
-      : memory_resource_(memory_resource)
-      , pass_num_(0)
-      , render_pass_id_map_(memory_resource_)
-      , render_pass_command_queue_type_list_(memory_resource_)
-      , render_pass_buffer_state_list_(memory_resource_)
-      , initial_buffer_state_list_(memory_resource_)
-      , final_buffer_state_list_(memory_resource_)
-  {}
-  uint32_t CreateNewRenderPass(RenderPassConfig&& render_pass_config) {
-    if (render_pass_id_map_.contains(render_pass_config.pass_name)) {
-      logerror("render pass name dup. {}", render_pass_config.pass_name);
-      return ~0u;
-    }
-    const auto pass_index = pass_num_;
-    render_pass_id_map_.insert_or_assign(render_pass_config.pass_name, pass_index);
-    ASSERT(pass_index == render_pass_command_queue_type_list_.size());
-    render_pass_command_queue_type_list_.push_back(render_pass_config.command_queue_type);
-    ASSERT(render_pass_buffer_state_list_.size() == pass_index);
-    render_pass_buffer_state_list_.push_back(vector<RenderGraphBufferStateConfig>{memory_resource_});
-    pass_num_++;
-    return pass_index;
-  }
-  void AddNewBufferConfig(const uint32_t pass_index, RenderGraphBufferStateConfig&& config)  {
-    render_pass_buffer_state_list_[pass_index].push_back(std::move(config));
-  }
-  void AddBufferInitialState(const StrId& buffer_name, const BufferStateFlags flag) { initial_buffer_state_list_.insert_or_assign(buffer_name, flag); }
-  void AddBufferFinalState(const StrId& buffer_name, const BufferStateFlags flag) { final_buffer_state_list_.insert_or_assign(buffer_name, flag); }
-  constexpr auto GetRenderPassNum() const { return pass_num_; }
-  uint32_t GetRenderPassIndex(const StrId& pass_id) const { return render_pass_id_map_.at(pass_id); }
-  constexpr const auto& GetRenderPassCommandQueueTypeList() const { return render_pass_command_queue_type_list_; }
-  constexpr const auto& GetRenderPassBufferStateList() const { return render_pass_buffer_state_list_; }
-  constexpr const auto& GetBufferInitialStateList() const { return initial_buffer_state_list_; }
-  constexpr const auto& GetBufferFinalStateList() const { return final_buffer_state_list_; }
- private:
-  std::pmr::memory_resource* memory_resource_;
-  uint32_t pass_num_;
-  unordered_map<uint32_t, uint32_t> render_pass_id_map_;
-  vector<CommandQueueType> render_pass_command_queue_type_list_;
-  RenderPassBufferStateList render_pass_buffer_state_list_;
-  unordered_map<StrId, BufferStateFlags> initial_buffer_state_list_;
-  unordered_map<StrId, BufferStateFlags> final_buffer_state_list_;
-  RenderGraphConfig() = delete;
-  RenderGraphConfig(const RenderGraphConfig&) = delete;
-  void operator=(const RenderGraphConfig&) = delete;
-};
 static std::tuple<vector<BufferId>, vector<vector<BufferId>>, vector<vector<BufferStateFlags>>> InitBufferIdList(const uint32_t pass_num, const RenderPassBufferStateList& render_pass_buffer_state_list, std::pmr::memory_resource* memory_resource) {
   vector<BufferId> buffer_id_list{memory_resource};
   vector<vector<BufferId>> render_pass_buffer_id_list{memory_resource};
@@ -449,16 +400,6 @@ static vector<CommandQueueTypeFlags> ConvertToCommandQueueTypeFlagsList(const ve
   }
   return retval;
 }
-enum class BarrierPosType : uint8_t { kPrePass, kPostPass, };
-struct BufferStateChangeInfo {
-  uint32_t barrier_begin_pass_index;
-  uint32_t barrier_end_pass_index;
-  BufferStateFlags state_before;
-  BufferStateFlags state_after;
-  BarrierPosType barrier_begin_pass_pos_type;
-  BarrierPosType barrier_end_pass_pos_type;
-  std::byte _pad[2]{};
-};
 static unordered_map<BufferId, vector<BufferStateChangeInfo>> CreateBufferStateChangeInfoList(const vector<CommandQueueTypeFlags>& render_pass_command_queue_type_flag_list, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>& node_distance_map, const unordered_map<BufferId, vector<BufferStateFlags>>& buffer_state_list, const unordered_map<BufferId, vector<vector<uint32_t>>>& buffer_user_pass_list, std::pmr::memory_resource* memory_resource) {
   unordered_map<BufferId, vector<BufferStateChangeInfo>> buffer_state_change_info_list_map{memory_resource};
   for (auto& [buffer_id, current_buffer_state_list] : buffer_state_list) {
@@ -492,55 +433,39 @@ static unordered_map<BufferId, vector<BufferStateChangeInfo>> CreateBufferStateC
   }
   return buffer_state_change_info_list_map;
 }
-class RenderGraph {
- public:
-  RenderGraph(RenderGraphConfig&& config, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work)
-      : memory_resource_(memory_resource)
-      , render_pass_num_(config.GetRenderPassNum())
-  {
-    vector<vector<BufferId>> render_pass_buffer_id_list{memory_resource_work};
-    vector<vector<BufferStateFlags>> render_pass_buffer_state_flag_list{memory_resource_work};
-    std::tie(buffer_id_list_, render_pass_buffer_id_list, render_pass_buffer_state_flag_list) = InitBufferIdList(render_pass_num_, config.GetRenderPassBufferStateList(), memory_resource_);
-    auto [buffer_state_list, buffer_user_pass_list] = CreateBufferStateList(render_pass_num_, buffer_id_list_, render_pass_buffer_id_list, render_pass_buffer_state_flag_list, memory_resource_work);
-    auto initial_state_flag_list = ConvertBufferNameToBufferIdForInitialFlagList(render_pass_num_, config.GetRenderPassBufferStateList(), render_pass_buffer_id_list, config.GetBufferInitialStateList(), memory_resource_work, memory_resource_work);
-    std::tie(buffer_state_list, buffer_user_pass_list) = MergeInitialBufferState(initial_state_flag_list, std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work);
-    auto final_state_flag_list = ConvertBufferNameToBufferIdForFinalFlagList(render_pass_num_, config.GetRenderPassBufferStateList(), render_pass_buffer_id_list, config.GetBufferFinalStateList(), memory_resource_work, memory_resource_work);
-    std::tie(buffer_state_list, buffer_user_pass_list) = MergeFinalBufferState(final_state_flag_list, std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work);
-    std::tie(buffer_state_list, buffer_user_pass_list) = RevertBufferStateToInitialState(std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work);
-    auto render_pass_command_queue_type_list = config.GetRenderPassCommandQueueTypeList();
-    auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(render_pass_num_, render_pass_command_queue_type_list, memory_resource_work, memory_resource_work);
-    node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
-    auto inter_queue_pass_dependency = ConfigureInterQueuePassDependency(buffer_user_pass_list, render_pass_command_queue_type_list, memory_resource_work, memory_resource_work);
-    inter_queue_pass_dependency = RemoveRedundantDependencyFromSameQueuePredecessors(render_pass_num_, render_pass_command_queue_type_list, std::move(inter_queue_pass_dependency), memory_resource_work);
-    node_distance_map = AppendInterQueueNodeDistanceMap(inter_queue_pass_dependency, std::move(node_distance_map));
-    node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
-    auto render_pass_command_queue_type_flag_list = ConvertToCommandQueueTypeFlagsList(render_pass_command_queue_type_list, memory_resource_work);
-    buffer_state_change_info_list_map_ = CreateBufferStateChangeInfoList(render_pass_command_queue_type_flag_list, node_distance_map, buffer_state_list, buffer_user_pass_list, memory_resource);
-  }
-  constexpr uint32_t GetRenderPassNum() const { return render_pass_num_; }
-  constexpr const auto& GetBufferIdList() const { return buffer_id_list_; }
-  const auto& GetBufferStateChangeInfoList(const BufferId& buffer_id) const { return buffer_state_change_info_list_map_.at(buffer_id); }
-  // TODO create function to return initial creation state for buffers not in initial_buffer_state_list_with_buffer_name (in separate function)
- private:
-  std::pmr::memory_resource* memory_resource_;
-  uint32_t render_pass_num_;
-  vector<BufferId> buffer_id_list_;
-  unordered_map<BufferId, vector<uint32_t>> buffer_user_pass_index_;
-  unordered_map<BufferId, vector<BufferStateChangeInfo>> buffer_state_change_info_list_map_;
-  RenderGraph() = delete;
-  RenderGraph(const RenderGraph&) = delete;
-  void operator=(const RenderGraph&) = delete;
-};
-using BarrierListPerPass = vector<vector<BarrierConfig>>;
-static std::tuple<BarrierListPerPass, BarrierListPerPass> ConfigureBarriers(const RenderGraph& render_graph, std::pmr::memory_resource* memory_resource_barriers) {
+RenderGraph::RenderGraph(RenderGraphConfig&& config, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work)
+    : memory_resource_(memory_resource)
+    , render_pass_num_(config.GetRenderPassNum())
+{
+  vector<vector<BufferStateFlags>> render_pass_buffer_state_flag_list{memory_resource_work};
+  std::tie(buffer_id_list_, render_pass_buffer_id_list_, render_pass_buffer_state_flag_list) = InitBufferIdList(render_pass_num_, config.GetRenderPassBufferStateList(), memory_resource_);
+  auto [buffer_state_list, buffer_user_pass_list] = CreateBufferStateList(render_pass_num_, buffer_id_list_, render_pass_buffer_id_list_, render_pass_buffer_state_flag_list, memory_resource_work);
+  auto initial_state_flag_list = ConvertBufferNameToBufferIdForInitialFlagList(render_pass_num_, config.GetRenderPassBufferStateList(), render_pass_buffer_id_list_, config.GetBufferInitialStateList(), memory_resource_work, memory_resource_work);
+  std::tie(buffer_state_list, buffer_user_pass_list) = MergeInitialBufferState(initial_state_flag_list, std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work);
+  auto final_state_flag_list = ConvertBufferNameToBufferIdForFinalFlagList(render_pass_num_, config.GetRenderPassBufferStateList(), render_pass_buffer_id_list_, config.GetBufferFinalStateList(), memory_resource_work, memory_resource_work);
+  std::tie(buffer_state_list, buffer_user_pass_list) = MergeFinalBufferState(final_state_flag_list, std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work);
+  std::tie(buffer_state_list, buffer_user_pass_list) = RevertBufferStateToInitialState(std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work);
+  auto render_pass_command_queue_type_list = config.GetRenderPassCommandQueueTypeList();
+  auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(render_pass_num_, render_pass_command_queue_type_list, memory_resource_work, memory_resource_work);
+  node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
+  inter_queue_pass_dependency_ = ConfigureInterQueuePassDependency(buffer_user_pass_list, render_pass_command_queue_type_list, memory_resource, memory_resource_work);
+  inter_queue_pass_dependency_ = RemoveRedundantDependencyFromSameQueuePredecessors(render_pass_num_, render_pass_command_queue_type_list, std::move(inter_queue_pass_dependency_), memory_resource_work);
+  node_distance_map = AppendInterQueueNodeDistanceMap(inter_queue_pass_dependency_, std::move(node_distance_map));
+  node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
+  auto render_pass_command_queue_type_flag_list = ConvertToCommandQueueTypeFlagsList(render_pass_command_queue_type_list, memory_resource_work);
+  buffer_state_change_info_list_map_ = CreateBufferStateChangeInfoList(render_pass_command_queue_type_flag_list, node_distance_map, buffer_state_list, buffer_user_pass_list, memory_resource);
+  render_pass_command_queue_type_list_ = std::move(render_pass_command_queue_type_list);
+}
+std::tuple<BarrierListPerPass, BarrierListPerPass> ConfigureBarriers(const RenderGraph& render_graph, std::pmr::memory_resource* memory_resource_barriers) {
   auto render_pass_num = render_graph.GetRenderPassNum();
   BarrierListPerPass barriers_pre_pass{memory_resource_barriers};
   barriers_pre_pass.resize(render_pass_num);
   BarrierListPerPass barriers_post_pass{memory_resource_barriers};
   barriers_post_pass.resize(render_pass_num);
+  auto& buffer_state_change_info_list_map = render_graph.GetBufferStateChangeInfoListMap();
   auto& buffer_id_list = render_graph.GetBufferIdList();
   for (auto& buffer_id : buffer_id_list) {
-    auto& buffer_state_change_info_list = render_graph.GetBufferStateChangeInfoList(buffer_id);
+    auto& buffer_state_change_info_list = buffer_state_change_info_list_map.at(buffer_id);
     for (auto& buffer_state_change_info : buffer_state_change_info_list) {
       BarrierConfig barrier{
         .buffer_id = buffer_id,
@@ -588,6 +513,49 @@ static std::tuple<BarrierListPerPass, BarrierListPerPass> ConfigureBarriers(cons
     }
   }
   return {barriers_pre_pass, barriers_post_pass};
+}
+unordered_map<uint32_t, unordered_set<uint32_t>> ConfigureQueueSignals(const RenderGraph& render_graph, std::pmr::memory_resource* memory_resource_signals, std::pmr::memory_resource* memory_resource_work) {
+  unordered_map<uint32_t, unordered_set<uint32_t>> queue_signal{memory_resource_signals};
+  auto& inter_queue_pass_dependency = render_graph.GetInterQueuePassDependency();
+  for (auto& [dst_pass_index, src_pass_list] : inter_queue_pass_dependency) {
+    for (auto& src_pass_index : src_pass_list) {
+      if (!queue_signal.contains(src_pass_index)) {
+        queue_signal.insert_or_assign(src_pass_index, unordered_set<uint32_t>{memory_resource_signals});
+      }
+      queue_signal.at(src_pass_index).insert(dst_pass_index);
+    }
+  }
+  unordered_map<CommandQueueType, uint32_t> first_pass_per_queue{memory_resource_work};
+  unordered_map<CommandQueueType, uint32_t> last_pass_per_queue{memory_resource_work};
+  auto pass_num = render_graph.GetRenderPassNum();
+  auto& render_pass_command_queue_type_list = render_graph.GetRenderPassCommandQueueTypeList();
+  for (uint32_t i = 0; i < pass_num; i++) {
+    auto& command_queue_type = render_pass_command_queue_type_list[i];
+    if (!first_pass_per_queue.contains(command_queue_type)) {
+      first_pass_per_queue.insert_or_assign(command_queue_type, i);
+    }
+    last_pass_per_queue.insert_or_assign(command_queue_type, i);
+  }
+  {
+    auto last_pass_it = last_pass_per_queue.begin();
+    while (last_pass_it != last_pass_per_queue.end()) {
+      if (queue_signal.contains(last_pass_it->second)) {
+        last_pass_it = last_pass_per_queue.erase(last_pass_it);
+      } else {
+        last_pass_it++;
+      }
+    }
+  }
+  for (auto& [src_command_queue_type, src_pass] : last_pass_per_queue) {
+    for (auto& [dst_command_queue_type, dst_pass] : first_pass_per_queue) {
+      if (src_command_queue_type == dst_command_queue_type) continue;
+      if (!queue_signal.contains(src_pass)) {
+        queue_signal.insert_or_assign(src_pass, unordered_set<uint32_t>(memory_resource_signals));
+      }
+      queue_signal.at(src_pass).insert(dst_pass);
+    }
+  }
+  return queue_signal;
 }
 #if 0
 struct BufferStateListPerBuffer {
@@ -745,7 +713,7 @@ std::byte buffer[buffer_offset_in_bytes_work + buffer_size_in_bytes_work]{};
 TEST_CASE("graph node test / find descendant") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   unordered_map<uint32_t, unordered_map<uint32_t, int32_t>> node_distance_map;
   node_distance_map.insert_or_assign(0, unordered_map<uint32_t, int32_t>{});
   node_distance_map.at(0).insert_or_assign(0, 0);
@@ -811,7 +779,7 @@ TEST_CASE("graph node test / find descendant") {
 TEST_CASE("graph node test / find ancestor") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   unordered_map<uint32_t, unordered_map<uint32_t, int32_t>> node_distance_map;
   node_distance_map.insert_or_assign(0, unordered_map<uint32_t, int32_t>{});
   node_distance_map.at(0).insert_or_assign(0, 0);
@@ -877,7 +845,7 @@ TEST_CASE("graph node test / find ancestor") {
 TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - single pass") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
@@ -890,7 +858,7 @@ TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - single pass") {
 TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - two pass (graphics only)") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
@@ -924,7 +892,7 @@ TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - two pass (graphics only
 TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - two independent pass (graphics+compute)") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
@@ -942,7 +910,7 @@ TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - two independent pass (g
 TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphics->compute)") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
@@ -970,7 +938,7 @@ TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphic
 TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphics->compute(+graphics))") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
@@ -1007,7 +975,7 @@ TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphic
 TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphics+compute->graphics)") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
@@ -1044,7 +1012,7 @@ TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphic
 TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphics+compute->graphics+compute)") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
@@ -1113,7 +1081,7 @@ TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphic
 TEST_CASE("ConfigureInterPassDependency") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
@@ -1134,7 +1102,7 @@ TEST_CASE("ConfigureInterPassDependency") {
 TEST_CASE("ConfigureInterPassDependency - multiple buffers") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
@@ -1162,7 +1130,7 @@ TEST_CASE("ConfigureInterPassDependency - multiple buffers") {
 TEST_CASE("ConfigureInterPassDependency - remove processed dependency from ancestor pass") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
@@ -1183,7 +1151,7 @@ TEST_CASE("ConfigureInterPassDependency - remove processed dependency from ances
 TEST_CASE("ConfigureInterPassDependency - remove processed dependency from ancestor pass with multiple buffers") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
@@ -1210,7 +1178,7 @@ TEST_CASE("ConfigureInterPassDependency - remove processed dependency from ances
 TEST_CASE("ConfigureInterPassDependency - remove processed dependency from ancestor pass with different queue type") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
@@ -1251,7 +1219,7 @@ TEST_CASE("ConfigureInterPassDependency - remove processed dependency from ances
 TEST_CASE("ConfigureInterPassDependency - 3 queue test") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
@@ -1279,7 +1247,7 @@ TEST_CASE("ConfigureInterPassDependency - 3 queue test") {
 TEST_CASE("ConfigureInterPassDependency - dependent on multiple queue") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
@@ -1305,7 +1273,7 @@ TEST_CASE("ConfigureInterPassDependency - dependent on multiple queue") {
 TEST_CASE("ConfigureInterPassDependency - dependent on single queue") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
@@ -1333,7 +1301,7 @@ TEST_CASE("ConfigureInterPassDependency - dependent on single queue") {
 TEST_CASE("ConfigureInterPassDependency - remove same queue dependency") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
@@ -1351,8 +1319,8 @@ TEST_CASE("ConfigureInterPassDependency - remove same queue dependency") {
 TEST_CASE("barrier for load from srv") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_scene(&buffer[buffer_size_in_bytes_scene], buffer_size_in_bytes_scene);
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_scene(&buffer[buffer_offset_in_bytes_scene], buffer_size_in_bytes_scene);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   RenderGraphConfig render_graph_config(&memory_resource_scene);
   CHECK(render_graph_config.GetRenderPassNum() == 0);
   auto render_pass_id = render_graph_config.CreateNewRenderPass({.pass_name = StrId("draw"), .command_queue_type = CommandQueueType::kGraphics});
@@ -1424,7 +1392,7 @@ TEST_CASE("barrier for load from srv") {
     CHECK(buffer_list[1] == 1);
   }
   {
-    auto& buffer_state_change_info_list = render_graph.GetBufferStateChangeInfoList(0);
+    auto& buffer_state_change_info_list = render_graph.GetBufferStateChangeInfoListMap().at(0);
     CHECK(buffer_state_change_info_list.size() == 2);
     {
       auto& buffer_state_change_info = buffer_state_change_info_list[0];
@@ -1446,7 +1414,7 @@ TEST_CASE("barrier for load from srv") {
     }
   }
   {
-    auto& buffer_state_change_info_list = render_graph.GetBufferStateChangeInfoList(1);
+    auto& buffer_state_change_info_list = render_graph.GetBufferStateChangeInfoListMap().at(1);
     CHECK(buffer_state_change_info_list.size() == 2);
     {
       auto& buffer_state_change_info = buffer_state_change_info_list[0];
@@ -1503,8 +1471,8 @@ TEST_CASE("barrier for load from srv") {
 TEST_CASE("barrier for use compute queue") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_scene(&buffer[buffer_size_in_bytes_scene], buffer_size_in_bytes_scene);
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_scene(&buffer[buffer_offset_in_bytes_scene], buffer_size_in_bytes_scene);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   RenderGraphConfig render_graph_config(&memory_resource_scene);
   auto render_pass_index = render_graph_config.CreateNewRenderPass({.pass_name = StrId("draw"), .command_queue_type = CommandQueueType::kCompute});
   CHECK(render_graph_config.GetRenderPassIndex(StrId("draw")) == 0);
@@ -1541,12 +1509,20 @@ TEST_CASE("barrier for use compute queue") {
   CHECK(std::holds_alternative<BarrierTransition>(barriers_postpass[1][1].params));
   CHECK(std::get<BarrierTransition>(barriers_postpass[1][1].params).state_before == kBufferStateFlagRtv);
   CHECK(std::get<BarrierTransition>(barriers_postpass[1][1].params).state_after  == kBufferStateFlagPresent);
+  auto queue_signals = ConfigureQueueSignals(render_graph, &memory_resource_work, &memory_resource_work);
+  CHECK(queue_signals.size() == 2);
+  CHECK(queue_signals.contains(0));
+  CHECK(queue_signals.at(0).size() == 1);
+  CHECK(queue_signals.at(0).contains(1));
+  CHECK(queue_signals.contains(1));
+  CHECK(queue_signals.at(1).size() == 1);
+  CHECK(queue_signals.at(1).contains(0));
 }
 #if 0
 TEST_CASE("barrier for load from srv") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   RenderPassBufferInfo render_pass_buffer_info_initial{&memory_resource_work};
   render_pass_buffer_info_initial.push_back({
       .buffer_id = 2,
@@ -1702,7 +1678,7 @@ TEST_CASE("barrier for load from srv") {
 TEST_CASE("queue signal for use compute queue") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type{&memory_resource_work};
   render_pass_command_queue_type.push_back(CommandQueueType::kCompute);
   render_pass_command_queue_type.push_back(CommandQueueType::kGraphics);
@@ -1733,7 +1709,7 @@ TEST_CASE("queue signal for use compute queue") {
 TEST_CASE("barrier for use compute queue") {
   using namespace illuminate;
   using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type{&memory_resource_work};
   render_pass_command_queue_type.push_back(CommandQueueType::kCompute);
   render_pass_command_queue_type.push_back(CommandQueueType::kGraphics);

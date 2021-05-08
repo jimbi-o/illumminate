@@ -355,6 +355,19 @@ constexpr D3D12_RESOURCE_STATES ConvertToD3d12ResourceState(const BufferStateFla
   }
   return state;
 }
+struct SignalValues {
+  unordered_map<CommandQueueType, uint64_t> used_signal_val;
+  vector<unordered_map<CommandQueueType, uint64_t>> frame_wait_signal;
+  SignalValues(std::pmr::memory_resource* memory_resource, const uint32_t frame_buffer_num)
+      : used_signal_val(memory_resource)
+      , frame_wait_signal(frame_buffer_num, memory_resource)
+  {}
+};
+void SignalQueueOnFrameEnd(CommandQueue* const command_queue, CommandQueueType command_queue_type, unordered_map<CommandQueueType, uint64_t>* const used_signal_val, unordered_map<CommandQueueType, uint64_t>* const frame_wait_signal) {
+  auto& signal_val = ++(*used_signal_val)[command_queue_type];
+  command_queue->RegisterSignal(command_queue_type, signal_val);
+  (*frame_wait_signal)[command_queue_type] = signal_val;
+}
 constexpr D3D12_RESOURCE_STATES GetInitialD3d12ResourceStateFlag(const BufferConfig& buffer_config) {
   return ConvertToD3d12ResourceState(buffer_config.initial_state_flags);
 }
@@ -573,19 +586,6 @@ class FrameBufferedBufferSet {
   std::pmr::memory_resource* memory_resource_;
   FrameBufferedBufferId buffer_id_used_ = 0;
 };
-struct SignalValues {
-  unordered_map<CommandQueueType, uint64_t> used_signal_val;
-  vector<unordered_map<CommandQueueType, uint64_t>> frame_wait_signal;
-  SignalValues(std::pmr::memory_resource* memory_resource, const uint32_t frame_buffer_num)
-      : used_signal_val(memory_resource)
-      , frame_wait_signal(frame_buffer_num, memory_resource)
-  {}
-};
-void SignalQueueOnFrameEnd(CommandQueue* const command_queue, CommandQueueType command_queue_type, unordered_map<CommandQueueType, uint64_t>* const used_signal_val, unordered_map<CommandQueueType, uint64_t>* const frame_wait_signal) {
-  auto& signal_val = ++(*used_signal_val)[command_queue_type];
-  command_queue->RegisterSignal(command_queue_type, signal_val);
-  (*frame_wait_signal)[command_queue_type] = signal_val;
-}
 FrameBufferedBufferId CreateFrameBufferedConstantBuffers(D3d12Device* const device, const uint32_t buffer_size_in_bytes, const uint32_t frame_buffer_num, PhysicalBufferSet* physical_buffers, DescriptorHeapSet* descriptor_heaps, FrameBufferedBufferSet* frame_buffered_buffers, std::pmr::memory_resource* memory_resource_work) {
   uint32_t mask = 255;
   auto buffer_size_in_bytes_256_aligned = (buffer_size_in_bytes + mask) & ~mask;
@@ -605,6 +605,7 @@ FrameBufferedBufferId CreateFrameBufferedConstantBuffers(D3d12Device* const devi
   auto frame_buffered_buffer_id = frame_buffered_buffers->RegisterFrameBufferedBuffers(device, buffer_size_in_bytes_256_aligned, resource_list.data(), cpu_handles.data(), frame_buffer_num);
   return frame_buffered_buffer_id;
 }
+#if 0
 constexpr D3D12_RESOURCE_BARRIER_FLAGS ConvertToD3d12SplitType(const BarrierSplitType& type) {
   switch (type) {
     case BarrierSplitType::kNone:  return D3D12_RESOURCE_BARRIER_FLAG_NONE;
@@ -645,6 +646,7 @@ std::tuple<vector<vector<BufferId>>, vector<vector<D3D12_RESOURCE_BARRIER>>> Con
 void ExecuteBarriers(const vector<D3D12_RESOURCE_BARRIER>& barriers, D3d12CommandList* command_list) {
   command_list->ResourceBarrier(barriers.size(), barriers.data());
 }
+#endif
 }
 #ifdef BUILD_WITH_TEST
 namespace {
@@ -655,7 +657,7 @@ const uint32_t buffer_size_in_bytes_scene = 4 * 1024;
 const uint32_t buffer_offset_in_bytes_frame = buffer_offset_in_bytes_scene + buffer_size_in_bytes_scene;
 const uint32_t buffer_size_in_bytes_frame = 4 * 1024;
 const uint32_t buffer_offset_in_bytes_work = buffer_offset_in_bytes_frame + buffer_size_in_bytes_frame;
-const uint32_t buffer_size_in_bytes_work = 4 * 1024;
+const uint32_t buffer_size_in_bytes_work = 16 * 1024;
 std::byte buffer[buffer_offset_in_bytes_work + buffer_size_in_bytes_work]{};
 const uint32_t kTestFrameNum = 10;
 }
@@ -670,10 +672,10 @@ TEST_CASE("create pso") {
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
   CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
-  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_size_in_bytes_persistent], buffer_size_in_bytes_persistent);
+  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_offset_in_bytes_persistent], buffer_size_in_bytes_persistent);
   ShaderResourceSet shader_resource_set(&memory_resource_persistent);
   CHECK(shader_resource_set.Init(devices.GetDevice()));
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   D3D12_RT_FORMAT_ARRAY array{{devices.swapchain.GetDxgiFormat()}, 1};
   auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("pso_id"), devices.GetDevice(), StrId("rootsig_tmp"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/copysrv.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
   CHECK(rootsig);
@@ -698,7 +700,7 @@ TEST_CASE("clear swapchain buffer") {
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
   CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
-  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_size_in_bytes_persistent], buffer_size_in_bytes_persistent);
+  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_offset_in_bytes_persistent], buffer_size_in_bytes_persistent);
   CommandListSet command_list_set(&memory_resource_persistent);
   CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num));
   SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
@@ -751,7 +753,7 @@ TEST_CASE("draw to swapchain buffer") {
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
   CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
-  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_size_in_bytes_persistent], buffer_size_in_bytes_persistent);
+  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_offset_in_bytes_persistent], buffer_size_in_bytes_persistent);
   CommandListSet command_list_set(&memory_resource_persistent);
   CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num));
   ShaderResourceSet shader_resource_set(&memory_resource_persistent);
@@ -762,7 +764,7 @@ TEST_CASE("draw to swapchain buffer") {
   for (auto& map : signal_values.frame_wait_signal) {
     CHECK(map.empty());
   }
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("pso"), devices.GetDevice(), StrId("rootsig_tmp"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
   for (uint32_t frame_no = 0; frame_no < kTestFrameNum; frame_no++) {
     auto frame_index = frame_no % frame_buffer_num;
@@ -819,7 +821,7 @@ TEST_CASE("create buffer") {
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
   CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
-  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_size_in_bytes_persistent], buffer_size_in_bytes_persistent);
+  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_offset_in_bytes_persistent], buffer_size_in_bytes_persistent);
   PhysicalBufferSet physical_buffers(&memory_resource_persistent);
   CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter()));
   D3D12_RESOURCE_DESC resource_desc{};
@@ -851,7 +853,7 @@ TEST_CASE("create cpu handle") {
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
   CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
-  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_size_in_bytes_persistent], buffer_size_in_bytes_persistent);
+  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_offset_in_bytes_persistent], buffer_size_in_bytes_persistent);
   DescriptorHeapSet descriptor_heaps{&memory_resource_persistent};
   CHECK(descriptor_heaps.Init(devices.GetDevice()));
   auto handle = descriptor_heaps.RetainHandle(1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
@@ -871,7 +873,7 @@ TEST_CASE("draw to a created buffer") {
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
   CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
-  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_size_in_bytes_persistent], buffer_size_in_bytes_persistent);
+  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_offset_in_bytes_persistent], buffer_size_in_bytes_persistent);
   CommandListSet command_list_set(&memory_resource_persistent);
   CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num));
   ShaderResourceSet shader_resource_set(&memory_resource_persistent);
@@ -899,7 +901,7 @@ TEST_CASE("draw to a created buffer") {
   }
   SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
   CHECK(signal_values.used_signal_val.empty());
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   StrId pso_id("pso_tmp");
   StrId rootsig_id("rootsig_tmp");
   shader_resource_set.CreateVsPsPipelineStateObject(pso_id, devices.GetDevice(), rootsig_id, L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
@@ -945,15 +947,16 @@ TEST_CASE("cbv frame buffering") {
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
   CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
-  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_size_in_bytes_persistent], buffer_size_in_bytes_persistent);
+  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_offset_in_bytes_persistent], buffer_size_in_bytes_persistent);
   PhysicalBufferSet physical_buffers(&memory_resource_persistent);
   CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter()));
   DescriptorHeapSet descriptor_heaps{&memory_resource_persistent};
   CHECK(descriptor_heaps.Init(devices.GetDevice()));
   FrameBufferedBufferSet frame_buffered_buffers(&memory_resource_persistent);
   {
-    PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
-    BufferConfig buffer_config = GetBufferConfigUploadBuffer(sizeof(uint32_t));
+    PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
+    const uint32_t cbv_size_in_bytes = 256;
+    BufferConfig buffer_config = GetBufferConfigUploadBuffer(cbv_size_in_bytes);
     auto initial_flag = GetInitialD3d12ResourceStateFlag(buffer_config);
     auto d3d12_resource_desc = ConvertToD3d12ResourceDesc(buffer_config);
     vector<ID3D12Resource*> resource_list{&memory_resource_work};
@@ -969,7 +972,7 @@ TEST_CASE("cbv frame buffering") {
       auto cpu_handle = descriptor_heaps.RetainHandle(buffer_id, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
       cpu_handles[i] = cpu_handle;
     }
-    auto frame_buffered_buffer_id = frame_buffered_buffers.RegisterFrameBufferedBuffers(devices.GetDevice(), sizeof(uint32_t), resource_list.data(), cpu_handles.data(), frame_buffer_num);
+    auto frame_buffered_buffer_id = frame_buffered_buffers.RegisterFrameBufferedBuffers(devices.GetDevice(), cbv_size_in_bytes, resource_list.data(), cpu_handles.data(), frame_buffer_num);
     void* prev_ptr = nullptr;
     for (uint32_t i = 0; i < frame_buffer_num; i++) {
       CAPTURE(i);
@@ -993,7 +996,7 @@ TEST_CASE("use cbv (change buffer color dynamically)") {
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
   CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
-  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_size_in_bytes_persistent], buffer_size_in_bytes_persistent);
+  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_offset_in_bytes_persistent], buffer_size_in_bytes_persistent);
   CommandListSet command_list_set(&memory_resource_persistent);
   CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num));
   ShaderResourceSet shader_resource_set(&memory_resource_persistent);
@@ -1006,7 +1009,7 @@ TEST_CASE("use cbv (change buffer color dynamically)") {
   CHECK(shader_visible_descriptor_heap.Init(devices.GetDevice()));
   FrameBufferedBufferSet frame_buffered_buffers(&memory_resource_persistent);
   SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("pso"), devices.GetDevice(), StrId("rootsig_tmp"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test-cbv.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
   auto cbv_id = CreateFrameBufferedConstantBuffers(devices.GetDevice(), sizeof(float) * 4, frame_buffer_num, &physical_buffers, &descriptor_heaps, &frame_buffered_buffers, &memory_resource_work);
   CHECK(cbv_id);
@@ -1085,7 +1088,7 @@ TEST_CASE("load from srv") {
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
   CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
-  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_size_in_bytes_persistent], buffer_size_in_bytes_persistent);
+  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_offset_in_bytes_persistent], buffer_size_in_bytes_persistent);
   CommandListSet command_list_set(&memory_resource_persistent);
   CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num));
   ShaderResourceSet shader_resource_set(&memory_resource_persistent);
@@ -1099,7 +1102,7 @@ TEST_CASE("load from srv") {
   CHECK(shader_visible_descriptor_heap.Init(devices.GetDevice()));
   FrameBufferedBufferSet frame_buffered_buffers(&memory_resource_persistent);
   SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   auto [draw_rootsig, draw_pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("draw_pso"), devices.GetDevice(), StrId("draw_rootsig"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test-cbv.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
   auto [copy_rootsig, copy_pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("copy_pso"), devices.GetDevice(), StrId("copy_rootsig"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/copysrv.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
   auto cbv_id = CreateFrameBufferedConstantBuffers(devices.GetDevice(), sizeof(float) * 4, frame_buffer_num, &physical_buffers, &descriptor_heaps, &frame_buffered_buffers, &memory_resource_work);
@@ -1244,182 +1247,6 @@ TEST_CASE("load from srv") {
   command_list_set.Term();
   devices.Term();
 }
-TEST_CASE("load from srv/auto barrier configuration") {
-  using namespace illuminate;
-  using namespace illuminate::gfx;
-  using namespace illuminate::gfx::d3d12;
-  const BufferSize2d swapchain_size{1600, 900};
-  const uint32_t frame_buffer_num = 2;
-  const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
-  DeviceSet devices;
-  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
-  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_size_in_bytes_persistent], buffer_size_in_bytes_persistent);
-  CommandListSet command_list_set(&memory_resource_persistent);
-  CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num));
-  ShaderResourceSet shader_resource_set(&memory_resource_persistent);
-  shader_resource_set.Init(devices.GetDevice());
-  PhysicalBufferSet physical_buffers(&memory_resource_persistent);
-  CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter()));
-  DescriptorHeapSet descriptor_heaps(&memory_resource_persistent);
-  CHECK(descriptor_heaps.Init(devices.GetDevice()));
-  DescriptorHandleSet descriptor_handles(&memory_resource_persistent);
-  ShaderVisibleDescriptorHeap shader_visible_descriptor_heap;
-  CHECK(shader_visible_descriptor_heap.Init(devices.GetDevice()));
-  FrameBufferedBufferSet frame_buffered_buffers(&memory_resource_persistent);
-  SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
-  auto [draw_rootsig, draw_pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("draw_pso"), devices.GetDevice(), StrId("draw_rootsig"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test-cbv.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
-  auto [copy_rootsig, copy_pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("copy_pso"), devices.GetDevice(), StrId("copy_rootsig"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/copysrv.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
-  auto cbv_id = CreateFrameBufferedConstantBuffers(devices.GetDevice(), sizeof(float) * 4, frame_buffer_num, &physical_buffers, &descriptor_heaps, &frame_buffered_buffers, &memory_resource_work);
-  CHECK(cbv_id);
-  auto rtv_id = CreatePhysicalBuffer({
-      .width = swapchain_size.width,
-      .height = swapchain_size.height,
-      .dimension = BufferDimensionType::k2d,
-      .format = BufferFormat::kR8G8B8A8Unorm,
-      .state_flags = static_cast<BufferStateFlags>(kBufferStateFlagRtv | kBufferStateFlagSrvPsOnly),
-      .initial_state_flags = kBufferStateFlagRtv,
-      .clear_value = std::array<float, 4>{1.0f,1.0f,1.0f,1.0f},
-    },
-    devices.GetDevice(), &physical_buffers, &descriptor_heaps, &descriptor_handles);
-  vector<vector<BufferId>> barriers_buffer_id_list;
-  vector<vector<D3D12_RESOURCE_BARRIER>> barriers;
-  unordered_map<BufferId, ID3D12Resource*> physical_resources{&memory_resource_persistent};
-  {
-    physical_resources.insert_or_assign(1, physical_buffers.GetPhysicalBuffer(rtv_id));
-    RenderPassBufferInfo render_pass_buffer_info_initial{&memory_resource_work};
-    render_pass_buffer_info_initial.push_back({
-        .buffer_id = 2,
-        .state = kBufferStateFlagPresent,
-      });
-    render_pass_buffer_info_initial.push_back({
-        .buffer_id = 1,
-        .state = kBufferStateFlagRtv,
-      });
-    RenderPassBufferInfo render_pass_buffer_info_draw{&memory_resource_work};
-    render_pass_buffer_info_draw.push_back({
-        .buffer_id = 1,
-        .state = kBufferStateFlagRtv,
-      });
-    RenderPassBufferInfo render_pass_buffer_info_copy{&memory_resource_work};
-    render_pass_buffer_info_copy.push_back({
-        .buffer_id = 1,
-        .state = kBufferStateFlagSrvPsOnly,
-      });
-    render_pass_buffer_info_copy.push_back({
-        .buffer_id = 2,
-        .state = kBufferStateFlagRtv,
-      });
-    RenderPassBufferInfo render_pass_buffer_info_final{&memory_resource_work};
-    render_pass_buffer_info_final.push_back({
-        .buffer_id = 1,
-        .state = kBufferStateFlagRtv,
-      });
-    render_pass_buffer_info_final.push_back({
-        .buffer_id = 2,
-        .state = kBufferStateFlagPresent,
-      });
-    RenderPassBufferInfoList pass_buffer_info_list{
-      {
-        std::move(render_pass_buffer_info_initial),
-        std::move(render_pass_buffer_info_draw),
-        std::move(render_pass_buffer_info_copy),
-        std::move(render_pass_buffer_info_final),
-      },
-      &memory_resource_work
-    };
-    std::tie(barriers_buffer_id_list, barriers) = ConfigureD3d12Barrier(pass_buffer_info_list, &memory_resource_persistent, &memory_resource_work);
-    memory_resource_work.Reset();
-  }
-  for (uint32_t frame_no = 0; frame_no < kTestFrameNum; frame_no++) {
-    CAPTURE(frame_no);
-    auto frame_index = frame_no % frame_buffer_num;
-    devices.command_queue.WaitOnCpu(signal_values.frame_wait_signal[frame_index]);
-    // update cbv
-    {
-      float color_val_per_channel = 0.1f * static_cast<float>(frame_no);
-      float color_diff[4] = {color_val_per_channel, color_val_per_channel, color_val_per_channel, 0.0f};
-      auto cbv_ptr = frame_buffered_buffers.GetFrameBufferedBuffer(cbv_id, frame_index);
-      CHECK(cbv_ptr);
-      memcpy(cbv_ptr, color_diff, sizeof(float) * 4);
-    }
-    // copy descriptor handles to gpu side
-    D3D12_GPU_DESCRIPTOR_HANDLE cbv_gpu_handle{};
-    {
-      auto cpu_handle = frame_buffered_buffers.GetFrameBufferedBufferCpuHandle(cbv_id, frame_index);
-      cbv_gpu_handle = shader_visible_descriptor_heap.CopyToBufferDescriptorHeap(&cpu_handle, 1, &memory_resource_work);
-      memory_resource_work.Reset();
-    }
-    D3D12_GPU_DESCRIPTOR_HANDLE srv_gpu_handle{};
-    {
-      auto srv_handle = descriptor_handles.GetCpuHandle(rtv_id, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-      srv_gpu_handle = shader_visible_descriptor_heap.CopyToBufferDescriptorHeap(&srv_handle, 1, &memory_resource_work);
-      memory_resource_work.Reset();
-    }
-    devices.swapchain.UpdateBackBufferIndex();
-    // update barrier resource pointers
-    physical_resources.insert_or_assign(2, devices.swapchain.GetResource());
-    for (uint32_t pass_index = 0; pass_index < barriers.size(); pass_index++) {
-      for (uint32_t i = 0; i < barriers[pass_index].size(); i++) {
-        barriers[pass_index][i].Transition.pResource = physical_resources.at(barriers_buffer_id_list[pass_index][i]);
-      }
-    }
-    command_list_set.RotateCommandAllocators();
-    auto command_list = command_list_set.GetCommandList(CommandQueueType::kGraphics, 1)[0];
-    shader_visible_descriptor_heap.SetDescriptorHeapsToCommandList(command_list);
-    // barrier
-    uint32_t barrier_index = 0;
-    ExecuteBarriers(barriers[barrier_index], command_list);
-    barrier_index++;
-    // draw pass
-    {
-      auto& width = swapchain_size.width;
-      auto& height = swapchain_size.height;
-      command_list->SetGraphicsRootSignature(draw_rootsig);
-      D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), D3D12_MIN_DEPTH, D3D12_MAX_DEPTH};
-      command_list->RSSetViewports(1, &viewport);
-      D3D12_RECT scissor_rect{0L, 0L, static_cast<LONG>(width), static_cast<LONG>(height)};
-      command_list->RSSetScissorRects(1, &scissor_rect);
-      command_list->SetPipelineState(draw_pso);
-      command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-      auto rtv_handle = descriptor_handles.GetCpuHandle(rtv_id, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-      command_list->OMSetRenderTargets(1, &rtv_handle, true, nullptr);
-      command_list->SetGraphicsRootDescriptorTable(0, cbv_gpu_handle);
-      command_list->DrawInstanced(3, 1, 0, 0);
-    }
-    // barrier
-    ExecuteBarriers(barriers[barrier_index], command_list);
-    barrier_index++;
-    // copy pass
-    {
-      auto& width = swapchain_size.width;
-      auto& height = swapchain_size.height;
-      command_list->SetGraphicsRootSignature(copy_rootsig);
-      D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), D3D12_MIN_DEPTH, D3D12_MAX_DEPTH};
-      command_list->RSSetViewports(1, &viewport);
-      D3D12_RECT scissor_rect{0L, 0L, static_cast<LONG>(width), static_cast<LONG>(height)};
-      command_list->RSSetScissorRects(1, &scissor_rect);
-      command_list->SetPipelineState(copy_pso);
-      command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-      auto swapchain_cpu_handle = devices.swapchain.GetRtvHandle();
-      command_list->OMSetRenderTargets(1, &swapchain_cpu_handle, true, nullptr);
-      command_list->SetGraphicsRootDescriptorTable(0, srv_gpu_handle);
-      command_list->DrawInstanced(3, 1, 0, 0);
-    }
-    // barrier
-    ExecuteBarriers(barriers[barrier_index], command_list);
-    command_list_set.ExecuteCommandLists(devices.GetCommandQueue(CommandQueueType::kGraphics), CommandQueueType::kGraphics);
-    devices.swapchain.Present();
-    SignalQueueOnFrameEnd(&devices.command_queue, CommandQueueType::kGraphics, &signal_values.used_signal_val, &signal_values.frame_wait_signal[frame_index]);
-  }
-  devices.WaitAll();
-  shader_visible_descriptor_heap.Term();
-  descriptor_heaps.Term();
-  physical_buffers.Term();
-  shader_resource_set.Term();
-  command_list_set.Term();
-  devices.Term();
-}
 TEST_CASE("use compute queue") {
   using namespace illuminate;
   using namespace illuminate::gfx;
@@ -1429,7 +1256,8 @@ TEST_CASE("use compute queue") {
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
   CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
-  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_size_in_bytes_persistent], buffer_size_in_bytes_persistent);
+  PmrLinearAllocator memory_resource_persistent(&buffer[buffer_offset_in_bytes_persistent], buffer_size_in_bytes_persistent);
+  PmrLinearAllocator memory_resource_scene(&buffer[buffer_offset_in_bytes_scene], buffer_size_in_bytes_scene);
   CommandListSet command_list_set(&memory_resource_persistent);
   CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num));
   ShaderResourceSet shader_resource_set(&memory_resource_persistent);
@@ -1443,30 +1271,10 @@ TEST_CASE("use compute queue") {
   CHECK(shader_visible_descriptor_heap.Init(devices.GetDevice()));
   FrameBufferedBufferSet frame_buffered_buffers(&memory_resource_persistent);
   SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_size_in_bytes_work], buffer_size_in_bytes_work);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   auto [compute_queue_rootsig, compute_queue_pso] = shader_resource_set.CreateCsPipelineStateObject(StrId("compute_queue_pso"), devices.GetDevice(), StrId("draw_rootsig"), L"shader/test/fill-screen.cs.hlsl", &memory_resource_work);
   auto [copy_rootsig, copy_pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("copy_pso"), devices.GetDevice(), StrId("copy_rootsig"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/copyuav.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
-  vector<CommandQueueType> render_pass_command_queue_type{&memory_resource_persistent};
-  {
-    render_pass_command_queue_type.push_back(CommandQueueType::kCompute);
-    render_pass_command_queue_type.push_back(CommandQueueType::kGraphics);
-  }
-  RenderPassBufferReadWriteInfoList render_pass_buffer_info_list{&memory_resource_work};
-  {
-    RenderPassBufferReadWriteInfoListPerPass render_pass_buffer_info_draw{&memory_resource_work};
-    render_pass_buffer_info_draw.push_back({
-        .buffer_id = 1,
-        .read_write_flag = BufferReadWriteFlag::kWrite,
-      });
-    RenderPassBufferReadWriteInfoListPerPass render_pass_buffer_info_copy{&memory_resource_work};
-    render_pass_buffer_info_copy.push_back({
-        .buffer_id = 1,
-        .read_write_flag = BufferReadWriteFlag::kRead,
-      });
-    render_pass_buffer_info_list.push_back(std::move(render_pass_buffer_info_draw));
-    render_pass_buffer_info_list.push_back(std::move(render_pass_buffer_info_copy));
-  }
-  auto signal_queue_render_pass_info = ConfigureQueueSignal(render_pass_command_queue_type, render_pass_buffer_info_list, RenderFrameLoopSetting::kWithLoop, &memory_resource_persistent, &memory_resource_work);
+  memory_resource_work.Reset();
   auto uav_id = CreatePhysicalBuffer({
       .width = swapchain_size.width,
       .height = swapchain_size.height,
@@ -1500,7 +1308,26 @@ TEST_CASE("use compute queue") {
       command_list->DrawInstanced(3, 1, 0, 0);
     });
   }
-  const uint32_t pass_num = render_pass_function_list.size();
+  vector<CommandQueueType> render_pass_command_queue_type_list;
+  BarrierListPerPass barriers_pre_pass, barriers_post_pass;
+  unordered_map<uint32_t, unordered_set<uint32_t>> queue_signals;
+  uint32_t pass_num;
+  {
+    RenderGraphConfig render_graph_config(&memory_resource_work);
+    auto pass_draw = render_graph_config.CreateNewRenderPass({.pass_name = StrId("draw"), .command_queue_type = CommandQueueType::kCompute,});
+    auto pass_copy = render_graph_config.CreateNewRenderPass({.pass_name = StrId("copy"), .command_queue_type = CommandQueueType::kGraphics,});
+    render_graph_config.AddNewBufferConfig(pass_draw, {.buffer_name = StrId("mainbuffer"), .state = kBufferStateFlagUav, .read_write_flag = kWriteFlag,});
+    render_graph_config.AddNewBufferConfig(pass_copy, {.buffer_name = StrId("mainbuffer"), .state = kBufferStateFlagUav, .read_write_flag = kReadFlag,});
+    render_graph_config.AddNewBufferConfig(pass_copy, {.buffer_name = StrId("swapchain"),  .state = kBufferStateFlagRtv, .read_write_flag = kWriteFlag,});
+    render_graph_config.AddBufferInitialState(StrId("swapchain"), kBufferStateFlagPresent);
+    render_graph_config.AddBufferFinalState(StrId("swapchain"), kBufferStateFlagPresent);
+    RenderGraph render_graph(std::move(render_graph_config), &memory_resource_work, &memory_resource_work);
+    render_pass_command_queue_type_list = vector<CommandQueueType>(render_graph.GetRenderPassCommandQueueTypeList(), &memory_resource_scene);
+    std::tie(barriers_pre_pass, barriers_post_pass) = ConfigureBarriers(render_graph, &memory_resource_scene);
+    queue_signals = ConfigureQueueSignals(render_graph, &memory_resource_scene, &memory_resource_work);
+    pass_num = render_graph.GetRenderPassNum();
+  }
+  memory_resource_work.Reset();
   struct QueueSignalInfo {
     uint64_t signal_val;
     CommandQueueType command_queue_type;
@@ -1522,7 +1349,7 @@ TEST_CASE("use compute queue") {
     // record compute queue command list
     D3d12CommandList* prev_command_list = nullptr;
     for (uint32_t pass_index = 0; pass_index < pass_num; pass_index++) {
-      auto command_queue_type = render_pass_command_queue_type[pass_index];
+      auto& command_queue_type = render_pass_command_queue_type_list[pass_index];
       if (signal_queue_waiting_render_pass_list.contains(pass_index)) {
         auto& signal_info =  signal_queue_waiting_render_pass_list.at(pass_index);
         devices.command_queue.RegisterWaitOnQueue(signal_info.command_queue_type, signal_info.signal_val, command_queue_type);
@@ -1530,7 +1357,7 @@ TEST_CASE("use compute queue") {
       }
       auto command_list = command_list_set.GetCommandList(command_queue_type, 1)[0];
       if (pass_index == 1) {
-        // TODO barrier auto configuration
+        // TODO use barriers_pre_pass, barriers_post_pass
         D3D12_RESOURCE_BARRIER barriers[2]{};
         {
           auto& barrier = barriers[0];
@@ -1567,12 +1394,14 @@ TEST_CASE("use compute queue") {
         }
         command_list->ResourceBarrier(1, barriers);
       }
-      if (signal_queue_render_pass_info.contains(pass_index)) {
+      if (queue_signals.contains(pass_index)) {
         // execute compute queue
         command_list_set.ExecuteCommandLists(devices.GetCommandQueue(command_queue_type), command_queue_type);
         auto& signal_val = ++signal_values.used_signal_val[command_queue_type];
         devices.command_queue.RegisterSignal(command_queue_type, signal_val);
-        signal_queue_waiting_render_pass_list.insert_or_assign(signal_queue_render_pass_info.at(pass_index), QueueSignalInfo{signal_val, command_queue_type});
+        for (auto& dst_pass : queue_signals.at(pass_index)) {
+          signal_queue_waiting_render_pass_list.insert_or_assign(dst_pass, QueueSignalInfo{signal_val, command_queue_type});
+        }
       }
     }
     devices.swapchain.Present();

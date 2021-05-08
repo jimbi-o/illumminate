@@ -3,13 +3,16 @@
 #include "illuminate/gfx/win32/win32_handle.h"
 #include "d3d12_minimal_for_cpp.h"
 namespace illuminate::gfx::d3d12 {
+namespace {
+static const std::vector<CommandQueueType> kCommandQueueTypeList = { CommandQueueType::kGraphics, CommandQueueType::kCompute, CommandQueueType::kTransfer, };
+}
 bool CommandQueue::Init(D3d12Device* const device) {
   device_ = device;
   D3D12_COMMAND_QUEUE_DESC desc = {};
   desc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
   desc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
   desc.NodeMask = 0; // for multi-GPU
-  for (auto& type : kCommandQueueTypeSet) {
+  for (auto& type : kCommandQueueTypeList) {
     desc.Type = ConvertToD3d12CommandQueueType(type);
     ID3D12CommandQueue* command_queue = nullptr;
     auto hr = device_->CreateCommandQueue(&desc, IID_PPV_ARGS(&command_queue));
@@ -27,7 +30,7 @@ bool CommandQueue::Init(D3d12Device* const device) {
   return true;
 }
 void CommandQueue::Term() {
-  for (auto& type : kCommandQueueTypeSet) {
+  for (auto& type : kCommandQueueTypeList) {
     command_queue_[type]->Release();
     fence_[type]->Release();
   }
@@ -77,7 +80,7 @@ void CommandQueue::WaitOnCpu(const std::pmr::unordered_map<CommandQueueType, uin
 }
 void CommandQueue::WaitAll() {
   auto signal_val = std::numeric_limits<uint64_t>::max();
-  for (auto& queue_type : kCommandQueueTypeSet) {
+  for (auto& queue_type : kCommandQueueTypeList) {
     RegisterSignal(queue_type, signal_val);
     WaitOnCpu({{queue_type, signal_val}});
     RegisterSignal(queue_type, 0);
