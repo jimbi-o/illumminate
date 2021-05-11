@@ -12,16 +12,17 @@ enum class BufferFormat : uint8_t {
   kD32Float,
 };
 enum class BufferSizeType : uint8_t {
-  kMainbufferRelative,
+  kPrimaryBufferRelative,
   kSwapchainRelative,
   kAbsolute,
 };
-constexpr uint32_t GetPhysicalBufferSize(const BufferSizeType size_type, const float val, const uint32_t mainbuffer, const uint32_t swapchain) {
+constexpr uint32_t GetPhysicalBufferSize(const BufferSizeType size_type, const float val, const uint32_t primary_buffer, const uint32_t swapchain) {
   switch (size_type) {
     case BufferSizeType::kSwapchainRelative:  return static_cast<uint32_t>(val * static_cast<float>(swapchain));
-    case BufferSizeType::kMainbufferRelative: return static_cast<uint32_t>(val * static_cast<float>(mainbuffer));
+    case BufferSizeType::kPrimaryBufferRelative: return static_cast<uint32_t>(val * static_cast<float>(primary_buffer));
     case BufferSizeType::kAbsolute: return static_cast<uint32_t>(val);
   }
+  return 0;
 }
 struct ClearValueDepthStencil { float depth; uint8_t stencil; uint8_t _dmy[3]; };
 using ClearValue = std::variant<std::array<float, 4>, ClearValueDepthStencil>;

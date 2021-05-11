@@ -223,6 +223,27 @@ class ShaderResourceSet {
   unordered_map<StrId, ID3D12RootSignature*> rootsig_list_;
   unordered_map<StrId, ID3D12PipelineState*> pso_list_;
 };
+constexpr D3D12_DESCRIPTOR_HEAP_TYPE GetD3d12DescriptorHeapType(const BufferStateFlags flag) {
+  if (flag & kBufferStateFlagCbvUpload) {
+    return D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+  }
+  if (flag & kBufferStateFlagSrvPsOnly) {
+    return D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+  }
+  if (flag & kBufferStateFlagSrvNonPs) {
+    return D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+  }
+  if (flag & kBufferStateFlagUav) {
+    return D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+  }
+  if (flag & kBufferStateFlagRtv) {
+    return D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+  }
+  if (flag & kBufferStateFlagDsv) {
+    return D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+  }
+  return D3D12_DESCRIPTOR_HEAP_TYPE_NUM_TYPES;
+}
 using PhysicalBufferId = uint32_t;
 class PhysicalBufferSet {
  public:
@@ -273,13 +294,14 @@ class PhysicalBufferSet {
     resource_list_.emplace(buffer_id_used_, resource);
     return buffer_id_used_;
   }
-  ID3D12Resource* GetPhysicalBuffer(const BufferId buffer_id) {
+  ID3D12Resource* GetPhysicalBuffer(const PhysicalBufferId buffer_id) {
     return resource_list_.at(buffer_id);
   }
+  constexpr const auto& GetPhysicalBufferList() const { return resource_list_; }
  private:
   D3D12MA::Allocator* allocator_ = nullptr;
-  unordered_map<BufferId, D3D12MA::Allocation*> allocation_list_;
-  unordered_map<BufferId, ID3D12Resource*> resource_list_;
+  unordered_map<PhysicalBufferId, D3D12MA::Allocation*> allocation_list_;
+  unordered_map<PhysicalBufferId, ID3D12Resource*> resource_list_;
   PhysicalBufferId buffer_id_used_ = 0;
 };
 class DescriptorHeapSet {
@@ -375,7 +397,7 @@ constexpr D3D12_RESOURCE_FLAGS ConvertToD3d12ResourceFlags(const BufferStateFlag
   D3D12_RESOURCE_FLAGS flags{};
   if (state_flags & kBufferStateFlagUav) flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
   if (state_flags & kBufferStateFlagRtv) flags |= D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-  if ((state_flags & kBufferStateFlagDsvWrite) || (state_flags & kBufferStateFlagDsvRead)) flags |= D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+  if (state_flags & kBufferStateFlagDsv) flags |= D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
   if ((flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL) && !(state_flags & kBufferStateFlagSrvPsOnly) && !(state_flags & kBufferStateFlagSrvNonPs)) flags = D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
   return flags;
 }
@@ -409,7 +431,7 @@ constexpr D3D12_RESOURCE_DESC ConvertToD3d12ResourceDesc(const BufferConfig& buf
 }
 constexpr bool IsClearValueValid(const BufferConfig& buffer_config) {
   if (buffer_config.state_flags & kBufferStateFlagRtv) return true;
-  if (buffer_config.state_flags & kBufferStateFlagDsvWrite) return true;
+  if (buffer_config.state_flags & kBufferStateFlagDsv) return true;
   return false;
 }
 constexpr D3D12_CLEAR_VALUE GetD3d12ClearValue(const BufferConfig& buffer_config) {
@@ -485,11 +507,11 @@ constexpr BufferConfig GetBufferConfigUploadBuffer(const uint32_t size_in_bytes)
   return {
     .width = size_in_bytes,
     .height = 1,
-    .dimension = BufferDimensionType::kBuffer,
-    .format = BufferFormat::kUnknown,
     .state_flags = kBufferStateFlagCbvUpload,
     .initial_state_flags = kBufferStateFlagCbvUpload,
     .clear_value = {},
+    .dimension = BufferDimensionType::kBuffer,
+    .format = BufferFormat::kUnknown,
   };
 }
 class DescriptorHandleSet {
@@ -543,7 +565,7 @@ PhysicalBufferId CreatePhysicalBuffer(const BufferConfig& buffer_config, D3d12De
     auto rtv_handle = descriptor_heaps->RetainHandle(buffer_id, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
     descriptor_handles->CreateRtv(buffer_id, buffer_config, device, resource, rtv_handle);
   }
-  if ((buffer_config.state_flags & kBufferStateFlagDsvRead) || (buffer_config.state_flags & kBufferStateFlagDsvWrite)) {
+  if (buffer_config.state_flags & kBufferStateFlagDsv) {
     auto dsv_handle = descriptor_heaps->RetainHandle(buffer_id, D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
     descriptor_handles->CreateDsv(buffer_id, buffer_config, device, resource, dsv_handle);
   }
@@ -605,7 +627,6 @@ FrameBufferedBufferId CreateFrameBufferedConstantBuffers(D3d12Device* const devi
   auto frame_buffered_buffer_id = frame_buffered_buffers->RegisterFrameBufferedBuffers(device, buffer_size_in_bytes_256_aligned, resource_list.data(), cpu_handles.data(), frame_buffer_num);
   return frame_buffered_buffer_id;
 }
-#if 0
 constexpr D3D12_RESOURCE_BARRIER_FLAGS ConvertToD3d12SplitType(const BarrierSplitType& type) {
   switch (type) {
     case BarrierSplitType::kNone:  return D3D12_RESOURCE_BARRIER_FLAG_NONE;
@@ -615,18 +636,68 @@ constexpr D3D12_RESOURCE_BARRIER_FLAGS ConvertToD3d12SplitType(const BarrierSpli
   return D3D12_RESOURCE_BARRIER_FLAG_NONE;
 }
 constexpr D3D12_RESOURCE_BARRIER ConvertToD3d12Barrier(const BarrierConfig& barrier, ID3D12Resource* resource) {
-  // TODO alias, uav
-  return {
-    .Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
-    .Flags = ConvertToD3d12SplitType(barrier.split_type),
-    .Transition = {
-      .pResource   = resource,
-      .Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-      .StateBefore = ConvertToD3d12ResourceState(std::get<BarrierTransition>(barrier.params).state_before),
-      .StateAfter  = ConvertToD3d12ResourceState(std::get<BarrierTransition>(barrier.params).state_after),
+  switch (barrier.params.index()) {
+    case 0: {
+      return {
+        .Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+        .Flags = ConvertToD3d12SplitType(barrier.split_type),
+        .Transition = {
+          .pResource   = resource,
+          .Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+          .StateBefore = ConvertToD3d12ResourceState(std::get<BarrierTransition>(barrier.params).state_before),
+          .StateAfter  = ConvertToD3d12ResourceState(std::get<BarrierTransition>(barrier.params).state_after),
+        }
+      };
     }
-  };
+    case 1: {
+      return {
+        .Type  = D3D12_RESOURCE_BARRIER_TYPE_UAV,
+        .Flags = ConvertToD3d12SplitType(barrier.split_type),
+        .UAV = {.pResource = resource,}
+      };
+    }
+  }
+  // TODO alias
+  return {};
 }
+vector<vector<D3D12_RESOURCE_BARRIER>> PrepareD3d12ResourceBarriers(const vector<vector<BarrierConfig>>& barriers, const unordered_map<BufferId, PhysicalBufferId>& buffer_id_map, const unordered_map<BufferId, ID3D12Resource*>& resource_list, std::pmr::memory_resource* memory_resource) {
+  vector<vector<D3D12_RESOURCE_BARRIER>> d3d12_barriers{memory_resource};
+  d3d12_barriers.reserve(barriers.size());
+  for (auto& barriers_per_pass : barriers) {
+    d3d12_barriers.push_back(vector<D3D12_RESOURCE_BARRIER>{memory_resource});
+    d3d12_barriers.back().reserve(barriers_per_pass.size());
+    for (auto& barrier_config : barriers_per_pass) {
+      auto& buffer_id = barrier_config.buffer_id;
+      ID3D12Resource* resource = nullptr;
+      if (buffer_id_map.contains(buffer_id) && resource_list.contains(buffer_id_map.at(buffer_id))) {
+        resource = resource_list.at(buffer_id_map.at(buffer_id));
+      }
+      d3d12_barriers.back().push_back(ConvertToD3d12Barrier(barrier_config, resource));
+    }
+  }
+  return d3d12_barriers;
+}
+void ExecuteBarriers(vector<D3D12_RESOURCE_BARRIER>& d3d12_barriers, const vector<BarrierConfig>& barriers, unordered_map<BufferId, ID3D12Resource*>& external_buffer_resources, D3d12CommandList* command_list) {
+  if (barriers.empty()) return;
+  auto barrier_num = static_cast<uint32_t>(barriers.size());
+  for (uint32_t i = 0; i < barrier_num; i++) {
+    if (external_buffer_resources.contains(barriers[i].buffer_id)) {
+      auto resource = external_buffer_resources.at(barriers[i].buffer_id);
+      switch (barriers[i].params.index()) {
+        default:
+        case 0:
+          d3d12_barriers[i].Transition.pResource = resource;
+          break;
+        case 1:
+          d3d12_barriers[i].UAV.pResource = resource;
+          break;
+      }
+      // TODO alias
+    }
+  }
+  command_list->ResourceBarrier(barrier_num, d3d12_barriers.data());
+}
+#if 0
 std::tuple<vector<vector<BufferId>>, vector<vector<D3D12_RESOURCE_BARRIER>>> ConfigureD3d12Barrier(const RenderPassBufferInfoList& pass_buffer_info_list, std::pmr::memory_resource* memory_resource_barrier, std::pmr::memory_resource* memory_resource_work) {
   auto barriers = ConfigureBarrier(pass_buffer_info_list, memory_resource_work, memory_resource_work);
   vector<vector<BufferId>> barriers_buffer_id_list;
@@ -653,13 +724,27 @@ namespace {
 const uint32_t buffer_offset_in_bytes_persistent = 0;
 const uint32_t buffer_size_in_bytes_persistent = 16 * 1024;
 const uint32_t buffer_offset_in_bytes_scene = buffer_offset_in_bytes_persistent + buffer_size_in_bytes_persistent;
-const uint32_t buffer_size_in_bytes_scene = 4 * 1024;
+const uint32_t buffer_size_in_bytes_scene = 8 * 1024;
 const uint32_t buffer_offset_in_bytes_frame = buffer_offset_in_bytes_scene + buffer_size_in_bytes_scene;
 const uint32_t buffer_size_in_bytes_frame = 4 * 1024;
 const uint32_t buffer_offset_in_bytes_work = buffer_offset_in_bytes_frame + buffer_size_in_bytes_frame;
 const uint32_t buffer_size_in_bytes_work = 16 * 1024;
 std::byte buffer[buffer_offset_in_bytes_work + buffer_size_in_bytes_work]{};
 const uint32_t kTestFrameNum = 10;
+static void BuildRenderGraphUseComputeQueue(const uint32_t primary_buffer_width, const uint32_t primary_buffer_height, const uint32_t swapchain_buffer_width, const uint32_t swapchain_buffer_height, std::pmr::memory_resource* memory_resource_work, illuminate::gfx::RenderGraph* render_graph) {
+  using namespace illuminate::gfx;
+  RenderGraphConfig render_graph_config(memory_resource_work);
+  render_graph_config.SetPrimaryBufferSize(primary_buffer_width, primary_buffer_height);
+  render_graph_config.SetSwapchainBufferSize(swapchain_buffer_width, swapchain_buffer_height);
+  auto pass_draw = render_graph_config.CreateNewRenderPass({.pass_name = StrId("draw"), .command_queue_type = CommandQueueType::kCompute,});
+  auto pass_copy = render_graph_config.CreateNewRenderPass({.pass_name = StrId("copy"), .command_queue_type = CommandQueueType::kGraphics,});
+  render_graph_config.AppendRenderPassBufferConfig(pass_draw, {.buffer_name = StrId("mainbuffer"), .state = kBufferStateFlagUav, .read_write_flag = kWriteFlag,});
+  render_graph_config.AppendRenderPassBufferConfig(pass_copy, {.buffer_name = StrId("mainbuffer"), .state = kBufferStateFlagUav, .read_write_flag = kReadFlag,});
+  render_graph_config.AppendRenderPassBufferConfig(pass_copy, {.buffer_name = StrId("swapchain"),  .state = kBufferStateFlagRtv, .read_write_flag = kWriteFlag, });
+  render_graph_config.AddBufferInitialState(StrId("swapchain"), kBufferStateFlagPresent);
+  render_graph_config.AddBufferFinalState(StrId("swapchain"), kBufferStateFlagPresent);
+  render_graph->Build(render_graph_config, memory_resource_work);
+}
 }
 #endif
 #include "doctest/doctest.h"
@@ -883,11 +968,11 @@ TEST_CASE("draw to a created buffer") {
   BufferConfig buffer_config{
     .width = swapchain_size.width,
     .height = swapchain_size.height,
-    .dimension = BufferDimensionType::k2d,
-    .format = BufferFormat::kR8G8B8A8Unorm,
     .state_flags = kBufferStateFlagRtv,
     .initial_state_flags = kBufferStateFlagRtv,
     .clear_value = std::array<float, 4>{1.0f,1.0f,1.0f,1.0f},
+    .dimension = BufferDimensionType::k2d,
+    .format = BufferFormat::kR8G8B8A8Unorm,
   };
   auto clear_value = GetD3d12ClearValue(buffer_config);
   auto buffer_id = physical_buffers.CreatePhysicalBuffer(D3D12_HEAP_TYPE_DEFAULT, GetInitialD3d12ResourceStateFlag(buffer_config), ConvertToD3d12ResourceDesc(buffer_config), IsClearValueValid(buffer_config) ? &clear_value : nullptr);
@@ -1110,11 +1195,11 @@ TEST_CASE("load from srv") {
   auto rtv_id = CreatePhysicalBuffer({
       .width = swapchain_size.width,
       .height = swapchain_size.height,
-      .dimension = BufferDimensionType::k2d,
-      .format = BufferFormat::kR8G8B8A8Unorm,
       .state_flags = static_cast<BufferStateFlags>(kBufferStateFlagRtv | kBufferStateFlagSrvPsOnly),
       .initial_state_flags = kBufferStateFlagRtv,
       .clear_value = std::array<float, 4>{1.0f,1.0f,1.0f,1.0f},
+      .dimension = BufferDimensionType::k2d,
+      .format = BufferFormat::kR8G8B8A8Unorm,
     },
     devices.GetDevice(), &physical_buffers, &descriptor_heaps, &descriptor_handles);
   for (uint32_t frame_no = 0; frame_no < kTestFrameNum; frame_no++) {
@@ -1251,7 +1336,7 @@ TEST_CASE("use compute queue") {
   using namespace illuminate;
   using namespace illuminate::gfx;
   using namespace illuminate::gfx::d3d12;
-  const BufferSize2d swapchain_size{1600, 900};
+  const BufferSize2d swapchain_size{1920, 1080};
   const uint32_t frame_buffer_num = 2;
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
@@ -1275,59 +1360,58 @@ TEST_CASE("use compute queue") {
   auto [compute_queue_rootsig, compute_queue_pso] = shader_resource_set.CreateCsPipelineStateObject(StrId("compute_queue_pso"), devices.GetDevice(), StrId("draw_rootsig"), L"shader/test/fill-screen.cs.hlsl", &memory_resource_work);
   auto [copy_rootsig, copy_pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("copy_pso"), devices.GetDevice(), StrId("copy_rootsig"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/copyuav.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
   memory_resource_work.Reset();
-  auto uav_id = CreatePhysicalBuffer({
-      .width = swapchain_size.width,
-      .height = swapchain_size.height,
-      .dimension = BufferDimensionType::k2d,
-      .format = BufferFormat::kR8G8B8A8Unorm,
-      .state_flags = kBufferStateFlagUav,
-      .initial_state_flags = kBufferStateFlagUavWrite,
-    },
-    devices.GetDevice(), &physical_buffers, &descriptor_heaps, &descriptor_handles);
-  using RenderPassFunction = std::function<void(D3d12CommandList*, D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE)>;
+  using RenderPassFunction = std::function<void(D3d12CommandList*, const BufferId*, const unordered_map<BufferId, BufferConfig>&, ID3D12Resource**, D3D12_CPU_DESCRIPTOR_HANDLE*, D3D12_GPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE)>;
   using RenderPassFunctionList = vector<RenderPassFunction>;
   RenderPassFunctionList render_pass_function_list{&memory_resource_persistent};
   {
-    render_pass_function_list.push_back([resource = physical_buffers.GetPhysicalBuffer(uav_id), compute_queue_rootsig, compute_queue_pso, width = swapchain_size.width, height = swapchain_size.height](D3d12CommandList* command_list, [[maybe_unused]] D3D12_CPU_DESCRIPTOR_HANDLE cpu_handle, D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle){
-      command_list->DiscardResource(resource, nullptr);
+    render_pass_function_list.push_back([compute_queue_rootsig, compute_queue_pso](D3d12CommandList* command_list, const BufferId* buffer_id_list, const unordered_map<BufferId, BufferConfig>& buffer_config_list, ID3D12Resource** resource, [[maybe_unused]] D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle_buffers, [[maybe_unused]] D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle_samplers) {
+      const uint32_t uav_index = 0;
+      command_list->DiscardResource(resource[uav_index], nullptr);
       command_list->SetComputeRootSignature(compute_queue_rootsig);
       command_list->SetPipelineState(compute_queue_pso);
-      command_list->SetComputeRootDescriptorTable(0, gpu_handle);
-      command_list->Dispatch(width, height, 1);
+      command_list->SetComputeRootDescriptorTable(0, gpu_handle_buffers);
+      auto& buffer_config_0 = buffer_config_list.at(buffer_id_list[uav_index]);
+      command_list->Dispatch(buffer_config_0.width, buffer_config_0.height, 1);
     });
-    render_pass_function_list.push_back([width = swapchain_size.width, height = swapchain_size.height, copy_rootsig, copy_pso](D3d12CommandList* command_list, D3D12_CPU_DESCRIPTOR_HANDLE cpu_handle, D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle){
+    render_pass_function_list.push_back([copy_rootsig, copy_pso](D3d12CommandList* command_list, const BufferId* buffer_id_list, const unordered_map<BufferId, BufferConfig>& buffer_config_list, ID3D12Resource** resource, [[maybe_unused]] D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle_buffers, [[maybe_unused]] D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle_samplers) {
       command_list->SetGraphicsRootSignature(copy_rootsig);
+      const uint32_t uav_index = 0;
+      const uint32_t rtv_index = 1;
+      auto& rtv_config = buffer_config_list.at(buffer_id_list[rtv_index]);
+      const auto& width = rtv_config.width;
+      const auto& height = rtv_config.height;
       D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), D3D12_MIN_DEPTH, D3D12_MAX_DEPTH};
       command_list->RSSetViewports(1, &viewport);
       D3D12_RECT scissor_rect{0L, 0L, static_cast<LONG>(width), static_cast<LONG>(height)};
       command_list->RSSetScissorRects(1, &scissor_rect);
       command_list->SetPipelineState(copy_pso);
       command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-      command_list->OMSetRenderTargets(1, &cpu_handle, true, nullptr);
-      command_list->SetGraphicsRootDescriptorTable(0, gpu_handle);
+      command_list->OMSetRenderTargets(1, &cpu_handle[rtv_index], true, nullptr);
+      command_list->SetGraphicsRootDescriptorTable(0, gpu_handle_buffers);
       command_list->DrawInstanced(3, 1, 0, 0);
     });
   }
-  vector<CommandQueueType> render_pass_command_queue_type_list;
-  BarrierListPerPass barriers_pre_pass, barriers_post_pass;
-  unordered_map<uint32_t, unordered_set<uint32_t>> queue_signals;
-  uint32_t pass_num;
-  {
-    RenderGraphConfig render_graph_config(&memory_resource_work);
-    auto pass_draw = render_graph_config.CreateNewRenderPass({.pass_name = StrId("draw"), .command_queue_type = CommandQueueType::kCompute,});
-    auto pass_copy = render_graph_config.CreateNewRenderPass({.pass_name = StrId("copy"), .command_queue_type = CommandQueueType::kGraphics,});
-    render_graph_config.AddNewBufferConfig(pass_draw, {.buffer_name = StrId("mainbuffer"), .state = kBufferStateFlagUav, .read_write_flag = kWriteFlag,});
-    render_graph_config.AddNewBufferConfig(pass_copy, {.buffer_name = StrId("mainbuffer"), .state = kBufferStateFlagUav, .read_write_flag = kReadFlag,});
-    render_graph_config.AddNewBufferConfig(pass_copy, {.buffer_name = StrId("swapchain"),  .state = kBufferStateFlagRtv, .read_write_flag = kWriteFlag,});
-    render_graph_config.AddBufferInitialState(StrId("swapchain"), kBufferStateFlagPresent);
-    render_graph_config.AddBufferFinalState(StrId("swapchain"), kBufferStateFlagPresent);
-    RenderGraph render_graph(std::move(render_graph_config), &memory_resource_work, &memory_resource_work);
-    render_pass_command_queue_type_list = vector<CommandQueueType>(render_graph.GetRenderPassCommandQueueTypeList(), &memory_resource_scene);
-    std::tie(barriers_pre_pass, barriers_post_pass) = ConfigureBarriers(render_graph, &memory_resource_scene);
-    queue_signals = ConfigureQueueSignals(render_graph, &memory_resource_scene, &memory_resource_work);
-    pass_num = render_graph.GetRenderPassNum();
-  }
+  RenderGraph render_graph(&memory_resource_scene);
+  BuildRenderGraphUseComputeQueue(swapchain_size.width, swapchain_size.height, devices.swapchain.GetWidth(), devices.swapchain.GetHeight(), &memory_resource_work, &render_graph);
   memory_resource_work.Reset();
+  auto swapchain_buffer_id = *render_graph.GetBufferId(StrId("swapchain"), &memory_resource_work).begin(); // ret size should be 1.
+  unordered_map<BufferId, PhysicalBufferId> buffer_id_map{&memory_resource_work};
+  for (auto& [id, buffer_config] : render_graph.GetBufferConfigList()) {
+    if (id != swapchain_buffer_id) {
+      buffer_id_map.insert_or_assign(id, CreatePhysicalBuffer(buffer_config, devices.GetDevice(), &physical_buffers, &descriptor_heaps, &descriptor_handles));
+    }
+  }
+  auto [barriers_pre_pass, barriers_post_pass] = ConfigureBarriers(render_graph, &memory_resource_scene);
+  auto d3d12_barriers_pre_pass  = PrepareD3d12ResourceBarriers(barriers_pre_pass,  buffer_id_map, physical_buffers.GetPhysicalBufferList(), &memory_resource_scene);
+  auto d3d12_barriers_post_pass = PrepareD3d12ResourceBarriers(barriers_post_pass, buffer_id_map, physical_buffers.GetPhysicalBufferList(), &memory_resource_scene);
+  auto queue_signals = ConfigureQueueSignals(render_graph, &memory_resource_scene, &memory_resource_work);
+  memory_resource_work.Reset();
+  // TODO memory aliasing
+  unordered_map<BufferId, ID3D12Resource*> external_buffer_resources{&memory_resource_scene};
+  external_buffer_resources.insert_or_assign(swapchain_buffer_id, nullptr);
+  unordered_map<BufferId, unordered_map<D3D12_DESCRIPTOR_HEAP_TYPE, D3D12_CPU_DESCRIPTOR_HANDLE>> external_cpu_handles{&memory_resource_scene};
+  external_cpu_handles.insert_or_assign(swapchain_buffer_id, unordered_map<D3D12_DESCRIPTOR_HEAP_TYPE, D3D12_CPU_DESCRIPTOR_HANDLE>{&memory_resource_scene});
+  external_cpu_handles.at(swapchain_buffer_id).insert_or_assign(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, D3D12_CPU_DESCRIPTOR_HANDLE{});
   struct QueueSignalInfo {
     uint64_t signal_val;
     CommandQueueType command_queue_type;
@@ -1338,64 +1422,62 @@ TEST_CASE("use compute queue") {
     CAPTURE(frame_no);
     auto frame_index = frame_no % frame_buffer_num;
     devices.command_queue.WaitOnCpu(signal_values.frame_wait_signal[frame_index]);
-    D3D12_GPU_DESCRIPTOR_HANDLE uav_gpu_handle{};
-    {
-      auto uav_handle = descriptor_handles.GetCpuHandle(uav_id, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-      uav_gpu_handle = shader_visible_descriptor_heap.CopyToBufferDescriptorHeap(&uav_handle, 1, &memory_resource_work);
-      memory_resource_work.Reset();
-    }
     devices.swapchain.UpdateBackBufferIndex();
+    external_buffer_resources.insert_or_assign(swapchain_buffer_id, devices.swapchain.GetResource());
+    external_cpu_handles.at(swapchain_buffer_id).insert_or_assign(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, devices.swapchain.GetRtvHandle());
     command_list_set.RotateCommandAllocators();
-    // record compute queue command list
     D3d12CommandList* prev_command_list = nullptr;
-    for (uint32_t pass_index = 0; pass_index < pass_num; pass_index++) {
-      auto& command_queue_type = render_pass_command_queue_type_list[pass_index];
+    for (uint32_t pass_index = 0; pass_index < render_graph.GetRenderPassNum(); pass_index++) {
+      auto& command_queue_type = render_graph.GetRenderPassCommandQueueTypeList()[pass_index];
+      memory_resource_work.Reset();
       if (signal_queue_waiting_render_pass_list.contains(pass_index)) {
         auto& signal_info =  signal_queue_waiting_render_pass_list.at(pass_index);
         devices.command_queue.RegisterWaitOnQueue(signal_info.command_queue_type, signal_info.signal_val, command_queue_type);
         signal_queue_waiting_render_pass_list.erase(pass_index);
       }
       auto command_list = command_list_set.GetCommandList(command_queue_type, 1)[0];
-      if (pass_index == 1) {
-        // TODO use barriers_pre_pass, barriers_post_pass
-        D3D12_RESOURCE_BARRIER barriers[2]{};
-        {
-          auto& barrier = barriers[0];
-          barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-          barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-          barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-          barrier.Transition.pResource   = devices.swapchain.GetResource();
-          barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-          barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
-        }
-        {
-          auto& barrier = barriers[1];
-          barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-          barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-          barrier.UAV.pResource = physical_buffers.GetPhysicalBuffer(uav_id);
-        }
-        command_list->ResourceBarrier(2, barriers);
-      }
+      ExecuteBarriers(d3d12_barriers_pre_pass[pass_index], barriers_pre_pass[pass_index], external_buffer_resources, command_list);
       if (prev_command_list != command_list) {
         prev_command_list = command_list;
         shader_visible_descriptor_heap.SetDescriptorHeapsToCommandList(command_list);
       }
-      render_pass_function_list[pass_index](command_list, devices.swapchain.GetRtvHandle(), uav_gpu_handle);
-      if (pass_index == 1) {
-        D3D12_RESOURCE_BARRIER barriers[1]{};
-        {
-          auto& barrier = barriers[0];
-          barrier.Type  = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-          barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-          barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-          barrier.Transition.pResource   = devices.swapchain.GetResource();
-          barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-          barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
+      auto& current_render_pass_buffer_id_list = render_graph.GetRenderPassBufferIdList()[pass_index];
+      auto& current_render_pass_buffer_state_list = render_graph.GetRenderPassBufferStateFlagList()[pass_index];
+      vector<ID3D12Resource*> resources{&memory_resource_work};
+      resources.reserve(current_render_pass_buffer_id_list.size());
+      vector<D3D12_CPU_DESCRIPTOR_HANDLE> cpu_handles{&memory_resource_work};
+      cpu_handles.reserve(current_render_pass_buffer_id_list.size());
+      vector<D3D12_CPU_DESCRIPTOR_HANDLE> cpu_handles_buffer{&memory_resource_work};
+      cpu_handles_buffer.reserve(current_render_pass_buffer_id_list.size());
+      for (uint32_t i = 0; i < current_render_pass_buffer_id_list.size(); i++) {
+        auto& buffer_id = current_render_pass_buffer_id_list[i];
+        if (external_buffer_resources.contains(buffer_id)) {
+          resources.push_back(external_buffer_resources.at(buffer_id));
+        } else {
+          resources.push_back(physical_buffers.GetPhysicalBuffer(buffer_id_map.at(buffer_id)));
         }
-        command_list->ResourceBarrier(1, barriers);
+        auto d3d12_descriptor_heap_type = GetD3d12DescriptorHeapType(current_render_pass_buffer_state_list[i]);
+        if (d3d12_descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_NUM_TYPES) {
+          cpu_handles.push_back(D3D12_CPU_DESCRIPTOR_HANDLE{});
+          continue;
+        }
+        auto cpu_handle = (external_cpu_handles.contains(buffer_id) && external_cpu_handles.at(buffer_id).contains(d3d12_descriptor_heap_type)) ? 
+            external_cpu_handles.at(buffer_id).at(d3d12_descriptor_heap_type) : descriptor_handles.GetCpuHandle(buffer_id_map.at(buffer_id), d3d12_descriptor_heap_type);
+        cpu_handles.push_back(cpu_handle);
+        if (d3d12_descriptor_heap_type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) {
+          cpu_handles_buffer.push_back(cpu_handle);
+        }
       }
+      auto gpu_handle_buffer = cpu_handles_buffer.empty() ? D3D12_GPU_DESCRIPTOR_HANDLE{} : shader_visible_descriptor_heap.CopyToBufferDescriptorHeap(cpu_handles_buffer.data(), cpu_handles_buffer.size(), &memory_resource_work);
+      render_pass_function_list[pass_index](command_list,
+                                            current_render_pass_buffer_id_list.data(),
+                                            render_graph.GetBufferConfigList(),
+                                            resources.data(),
+                                            cpu_handles.data(),
+                                            gpu_handle_buffer,
+                                            D3D12_GPU_DESCRIPTOR_HANDLE{}); // samplers
+      ExecuteBarriers(d3d12_barriers_post_pass[pass_index], barriers_post_pass[pass_index], external_buffer_resources, command_list);
       if (queue_signals.contains(pass_index)) {
-        // execute compute queue
         command_list_set.ExecuteCommandLists(devices.GetCommandQueue(command_queue_type), command_queue_type);
         auto& signal_val = ++signal_values.used_signal_val[command_queue_type];
         devices.command_queue.RegisterSignal(command_queue_type, signal_val);
