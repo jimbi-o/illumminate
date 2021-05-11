@@ -1395,17 +1395,14 @@ TEST_CASE("use compute queue") {
   BuildRenderGraphUseComputeQueue(swapchain_size.width, swapchain_size.height, devices.swapchain.GetWidth(), devices.swapchain.GetHeight(), &memory_resource_work, &render_graph);
   memory_resource_work.Reset();
   auto swapchain_buffer_id = *render_graph.GetBufferId(StrId("swapchain"), &memory_resource_work).begin(); // ret size should be 1.
-  unordered_map<BufferId, PhysicalBufferId> buffer_id_map{&memory_resource_work};
+  unordered_map<BufferId, PhysicalBufferId> buffer_id_map{&memory_resource_scene};
   for (auto& [id, buffer_config] : render_graph.GetBufferConfigList()) {
     if (id != swapchain_buffer_id) {
       buffer_id_map.insert_or_assign(id, CreatePhysicalBuffer(buffer_config, devices.GetDevice(), &physical_buffers, &descriptor_heaps, &descriptor_handles));
     }
   }
-  auto [barriers_pre_pass, barriers_post_pass] = ConfigureBarriers(render_graph, &memory_resource_scene);
-  auto d3d12_barriers_pre_pass  = PrepareD3d12ResourceBarriers(barriers_pre_pass,  buffer_id_map, physical_buffers.GetPhysicalBufferList(), &memory_resource_scene);
-  auto d3d12_barriers_post_pass = PrepareD3d12ResourceBarriers(barriers_post_pass, buffer_id_map, physical_buffers.GetPhysicalBufferList(), &memory_resource_scene);
-  auto queue_signals = ConfigureQueueSignals(render_graph, &memory_resource_scene, &memory_resource_work);
-  memory_resource_work.Reset();
+  auto d3d12_barriers_pre_pass  = PrepareD3d12ResourceBarriers(render_graph.GetBarriersPrePass(),  buffer_id_map, physical_buffers.GetPhysicalBufferList(), &memory_resource_scene);
+  auto d3d12_barriers_post_pass = PrepareD3d12ResourceBarriers(render_graph.GetBarriersPostPass(), buffer_id_map, physical_buffers.GetPhysicalBufferList(), &memory_resource_scene);
   // TODO memory aliasing
   unordered_map<BufferId, ID3D12Resource*> external_buffer_resources{&memory_resource_scene};
   external_buffer_resources.insert_or_assign(swapchain_buffer_id, nullptr);
@@ -1436,7 +1433,7 @@ TEST_CASE("use compute queue") {
         signal_queue_waiting_render_pass_list.erase(pass_index);
       }
       auto command_list = command_list_set.GetCommandList(command_queue_type, 1)[0];
-      ExecuteBarriers(d3d12_barriers_pre_pass[pass_index], barriers_pre_pass[pass_index], external_buffer_resources, command_list);
+      ExecuteBarriers(d3d12_barriers_pre_pass[pass_index], render_graph.GetBarriersPrePass()[pass_index], external_buffer_resources, command_list);
       if (prev_command_list != command_list) {
         prev_command_list = command_list;
         shader_visible_descriptor_heap.SetDescriptorHeapsToCommandList(command_list);
@@ -1476,12 +1473,12 @@ TEST_CASE("use compute queue") {
                                             cpu_handles.data(),
                                             gpu_handle_buffer,
                                             D3D12_GPU_DESCRIPTOR_HANDLE{}); // samplers
-      ExecuteBarriers(d3d12_barriers_post_pass[pass_index], barriers_post_pass[pass_index], external_buffer_resources, command_list);
-      if (queue_signals.contains(pass_index)) {
+      ExecuteBarriers(d3d12_barriers_post_pass[pass_index], render_graph.GetBarriersPostPass()[pass_index], external_buffer_resources, command_list);
+      if (render_graph.GetQueueSignals().contains(pass_index)) {
         command_list_set.ExecuteCommandLists(devices.GetCommandQueue(command_queue_type), command_queue_type);
         auto& signal_val = ++signal_values.used_signal_val[command_queue_type];
         devices.command_queue.RegisterSignal(command_queue_type, signal_val);
-        for (auto& dst_pass : queue_signals.at(pass_index)) {
+        for (auto& dst_pass : render_graph.GetQueueSignals().at(pass_index)) {
           signal_queue_waiting_render_pass_list.insert_or_assign(dst_pass, QueueSignalInfo{signal_val, command_queue_type});
         }
       }

@@ -173,36 +173,6 @@ struct BufferConfig {
   DepthStencilFlag depth_stencil_flag;
   std::byte _pad{};
 };
-class RenderGraph {
- public:
-  RenderGraph(std::pmr::memory_resource* memory_resource) : memory_resource_(memory_resource) {}
-  void Build(const RenderGraphConfig& config, std::pmr::memory_resource* memory_resource_work);
-  constexpr uint32_t GetRenderPassNum() const { return render_pass_num_; }
-  constexpr const auto& GetBufferIdList() const { return buffer_id_list_; }
-  constexpr const auto& GetRenderPassBufferIdList() const { return render_pass_buffer_id_list_; }
-  constexpr const auto& GetRenderPassBufferStateFlagList() const { return render_pass_buffer_state_flag_list_; }
-  constexpr const auto& GetBufferStateChangeInfoListMap() const { return buffer_state_change_info_list_map_; }
-  constexpr const auto& GetInterQueuePassDependency() const { return inter_queue_pass_dependency_; }
-  constexpr const auto& GetRenderPassCommandQueueTypeList() const { return render_pass_command_queue_type_list_; }
-  constexpr const auto& GetBufferConfigList() const { return buffer_config_list_; }
-  unordered_set<BufferId> GetBufferId(const StrId& buffer_name, std::pmr::memory_resource* memory_resource) const;
- private:
-  std::pmr::memory_resource* memory_resource_;
-  vector<BufferId> buffer_id_list_;
-  vector<vector<BufferId>> render_pass_buffer_id_list_;
-  vector<vector<BufferStateFlags>> render_pass_buffer_state_flag_list_;
-  unordered_map<BufferId, vector<uint32_t>> buffer_user_pass_index_;
-  unordered_map<BufferId, vector<BufferStateChangeInfo>> buffer_state_change_info_list_map_;
-  unordered_map<uint32_t, unordered_set<uint32_t>> inter_queue_pass_dependency_;
-  vector<CommandQueueType> render_pass_command_queue_type_list_;
-  unordered_map<BufferId, BufferConfig> buffer_config_list_;
-  unordered_map<BufferId, StrId> buffer_id_name_map_;
-  uint32_t render_pass_num_;
-  [[maybe_unused]] std::byte _pad[4]{};
-  RenderGraph() = delete;
-  RenderGraph(const RenderGraph&) = delete;
-  void operator=(const RenderGraph&) = delete;
-};
 struct BarrierTransition {
   BufferStateFlags state_before;
   BufferStateFlags state_after;
@@ -215,8 +185,36 @@ struct BarrierConfig {
   std::byte _pad[3]{};
   std::variant<BarrierTransition, BarrierUav> params;
 };
-using BarrierListPerPass = vector<vector<BarrierConfig>>;
-std::tuple<vector<vector<BarrierConfig>>, vector<vector<BarrierConfig>>> ConfigureBarriers(const RenderGraph& render_graph, std::pmr::memory_resource* memory_resource_barriers);
-unordered_map<uint32_t, unordered_set<uint32_t>> ConfigureQueueSignals(const RenderGraph& render_graph, std::pmr::memory_resource* memory_resource_signals, std::pmr::memory_resource* memory_resource_work);
+class RenderGraph {
+ public:
+  RenderGraph(std::pmr::memory_resource* memory_resource) : memory_resource_(memory_resource) {}
+  void Build(const RenderGraphConfig& config, std::pmr::memory_resource* memory_resource_work);
+  constexpr uint32_t GetRenderPassNum() const { return render_pass_num_; }
+  constexpr const auto& GetBufferIdList() const { return buffer_id_list_; }
+  constexpr const auto& GetRenderPassBufferIdList() const { return render_pass_buffer_id_list_; }
+  constexpr const auto& GetRenderPassBufferStateFlagList() const { return render_pass_buffer_state_flag_list_; }
+  constexpr const auto& GetRenderPassCommandQueueTypeList() const { return render_pass_command_queue_type_list_; }
+  constexpr const auto& GetBufferConfigList() const { return buffer_config_list_; }
+  constexpr const auto& GetBarriersPrePass() const { return barriers_pre_pass_; }
+  constexpr const auto& GetBarriersPostPass() const { return barriers_post_pass_; }
+  constexpr const auto& GetQueueSignals() const { return queue_signals_; }
+  unordered_set<BufferId> GetBufferId(const StrId& buffer_name, std::pmr::memory_resource* memory_resource) const;
+ private:
+  std::pmr::memory_resource* memory_resource_;
+  vector<BufferId> buffer_id_list_;
+  vector<vector<BufferId>> render_pass_buffer_id_list_;
+  vector<vector<BufferStateFlags>> render_pass_buffer_state_flag_list_;
+  vector<CommandQueueType> render_pass_command_queue_type_list_;
+  unordered_map<BufferId, BufferConfig> buffer_config_list_;
+  unordered_map<BufferId, StrId> buffer_id_name_map_;
+  vector<vector<BarrierConfig>> barriers_pre_pass_;
+  vector<vector<BarrierConfig>> barriers_post_pass_;
+  unordered_map<uint32_t, unordered_set<uint32_t>> queue_signals_;
+  uint32_t render_pass_num_;
+  [[maybe_unused]] std::byte _pad[4]{};
+  RenderGraph() = delete;
+  RenderGraph(const RenderGraph&) = delete;
+  void operator=(const RenderGraph&) = delete;
+};
 }
 #endif
