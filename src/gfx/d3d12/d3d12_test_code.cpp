@@ -731,20 +731,6 @@ const uint32_t buffer_offset_in_bytes_work = buffer_offset_in_bytes_frame + buff
 const uint32_t buffer_size_in_bytes_work = 16 * 1024;
 std::byte buffer[buffer_offset_in_bytes_work + buffer_size_in_bytes_work]{};
 const uint32_t kTestFrameNum = 10;
-static void BuildRenderGraphUseComputeQueue(const uint32_t primary_buffer_width, const uint32_t primary_buffer_height, const uint32_t swapchain_buffer_width, const uint32_t swapchain_buffer_height, std::pmr::memory_resource* memory_resource_work, illuminate::gfx::RenderGraph* render_graph) {
-  using namespace illuminate::gfx;
-  RenderGraphConfig render_graph_config(memory_resource_work);
-  render_graph_config.SetPrimaryBufferSize(primary_buffer_width, primary_buffer_height);
-  render_graph_config.SetSwapchainBufferSize(swapchain_buffer_width, swapchain_buffer_height);
-  auto pass_draw = render_graph_config.CreateNewRenderPass({.pass_name = StrId("draw"), .command_queue_type = CommandQueueType::kCompute,});
-  auto pass_copy = render_graph_config.CreateNewRenderPass({.pass_name = StrId("copy"), .command_queue_type = CommandQueueType::kGraphics,});
-  render_graph_config.AppendRenderPassBufferConfig(pass_draw, {.buffer_name = StrId("mainbuffer"), .state = kBufferStateFlagUav, .read_write_flag = kWriteFlag,});
-  render_graph_config.AppendRenderPassBufferConfig(pass_copy, {.buffer_name = StrId("mainbuffer"), .state = kBufferStateFlagUav, .read_write_flag = kReadFlag,});
-  render_graph_config.AppendRenderPassBufferConfig(pass_copy, {.buffer_name = StrId("swapchain"),  .state = kBufferStateFlagRtv, .read_write_flag = kWriteFlag, });
-  render_graph_config.AddBufferInitialState(StrId("swapchain"), kBufferStateFlagPresent);
-  render_graph_config.AddBufferFinalState(StrId("swapchain"), kBufferStateFlagPresent);
-  render_graph->Build(render_graph_config, memory_resource_work);
-}
 }
 #endif
 #include "doctest/doctest.h"
@@ -1332,7 +1318,7 @@ TEST_CASE("load from srv") {
   command_list_set.Term();
   devices.Term();
 }
-TEST_CASE("use compute queue") {
+TEST_CASE("render graph") {
   using namespace illuminate;
   using namespace illuminate::gfx;
   using namespace illuminate::gfx::d3d12;
@@ -1343,6 +1329,7 @@ TEST_CASE("use compute queue") {
   CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
   PmrLinearAllocator memory_resource_persistent(&buffer[buffer_offset_in_bytes_persistent], buffer_size_in_bytes_persistent);
   PmrLinearAllocator memory_resource_scene(&buffer[buffer_offset_in_bytes_scene], buffer_size_in_bytes_scene);
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   CommandListSet command_list_set(&memory_resource_persistent);
   CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num));
   ShaderResourceSet shader_resource_set(&memory_resource_persistent);
@@ -1356,14 +1343,15 @@ TEST_CASE("use compute queue") {
   CHECK(shader_visible_descriptor_heap.Init(devices.GetDevice()));
   FrameBufferedBufferSet frame_buffered_buffers(&memory_resource_persistent);
   SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
-  auto [compute_queue_rootsig, compute_queue_pso] = shader_resource_set.CreateCsPipelineStateObject(StrId("compute_queue_pso"), devices.GetDevice(), StrId("draw_rootsig"), L"shader/test/fill-screen.cs.hlsl", &memory_resource_work);
-  auto [copy_rootsig, copy_pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("copy_pso"), devices.GetDevice(), StrId("copy_rootsig"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/copyuav.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
-  memory_resource_work.Reset();
   using RenderPassFunction = std::function<void(D3d12CommandList*, const BufferId*, const unordered_map<BufferId, BufferConfig>&, ID3D12Resource**, D3D12_CPU_DESCRIPTOR_HANDLE*, D3D12_GPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE)>;
-  using RenderPassFunctionList = vector<RenderPassFunction>;
-  RenderPassFunctionList render_pass_function_list{&memory_resource_persistent};
-  {
+  vector<RenderPassFunction> render_pass_function_list{&memory_resource_persistent};
+  RenderGraph render_graph(&memory_resource_scene);
+  BufferId swapchain_buffer_id{};
+  SUBCASE("use compute queue") {
+    auto [compute_queue_rootsig, compute_queue_pso] = shader_resource_set.CreateCsPipelineStateObject(StrId("compute_queue_pso"), devices.GetDevice(), StrId("draw_rootsig"), L"shader/test/fill-screen.cs.hlsl", &memory_resource_work);
+    memory_resource_work.Reset();
+    auto [copy_rootsig, copy_pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("copy_pso"), devices.GetDevice(), StrId("copy_rootsig"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/copyuav.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
+    memory_resource_work.Reset();
     render_pass_function_list.push_back([compute_queue_rootsig, compute_queue_pso](D3d12CommandList* command_list, const BufferId* buffer_id_list, const unordered_map<BufferId, BufferConfig>& buffer_config_list, ID3D12Resource** resource, [[maybe_unused]] D3D12_CPU_DESCRIPTOR_HANDLE* cpu_handle, D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle_buffers, [[maybe_unused]] D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle_samplers) {
       const uint32_t uav_index = 0;
       command_list->DiscardResource(resource[uav_index], nullptr);
@@ -1390,11 +1378,20 @@ TEST_CASE("use compute queue") {
       command_list->SetGraphicsRootDescriptorTable(0, gpu_handle_buffers);
       command_list->DrawInstanced(3, 1, 0, 0);
     });
+    RenderGraphConfig render_graph_config(&memory_resource_work);
+    render_graph_config.SetPrimaryBufferSize(swapchain_size.width, swapchain_size.height);
+    render_graph_config.SetSwapchainBufferSize(devices.swapchain.GetWidth(), devices.swapchain.GetHeight());
+    auto pass_draw = render_graph_config.CreateNewRenderPass({.pass_name = StrId("draw"), .command_queue_type = CommandQueueType::kCompute,});
+    auto pass_copy = render_graph_config.CreateNewRenderPass({.pass_name = StrId("copy"), .command_queue_type = CommandQueueType::kGraphics,});
+    render_graph_config.AppendRenderPassBufferConfig(pass_draw, {.buffer_name = StrId("mainbuffer"), .state = kBufferStateFlagUav, .read_write_flag = kWriteFlag,});
+    render_graph_config.AppendRenderPassBufferConfig(pass_copy, {.buffer_name = StrId("mainbuffer"), .state = kBufferStateFlagUav, .read_write_flag = kReadFlag,});
+    render_graph_config.AppendRenderPassBufferConfig(pass_copy, {.buffer_name = StrId("swapchain"),  .state = kBufferStateFlagRtv, .read_write_flag = kWriteFlag, });
+    render_graph_config.AddBufferInitialState(StrId("swapchain"), kBufferStateFlagPresent);
+    render_graph_config.AddBufferFinalState(StrId("swapchain"), kBufferStateFlagPresent);
+    render_graph.Build(render_graph_config, &memory_resource_work);
+    memory_resource_work.Reset();
+    swapchain_buffer_id = render_graph.GetRenderPassBufferIdList()[pass_copy][1];
   }
-  RenderGraph render_graph(&memory_resource_scene);
-  BuildRenderGraphUseComputeQueue(swapchain_size.width, swapchain_size.height, devices.swapchain.GetWidth(), devices.swapchain.GetHeight(), &memory_resource_work, &render_graph);
-  memory_resource_work.Reset();
-  auto swapchain_buffer_id = render_graph.GetRenderPassBufferIdList()[1][1];
   unordered_map<BufferId, PhysicalBufferId> buffer_id_map{&memory_resource_scene};
   for (auto& [id, buffer_config] : render_graph.GetBufferConfigList()) {
     if (id != swapchain_buffer_id) {
