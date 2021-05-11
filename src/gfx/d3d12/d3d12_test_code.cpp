@@ -1394,7 +1394,7 @@ TEST_CASE("use compute queue") {
   RenderGraph render_graph(&memory_resource_scene);
   BuildRenderGraphUseComputeQueue(swapchain_size.width, swapchain_size.height, devices.swapchain.GetWidth(), devices.swapchain.GetHeight(), &memory_resource_work, &render_graph);
   memory_resource_work.Reset();
-  auto swapchain_buffer_id = *render_graph.GetBufferId(StrId("swapchain"), &memory_resource_work).begin(); // ret size should be 1.
+  auto swapchain_buffer_id = render_graph.GetRenderPassBufferIdList()[1][1];
   unordered_map<BufferId, PhysicalBufferId> buffer_id_map{&memory_resource_scene};
   for (auto& [id, buffer_config] : render_graph.GetBufferConfigList()) {
     if (id != swapchain_buffer_id) {
