@@ -613,7 +613,7 @@ static auto GetConfigurationMatchingBufferSet(const vector<BufferId>& buffer_id_
   vector<BufferConfig> matched_buffer_config_list{memory_resource_work};
   matched_buffer_config_list.reserve(buffer_num);
   for (uint32_t matched_buffer_index = 0; matched_buffer_index < buffer_num; matched_buffer_index++) {
-    auto matched_buffer_id = buffer_id_list[matched_buffer_index];
+    auto& matched_buffer_id = buffer_id_list[matched_buffer_index];
     if (excluded_buffers.contains(matched_buffer_id)) continue;
     matched_buffer_set.push_back(unordered_set<BufferId>{memory_resource});
     matched_buffer_set.back().insert(matched_buffer_id);
@@ -624,7 +624,7 @@ static auto GetConfigurationMatchingBufferSet(const vector<BufferId>& buffer_id_
       auto& cand_buffer_config = buffer_config_list.at(cand_buffer_id);
       if (matched_buffer_config_list.back().width != cand_buffer_config.width) continue;
       if (matched_buffer_config_list.back().height != cand_buffer_config.height) continue;
-      if (!IsMergeableForBufferCreationImpl(matched_buffer_config_list.back().state_flags, cand_buffer_config.state_flags)) continue;
+      if (!IsMergeableForBufferCreation(matched_buffer_config_list.back().state_flags, cand_buffer_config.state_flags)) continue;
       if (matched_buffer_config_list.back().dimension != cand_buffer_config.dimension) continue;
       if (matched_buffer_config_list.back().format != cand_buffer_config.format) continue;
       matched_buffer_set.back().insert(cand_buffer_id);
@@ -1643,9 +1643,37 @@ TEST_CASE("buffer config match") {
   CHECK(matched_buffer_set[0].size() == 2);
   CHECK(matched_buffer_set[0].contains(0));
   CHECK(matched_buffer_set[0].contains(2));
+  CHECK(!matched_buffer_set[0].contains(1));
   CHECK(matched_buffer_set[1].size() == 2);
   CHECK(matched_buffer_set[1].contains(1));
   CHECK(matched_buffer_set[1].contains(2));
+  CHECK(!matched_buffer_set[1].contains(0));
+  buffer_config_list[0].state_flags = kBufferStateFlagSrvPsOnly;
+  buffer_config_list[1].state_flags = kBufferStateFlagDsv;
+  buffer_config_list[2].state_flags = kBufferStateFlagRtv;
+  matched_buffer_set = GetConfigurationMatchingBufferSet(buffer_id_list, buffer_config_list, {}, &memory_resource_work, &memory_resource_work);
+  CHECK(matched_buffer_set.size() == 2);
+  CHECK(matched_buffer_set[0].size() == 2);
+  CHECK(matched_buffer_set[0].contains(0));
+  CHECK(matched_buffer_set[0].contains(1));
+  CHECK(!matched_buffer_set[0].contains(2));
+  CHECK(matched_buffer_set[1].size() == 2);
+  CHECK(matched_buffer_set[1].contains(0));
+  CHECK(matched_buffer_set[1].contains(2));
+  CHECK(!matched_buffer_set[1].contains(1));
+  buffer_config_list[0].state_flags = kBufferStateFlagDsv;
+  buffer_config_list[1].state_flags = kBufferStateFlagSrvPsOnly;
+  buffer_config_list[2].state_flags = kBufferStateFlagRtv;
+  matched_buffer_set = GetConfigurationMatchingBufferSet(buffer_id_list, buffer_config_list, {}, &memory_resource_work, &memory_resource_work);
+  CHECK(matched_buffer_set.size() == 2);
+  CHECK(matched_buffer_set[0].size() == 2);
+  CHECK(matched_buffer_set[0].contains(0));
+  CHECK(matched_buffer_set[0].contains(1));
+  CHECK(!matched_buffer_set[0].contains(2));
+  CHECK(matched_buffer_set[1].size() == 2);
+  CHECK(matched_buffer_set[1].contains(1));
+  CHECK(matched_buffer_set[1].contains(2));
+  CHECK(!matched_buffer_set[1].contains(0));
 }
 TEST_CASE("buffer reuse") {
   using namespace illuminate;
