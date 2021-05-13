@@ -198,7 +198,6 @@ class RenderGraph {
   constexpr const auto& GetBarriersPrePass() const { return barriers_pre_pass_; }
   constexpr const auto& GetBarriersPostPass() const { return barriers_post_pass_; }
   constexpr const auto& GetQueueSignals() const { return queue_signals_; }
-  unordered_set<BufferId> GetBufferId(const StrId& buffer_name, std::pmr::memory_resource* memory_resource) const;
  private:
   std::pmr::memory_resource* memory_resource_;
   vector<BufferId> buffer_id_list_;
@@ -206,7 +205,6 @@ class RenderGraph {
   vector<vector<BufferStateFlags>> render_pass_buffer_state_flag_list_;
   vector<CommandQueueType> render_pass_command_queue_type_list_;
   unordered_map<BufferId, BufferConfig> buffer_config_list_;
-  unordered_map<BufferId, StrId> buffer_id_name_map_;
   vector<vector<BarrierConfig>> barriers_pre_pass_;
   vector<vector<BarrierConfig>> barriers_post_pass_;
   unordered_map<uint32_t, unordered_set<uint32_t>> queue_signals_;

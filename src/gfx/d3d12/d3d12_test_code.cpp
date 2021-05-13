@@ -1496,4 +1496,5 @@ TEST_CASE("render graph") {
  * inter-frame async compute
  * combine buffer flag test
  * multi threaded
+ * remove #if 0
  */
