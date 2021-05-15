@@ -289,11 +289,6 @@ class PhysicalBufferSet {
     SET_NAME(resource, L"resource", buffer_id_used_);
     return buffer_id_used_;
   }
-  PhysicalBufferId RegisterExternalPhysicalBuffer(ID3D12Resource* resource) {
-    buffer_id_used_++;
-    resource_list_.emplace(buffer_id_used_, resource);
-    return buffer_id_used_;
-  }
   ID3D12Resource* GetPhysicalBuffer(const PhysicalBufferId buffer_id) {
     return resource_list_.at(buffer_id);
   }
@@ -1388,6 +1383,7 @@ TEST_CASE("render graph") {
     render_graph_config.AppendRenderPassBufferConfig(pass_copy, {.buffer_name = StrId("swapchain"),  .state = kBufferStateFlagRtv, .read_write_flag = kWriteFlag, });
     render_graph_config.AddBufferInitialState(StrId("swapchain"), kBufferStateFlagPresent);
     render_graph_config.AddBufferFinalState(StrId("swapchain"), kBufferStateFlagPresent);
+    render_graph_config.AddExternalBufferName(StrId("swapchain"));
     render_graph.Build(render_graph_config, &memory_resource_work);
     memory_resource_work.Reset();
     swapchain_buffer_id = render_graph.GetRenderPassBufferIdList()[pass_copy][1];
@@ -1498,3 +1494,5 @@ TEST_CASE("render graph") {
  * multi threaded
  * remove #if 0
  */
+TEST_CASE("memory aliasing") {
+}
