@@ -16,21 +16,6 @@ constexpr bool IsBufferStateFlagsMergeable(const BufferStateFlags& a, const Buff
 constexpr BufferStateFlags MergeBufferStateFlags(const BufferStateFlags& a, const BufferStateFlags& b) {
   return static_cast<BufferStateFlags>(a | b);
 }
-constexpr bool IsMergeableForBufferCreationImpl(const BufferStateFlags& a, const BufferStateFlags& b) {
-  if (a & kBufferStateFlagRtv) {
-    if (b & kBufferStateFlagDsv) return false;
-  }
-  if (a & kBufferStateFlagDsv) {
-    if (b & kBufferStateFlagCbvUpload) return false;
-  }
-  return true;
-}
-constexpr bool IsMergeableForBufferCreation(const BufferStateFlags& a, const BufferStateFlags& b) {
-  if (a == b) return true;
-  if (!IsMergeableForBufferCreationImpl(a, b)) return false;
-  if (!IsMergeableForBufferCreationImpl(b, a)) return false;
-  return true;
-}
 static BufferStateFlags MergeReadWriteFlag(const BufferStateFlags& state, const ReadWriteFlag& rw_flag) {
   BufferStateFlags ret = state;
   if (rw_flag & kReadFlag) ret = static_cast<BufferStateFlags>(ret | kBufferStateReadFlag);
@@ -607,41 +592,70 @@ static unordered_map<uint32_t, unordered_set<uint32_t>> ConfigureQueueSignals(co
   }
   return queue_signal;
 }
-static auto GetConfigurationMatchingBufferSet(const vector<BufferId>& buffer_id_list, const unordered_map<BufferId, BufferConfig>& buffer_config_list, const unordered_set<BufferId>& excluded_buffers, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
-  const auto buffer_num = static_cast<uint32_t>(buffer_id_list.size());
-  vector<unordered_set<BufferId>> matched_buffer_set{memory_resource};
-  vector<BufferConfig> matched_buffer_config_list{memory_resource_work};
-  matched_buffer_config_list.reserve(buffer_num);
-  for (uint32_t matched_buffer_index = 0; matched_buffer_index < buffer_num; matched_buffer_index++) {
-    auto& matched_buffer_id = buffer_id_list[matched_buffer_index];
-    if (excluded_buffers.contains(matched_buffer_id)) continue;
-    matched_buffer_set.push_back(unordered_set<BufferId>{memory_resource});
-    matched_buffer_set.back().insert(matched_buffer_id);
-    matched_buffer_config_list.push_back(buffer_config_list.at(matched_buffer_id));
-    for (uint32_t cand_buffer_index = matched_buffer_index + 1; cand_buffer_index < buffer_num; cand_buffer_index++) {
-      auto cand_buffer_id = buffer_id_list[cand_buffer_index];
-      if (excluded_buffers.contains(cand_buffer_id)) continue;
-      auto& cand_buffer_config = buffer_config_list.at(cand_buffer_id);
-      if (matched_buffer_config_list.back().width != cand_buffer_config.width) continue;
-      if (matched_buffer_config_list.back().height != cand_buffer_config.height) continue;
-      if (!IsMergeableForBufferCreation(matched_buffer_config_list.back().state_flags, cand_buffer_config.state_flags)) continue;
-      if (matched_buffer_config_list.back().dimension != cand_buffer_config.dimension) continue;
-      if (matched_buffer_config_list.back().format != cand_buffer_config.format) continue;
-      matched_buffer_set.back().insert(cand_buffer_id);
-      matched_buffer_config_list.back().state_flags = MergeBufferStateFlags(matched_buffer_config_list.back().state_flags, cand_buffer_config.state_flags);
-    }
-    if (matched_buffer_set.back().size() == 1) {
-      matched_buffer_set.pop_back();
-      matched_buffer_config_list.pop_back();
-    }
-  }
-  return matched_buffer_set;
-}
 static std::tuple<unordered_map<BufferId, unordered_set<uint32_t>>, unordered_map<BufferId, unordered_set<uint32_t>>> GetInitialAndFinalUsersOfEachBuffers(const unordered_map<BufferId, vector<vector<uint32_t>>>& buffer_user_pass_list, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>& node_distance_map, const unordered_set<BufferId>& excluded_buffers, std::pmr::memory_resource* memory_resource) {
   unordered_map<BufferId, unordered_set<uint32_t>> initial_users{memory_resource};
+  initial_users.reserve(buffer_user_pass_list.size());
   unordered_map<BufferId, unordered_set<uint32_t>> final_users{memory_resource};
-  // TODO
+  final_users.reserve(buffer_user_pass_list.size());
+  for (auto& [buffer_id, user_pass_list] : buffer_user_pass_list) {
+    if (excluded_buffers.contains(buffer_id)) continue;
+    auto [initial_users_it, initial_result] = initial_users.insert_or_assign(buffer_id, unordered_set<uint32_t>{memory_resource});
+    auto& initial_user_set = initial_users_it->second;
+    auto [final_users_it, final_result] = final_users.insert_or_assign(buffer_id, unordered_set<uint32_t>{memory_resource});
+    auto& final_user_set = final_users_it->second;
+    auto user_pass_list_num = static_cast<uint32_t>(user_pass_list.size());
+    for (uint32_t user_pass_list_index = 0; user_pass_list_index < user_pass_list_num; user_pass_list_index++) {
+      for (auto& pass : user_pass_list[user_pass_list_index]) {
+        if (initial_user_set.empty()) {
+          initial_user_set.insert(pass);
+          continue;
+        }
+        auto& distance_map = node_distance_map.at(pass);
+        for (auto& initial_user : initial_user_set) {
+          if (distance_map.contains(initial_user)) continue;
+          initial_user_set.insert(pass);
+        }
+      }
+      auto& final_pass_list = user_pass_list[user_pass_list_num - user_pass_list_index - 1];
+      auto final_pass_list_num = static_cast<uint32_t>(final_pass_list.size());
+      for (uint32_t i = 0; i < final_pass_list_num; i++) {
+        auto& pass = final_pass_list[final_pass_list_num - i - 1];
+        if (final_user_set.empty()) {
+          final_user_set.insert(pass);
+          continue;
+        }
+        auto& distance_map = node_distance_map.at(pass);
+        for (auto& final_user : final_user_set) {
+          if (distance_map.contains(final_user)) continue;
+          final_user_set.insert(pass);
+        }
+      }
+    }
+  }
   return {initial_users, final_users};
+}
+constexpr bool IsMergeableForBufferCreationImpl(const BufferStateFlags& a, const BufferStateFlags& b) {
+  if (a & kBufferStateFlagRtv) {
+    if (b & kBufferStateFlagDsv) return false;
+  }
+  if (a & kBufferStateFlagDsv) {
+    if (b & kBufferStateFlagCbvUpload) return false;
+  }
+  return true;
+}
+constexpr bool IsMergeableForBufferCreation(const BufferStateFlags& a, const BufferStateFlags& b) {
+  if (a == b) return true;
+  if (!IsMergeableForBufferCreationImpl(a, b)) return false;
+  if (!IsMergeableForBufferCreationImpl(b, a)) return false;
+  return true;
+}
+constexpr bool IsBufferConfigMergeable(const BufferConfig& a, const BufferConfig& b) {
+  if (a.width != b.width) return false;
+  if (a.height != b.height) return false;
+  if (a.dimension != b.dimension) return false;
+  if (a.format != b.format) return false;
+  if (!IsMergeableForBufferCreation(a.state_flags, b.state_flags)) return false;
+  return true;
 }
 static bool IsAllDescendant(const unordered_set<uint32_t>& ancestor_candidates, const unordered_set<uint32_t>& descendant_candidates, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>& node_distance_map) {
   if (ancestor_candidates.empty()) return false;
@@ -656,38 +670,99 @@ static bool IsAllDescendant(const unordered_set<uint32_t>& ancestor_candidates, 
   }
   return true;
 }
-static unordered_map<BufferId, BufferId> FindReusableBuffers(const vector<unordered_set<BufferId>>& configuration_matching_buffer_set, unordered_map<BufferId, unordered_set<uint32_t>>&& initial_users, unordered_map<BufferId, unordered_set<uint32_t>>&& final_users, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>& node_distance_map, std::pmr::memory_resource* memory_resource) {
+static std::tuple<unordered_map<BufferId, BufferId>, unordered_set<BufferId>> FindReusableBuffers(const vector<BufferId>& buffer_id_list, const unordered_map<BufferId, BufferConfig>& buffer_config_list, unordered_map<BufferId, unordered_set<uint32_t>>&& initial_users, unordered_map<BufferId, unordered_set<uint32_t>>&& final_users, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>& node_distance_map, const unordered_set<BufferId>& excluded_buffers, std::pmr::memory_resource* memory_resource) {
   unordered_map<BufferId, BufferId> reusable_buffers{memory_resource};
-  for (auto& matching_buffers : configuration_matching_buffer_set) {
-    for (auto buffer_id : matching_buffers) {
-      if (reusable_buffers.contains(buffer_id)) {
-        buffer_id = reusable_buffers.at(buffer_id);
-      }
-      auto&& current_buffer_initial_users = initial_users.at(buffer_id);
-      auto&& current_buffer_final_users   = final_users.at(buffer_id);
-      for (auto candidate : matching_buffers) {
-        if (reusable_buffers.contains(candidate)) {
-          candidate = reusable_buffers.at(candidate);
-        }
-        if (candidate == buffer_id) continue;
-        auto&& candidate_buffer_initial_users = initial_users.at(candidate);
-        auto&& candidate_buffer_final_users   = final_users.at(candidate);
-        if (IsAllDescendant(current_buffer_initial_users, candidate_buffer_final_users, node_distance_map)) {
-          reusable_buffers.insert_or_assign(buffer_id, candidate);
-          candidate_buffer_final_users = std::move(current_buffer_final_users);
-          current_buffer_initial_users = candidate_buffer_initial_users;
-          current_buffer_final_users   = candidate_buffer_final_users;
-          final_users.erase(buffer_id);
-        } else if (IsAllDescendant(candidate_buffer_initial_users, current_buffer_final_users, node_distance_map)) {
-          reusable_buffers.insert_or_assign(candidate, buffer_id);
-          current_buffer_final_users = std::move(candidate_buffer_final_users);
-          initial_users.erase(candidate);
-          final_users.erase(candidate);
+  unordered_set<BufferId> successor_id_list{memory_resource};
+  auto buffer_num = static_cast<uint32_t>(buffer_id_list.size());
+  for (uint32_t main_index = 0; main_index < buffer_num - 1; main_index++) {
+    auto& main_buffer_id = buffer_id_list[main_index];
+    if (excluded_buffers.contains(main_buffer_id)) continue;
+    if (reusable_buffers.contains(main_buffer_id)) continue;
+    auto main_buffer_config = buffer_config_list.at(main_buffer_id);
+    auto&& main_buffer_initial_users = initial_users.at(main_buffer_id);
+    auto&& main_buffer_final_users   = final_users.at(main_buffer_id);
+    for (uint32_t cand_index = main_index + 1; cand_index < buffer_num; cand_index++) {
+      auto& cand_buffer_id = buffer_id_list[cand_index];
+      if (excluded_buffers.contains(cand_buffer_id)) continue;
+      if (reusable_buffers.contains(cand_buffer_id)) continue;
+      auto& cand_buffer_config = buffer_config_list.at(cand_buffer_id);
+      if (!IsBufferConfigMergeable(main_buffer_config, cand_buffer_config)) continue;
+      auto&& cand_buffer_initial_users = initial_users.at(cand_buffer_id);
+      auto&& cand_buffer_final_users   = final_users.at(cand_buffer_id);
+      if (bool is_main_ancestor = IsAllDescendant(main_buffer_final_users, cand_buffer_initial_users, node_distance_map);
+          is_main_ancestor || IsAllDescendant(cand_buffer_final_users, main_buffer_initial_users, node_distance_map)) {
+        reusable_buffers.insert_or_assign(cand_buffer_id, main_buffer_id);
+        main_buffer_config.state_flags = MergeBufferStateFlags(main_buffer_config.state_flags, cand_buffer_config.state_flags);
+        if (is_main_ancestor) {
+          main_buffer_final_users = std::move(cand_buffer_final_users);
+        } else {
+          main_buffer_initial_users = std::move(cand_buffer_initial_users);
+          successor_id_list.insert(cand_buffer_id);
         }
       }
     }
   }
-  return reusable_buffers;
+  return {reusable_buffers, successor_id_list};
+}
+static auto UpdateBufferIdListUsingReusableBuffers(const unordered_map<BufferId, BufferId>& reusable_buffers, vector<BufferId>&& buffer_id_list) {
+  auto new_end = std::remove_if(buffer_id_list.begin(), buffer_id_list.end(), [&reusable_buffers](const auto& id) { return reusable_buffers.contains(id); });
+  buffer_id_list.erase(new_end, buffer_id_list.end());
+  return std::move(buffer_id_list);
+}
+static auto UpdateRenderPassBufferIdListUsingReusableBuffers(const unordered_map<BufferId, BufferId>& reusable_buffers, vector<vector<BufferId>>&& render_pass_buffer_id_list) {
+  for (auto&& buffer_list : render_pass_buffer_id_list) {
+    auto len = static_cast<uint32_t>(buffer_list.size());
+    for (uint32_t i = 0; i < len; i++) {
+      if (reusable_buffers.contains(buffer_list[i])) {
+        buffer_list[i] = reusable_buffers.at(buffer_list[i]);
+      }
+    }
+  }
+  return std::move(render_pass_buffer_id_list);
+}
+static std::tuple<unordered_map<BufferId, vector<BufferStateFlags>>, unordered_map<BufferId, vector<vector<uint32_t>>>> UpdateBufferStateListAndUserPassListUsingReusableBuffers(const unordered_map<BufferId, BufferId>& reusable_buffers, const unordered_set<BufferId>& successor_id_list, unordered_map<BufferId, vector<BufferStateFlags>>&& buffer_state_list, unordered_map<BufferId, vector<vector<uint32_t>>>&& buffer_user_pass_list) {
+  for (auto& [original_id, new_id] : reusable_buffers) {
+    auto&& src_state = buffer_state_list.at(original_id);
+    auto&& dst_state = buffer_state_list.at(new_id);
+    auto&& src_user_pass = buffer_user_pass_list.at(original_id);
+    auto&& dst_user_pass = buffer_user_pass_list.at(new_id);
+    if (successor_id_list.contains(original_id)) {
+      dst_state.insert(dst_state.begin(), std::make_move_iterator(src_state.begin()), std::make_move_iterator(src_state.end()));
+      dst_user_pass.insert(dst_user_pass.begin(), std::make_move_iterator(src_user_pass.begin()), std::make_move_iterator(src_user_pass.end()));
+    } else {
+      dst_state.insert(dst_state.end(), std::make_move_iterator(src_state.begin()), std::make_move_iterator(src_state.end()));
+      dst_user_pass.insert(dst_user_pass.end(), std::make_move_iterator(src_user_pass.begin()), std::make_move_iterator(src_user_pass.end()));
+    }
+    buffer_state_list.erase(original_id);
+    buffer_user_pass_list.erase(original_id);
+  }
+  return {std::move(buffer_state_list), std::move(buffer_user_pass_list)};
+}
+static auto MergeReusedBufferConfigs(const unordered_map<BufferId, BufferId>& reusable_buffers, unordered_map<BufferId, BufferConfig>&& buffer_config_list) {
+  for (auto& [original_id, new_id] : reusable_buffers) {
+    auto& original_flag = buffer_config_list.at(original_id).state_flags;
+    auto& new_flag = buffer_config_list.at(new_id).state_flags;
+    new_flag = MergeBufferStateFlags(new_flag, original_flag);
+    buffer_config_list.erase(original_id);
+  }
+  return std::move(buffer_config_list);
+}
+static auto CollectExternalBufferIds(const uint32_t pass_num, const RenderPassBufferStateList& render_pass_buffer_state_list, const vector<vector<BufferId>>& render_pass_buffer_id_list, const unordered_set<StrId>& external_buffer_names, std::pmr::memory_resource* memory_resource) {
+  unordered_set<BufferId> external_buffer_id_list{memory_resource};
+  external_buffer_id_list.reserve(external_buffer_names.size());
+  for (uint32_t pass_index = 0; pass_index < pass_num; pass_index++) {
+    auto& current_pass_buffer_state_list = render_pass_buffer_state_list[pass_index];
+    const auto buffer_num = static_cast<uint32_t>(current_pass_buffer_state_list.size());
+    for (uint32_t buffer_index = 0; buffer_index < buffer_num; buffer_index++) {
+      auto& buffer_name = current_pass_buffer_state_list[buffer_index].buffer_name;
+      if (external_buffer_names.contains(buffer_name)) {
+        external_buffer_id_list.insert(render_pass_buffer_id_list[pass_index][buffer_index]);
+      }
+      if (external_buffer_id_list.size() == external_buffer_names.size()) break;
+    }
+    if (external_buffer_id_list.size() == external_buffer_names.size()) break;
+  }
+  return external_buffer_id_list;
 }
 void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resource* memory_resource_work) {
   render_pass_num_ = config.GetRenderPassNum();
@@ -697,7 +772,6 @@ void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resour
   std::tie(buffer_state_list, buffer_user_pass_list) = MergeInitialBufferState(initial_state_flag_list, std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work);
   auto final_state_flag_list = ConvertBufferNameToBufferIdForFinalFlagList(render_pass_num_, config.GetRenderPassBufferStateList(), render_pass_buffer_id_list_, config.GetBufferFinalStateList(), memory_resource_work, memory_resource_work);
   std::tie(buffer_state_list, buffer_user_pass_list) = MergeFinalBufferState(final_state_flag_list, std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work);
-  std::tie(buffer_state_list, buffer_user_pass_list) = RevertBufferStateToInitialState(std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work);
   render_pass_command_queue_type_list_ = vector<CommandQueueType>(config.GetRenderPassCommandQueueTypeList(), memory_resource_);
   auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(render_pass_num_, render_pass_command_queue_type_list_, memory_resource_work, memory_resource_work);
   node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
@@ -707,8 +781,6 @@ void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resour
   node_distance_map = AppendInterQueueNodeDistanceMap(inter_queue_pass_dependency, std::move(node_distance_map));
   node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
   auto render_pass_command_queue_type_flag_list = ConvertToCommandQueueTypeFlagsList(render_pass_command_queue_type_list_, memory_resource_work);
-  auto buffer_state_change_info_list_map = CreateBufferStateChangeInfoList(render_pass_command_queue_type_flag_list, node_distance_map, buffer_state_list, buffer_user_pass_list, memory_resource_work);
-  std::tie(barriers_pre_pass_, barriers_post_pass_) = ConfigureBarriers(render_pass_num_, buffer_id_list_, buffer_state_change_info_list_map, memory_resource_);
   auto buffer_id_name_map = CreateBufferIdNameMap(render_pass_num_, static_cast<uint32_t>(buffer_id_list_.size()), config.GetRenderPassBufferStateList(), render_pass_buffer_id_list_, memory_resource_);
   buffer_config_list_ = CreateBufferConfigList(buffer_id_list_,
                                                buffer_id_name_map,
@@ -721,6 +793,16 @@ void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resour
                                                config.GetBufferFormatList(),
                                                config.GetBufferDepthStencilFlagList(),
                                                memory_resource_);
+  auto excluded_buffers = CollectExternalBufferIds(render_pass_num_, config.GetRenderPassBufferStateList(), render_pass_buffer_id_list_, config.GetExternalBufferNameList(), memory_resource_);
+  auto [initial_buffer_users, final_buffer_users] = GetInitialAndFinalUsersOfEachBuffers(buffer_user_pass_list, node_distance_map, excluded_buffers, memory_resource_work);
+  auto [reusable_buffers, successor_id_list] = FindReusableBuffers(buffer_id_list_, buffer_config_list_, std::move(initial_buffer_users), std::move(final_buffer_users), node_distance_map, excluded_buffers, memory_resource_work);
+  buffer_id_list_ = UpdateBufferIdListUsingReusableBuffers(reusable_buffers, std::move(buffer_id_list_));
+  render_pass_buffer_id_list_ = UpdateRenderPassBufferIdListUsingReusableBuffers(reusable_buffers, std::move(render_pass_buffer_id_list_));
+  std::tie(buffer_state_list, buffer_user_pass_list) = UpdateBufferStateListAndUserPassListUsingReusableBuffers(reusable_buffers, successor_id_list, std::move(buffer_state_list), std::move(buffer_user_pass_list));
+  buffer_config_list_ = MergeReusedBufferConfigs(reusable_buffers, std::move(buffer_config_list_));
+  std::tie(buffer_state_list, buffer_user_pass_list) = RevertBufferStateToInitialState(std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work);
+  auto buffer_state_change_info_list_map = CreateBufferStateChangeInfoList(render_pass_command_queue_type_flag_list, node_distance_map, buffer_state_list, buffer_user_pass_list, memory_resource_work);
+  std::tie(barriers_pre_pass_, barriers_post_pass_) = ConfigureBarriers(render_pass_num_, buffer_id_list_, buffer_state_change_info_list_map, memory_resource_);
 }
 }
 #ifdef BUILD_WITH_TEST
@@ -732,7 +814,7 @@ const uint32_t buffer_size_in_bytes_scene = 8 * 1024;
 const uint32_t buffer_offset_in_bytes_frame = buffer_offset_in_bytes_scene + buffer_size_in_bytes_scene;
 const uint32_t buffer_size_in_bytes_frame = 4 * 1024;
 const uint32_t buffer_offset_in_bytes_work = buffer_offset_in_bytes_frame + buffer_size_in_bytes_frame;
-const uint32_t buffer_size_in_bytes_work = 16 * 1024;
+const uint32_t buffer_size_in_bytes_work = 32 * 1024;
 std::byte buffer[buffer_offset_in_bytes_work + buffer_size_in_bytes_work]{};
 }
 #ifdef __clang__
@@ -1625,56 +1707,6 @@ TEST_CASE("barrier for use compute queue") {
   CHECK(queue_signals.at(1).size() == 1);
   CHECK(queue_signals.at(1).contains(0));
 }
-TEST_CASE("buffer config match") {
-  using namespace illuminate;
-  using namespace illuminate::core;
-  using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
-  vector<BufferId> buffer_id_list{&memory_resource_work};
-  buffer_id_list.push_back(0);
-  buffer_id_list.push_back(1);
-  buffer_id_list.push_back(2);
-  unordered_map<BufferId, BufferConfig> buffer_config_list{&memory_resource_work};
-  buffer_config_list.insert_or_assign(0, BufferConfig {.width = 100,.height = 100,.state_flags = kBufferStateFlagRtv,.initial_state_flags = kBufferStateFlagRtv,.dimension = BufferDimensionType::k2d,.format = BufferFormat::kR8G8B8A8Unorm,});
-  buffer_config_list.insert_or_assign(1, BufferConfig {.width = 100,.height = 100,.state_flags = kBufferStateFlagDsv,.initial_state_flags = kBufferStateFlagDsv,.dimension = BufferDimensionType::k2d,.format = BufferFormat::kR8G8B8A8Unorm,});
-  buffer_config_list.insert_or_assign(2, BufferConfig {.width = 100,.height = 100,.state_flags = kBufferStateFlagSrvPsOnly,.initial_state_flags = kBufferStateFlagSrvPsOnly,.dimension = BufferDimensionType::k2d,.format = BufferFormat::kR8G8B8A8Unorm,});
-  auto matched_buffer_set = GetConfigurationMatchingBufferSet(buffer_id_list, buffer_config_list, {}, &memory_resource_work, &memory_resource_work);
-  CHECK(matched_buffer_set.size() == 2);
-  CHECK(matched_buffer_set[0].size() == 2);
-  CHECK(matched_buffer_set[0].contains(0));
-  CHECK(matched_buffer_set[0].contains(2));
-  CHECK(!matched_buffer_set[0].contains(1));
-  CHECK(matched_buffer_set[1].size() == 2);
-  CHECK(matched_buffer_set[1].contains(1));
-  CHECK(matched_buffer_set[1].contains(2));
-  CHECK(!matched_buffer_set[1].contains(0));
-  buffer_config_list[0].state_flags = kBufferStateFlagSrvPsOnly;
-  buffer_config_list[1].state_flags = kBufferStateFlagDsv;
-  buffer_config_list[2].state_flags = kBufferStateFlagRtv;
-  matched_buffer_set = GetConfigurationMatchingBufferSet(buffer_id_list, buffer_config_list, {}, &memory_resource_work, &memory_resource_work);
-  CHECK(matched_buffer_set.size() == 2);
-  CHECK(matched_buffer_set[0].size() == 2);
-  CHECK(matched_buffer_set[0].contains(0));
-  CHECK(matched_buffer_set[0].contains(1));
-  CHECK(!matched_buffer_set[0].contains(2));
-  CHECK(matched_buffer_set[1].size() == 2);
-  CHECK(matched_buffer_set[1].contains(0));
-  CHECK(matched_buffer_set[1].contains(2));
-  CHECK(!matched_buffer_set[1].contains(1));
-  buffer_config_list[0].state_flags = kBufferStateFlagDsv;
-  buffer_config_list[1].state_flags = kBufferStateFlagSrvPsOnly;
-  buffer_config_list[2].state_flags = kBufferStateFlagRtv;
-  matched_buffer_set = GetConfigurationMatchingBufferSet(buffer_id_list, buffer_config_list, {}, &memory_resource_work, &memory_resource_work);
-  CHECK(matched_buffer_set.size() == 2);
-  CHECK(matched_buffer_set[0].size() == 2);
-  CHECK(matched_buffer_set[0].contains(0));
-  CHECK(matched_buffer_set[0].contains(1));
-  CHECK(!matched_buffer_set[0].contains(2));
-  CHECK(matched_buffer_set[1].size() == 2);
-  CHECK(matched_buffer_set[1].contains(1));
-  CHECK(matched_buffer_set[1].contains(2));
-  CHECK(!matched_buffer_set[1].contains(0));
-}
 TEST_CASE("buffer reuse") {
   using namespace illuminate;
   using namespace illuminate::core;
@@ -1703,6 +1735,9 @@ TEST_CASE("buffer reuse") {
   }
   render_graph_config.AddBufferInitialState(StrId("swapchain"),  kBufferStateFlagPresent);
   render_graph_config.AddBufferFinalState(StrId("swapchain"),  kBufferStateFlagPresent);
+  render_graph_config.AddExternalBufferName(StrId("swapchain"));
+  CHECK(render_graph_config.GetExternalBufferNameList().size() == 1);
+  CHECK(render_graph_config.GetExternalBufferNameList().contains(StrId("swapchain")));
   {
     auto render_pass_num = render_graph_config.GetRenderPassNum();
     auto [buffer_id_list, render_pass_buffer_id_list, render_pass_buffer_state_flag_list] = InitBufferIdList(render_pass_num, render_graph_config.GetRenderPassBufferStateList(), &memory_resource_work);
@@ -1711,7 +1746,7 @@ TEST_CASE("buffer reuse") {
     std::tie(buffer_state_list, buffer_user_pass_list) = MergeInitialBufferState(initial_state_flag_list, std::move(buffer_state_list), std::move(buffer_user_pass_list), &memory_resource_work);
     auto final_state_flag_list = ConvertBufferNameToBufferIdForFinalFlagList(render_pass_num, render_graph_config.GetRenderPassBufferStateList(), render_pass_buffer_id_list, render_graph_config.GetBufferFinalStateList(), &memory_resource_work, &memory_resource_work);
     std::tie(buffer_state_list, buffer_user_pass_list) = MergeFinalBufferState(final_state_flag_list, std::move(buffer_state_list), std::move(buffer_user_pass_list), &memory_resource_work);
-    std::tie(buffer_state_list, buffer_user_pass_list) = RevertBufferStateToInitialState(std::move(buffer_state_list), std::move(buffer_user_pass_list), &memory_resource_work);
+    // std::tie(buffer_state_list, buffer_user_pass_list) = RevertBufferStateToInitialState(std::move(buffer_state_list), std::move(buffer_user_pass_list), &memory_resource_work);
     auto render_pass_command_queue_type_list = vector<CommandQueueType>(render_graph_config.GetRenderPassCommandQueueTypeList(), &memory_resource_work);
     auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(render_pass_num, render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
@@ -1732,12 +1767,6 @@ TEST_CASE("buffer reuse") {
                                                      &memory_resource_work);
     unordered_set<BufferId> excluded_buffers{&memory_resource_work};
     excluded_buffers.insert(3);
-    auto configuration_matching_buffer_set = GetConfigurationMatchingBufferSet(buffer_id_list, buffer_config_list, excluded_buffers, &memory_resource_work, &memory_resource_work);
-    CHECK(configuration_matching_buffer_set.size() == 1);
-    CHECK(configuration_matching_buffer_set[0].size() == 3);
-    CHECK(configuration_matching_buffer_set[0].contains(0));
-    CHECK(configuration_matching_buffer_set[0].contains(1));
-    CHECK(configuration_matching_buffer_set[0].contains(2));
     auto [initial_users, final_users] = GetInitialAndFinalUsersOfEachBuffers(buffer_user_pass_list, node_distance_map, excluded_buffers, &memory_resource_work);
     CHECK(initial_users.size() == 3);
     CHECK(initial_users.contains(0));
@@ -1759,18 +1788,17 @@ TEST_CASE("buffer reuse") {
     CHECK(final_users.at(1).contains(2));
     CHECK(final_users.at(2).size() == 1);
     CHECK(final_users.at(2).contains(3));
-    auto reusable_buffers = FindReusableBuffers(configuration_matching_buffer_set, std::move(initial_users), std::move(final_users), node_distance_map, &memory_resource_work);
+    auto [reusable_buffers, successor_id_list] = FindReusableBuffers(buffer_id_list, buffer_config_list, std::move(initial_users), std::move(final_users), node_distance_map, excluded_buffers, &memory_resource_work);
     CHECK(reusable_buffers.size() == 1);
     CHECK(reusable_buffers.contains(2));
     CHECK(reusable_buffers.at(2) == 0);
-#if 0
-    // TODO
-    buffer_id_list = UpdateBuffersToReusableBuffers(reusable_buffers, std::move(buffer_id_list));
+    CHECK(successor_id_list.empty());
+    buffer_id_list = UpdateBufferIdListUsingReusableBuffers(reusable_buffers, std::move(buffer_id_list));
     CHECK(buffer_id_list.size() == 3);
     CHECK(buffer_id_list[0] == 0);
     CHECK(buffer_id_list[1] == 1);
     CHECK(buffer_id_list[2] == 3);
-    render_pass_buffer_id_list = UpdateBuffersToReusableBuffers(reusable_buffers, std::move(render_pass_buffer_id_list));
+    render_pass_buffer_id_list = UpdateRenderPassBufferIdListUsingReusableBuffers(reusable_buffers, std::move(render_pass_buffer_id_list));
     CHECK(render_pass_buffer_id_list[0][0] == 0);
     CHECK(render_pass_buffer_id_list[1][0] == 0);
     CHECK(render_pass_buffer_id_list[1][1] == 1);
@@ -1778,7 +1806,7 @@ TEST_CASE("buffer reuse") {
     CHECK(render_pass_buffer_id_list[2][1] == 0);
     CHECK(render_pass_buffer_id_list[3][0] == 0);
     CHECK(render_pass_buffer_id_list[3][1] == 3);
-    buffer_state_list = UpdateBuffersToReusableBuffers(reusable_buffers, std::move(buffer_state_list));
+    std::tie(buffer_state_list, buffer_user_pass_list) = UpdateBufferStateListAndUserPassListUsingReusableBuffers(reusable_buffers, successor_id_list, std::move(buffer_state_list), std::move(buffer_user_pass_list));
     CHECK(buffer_state_list.size() == 3);
     CHECK(!buffer_state_list.contains(2));
     CHECK(buffer_state_list.at(0).size() == 4);
@@ -1786,20 +1814,27 @@ TEST_CASE("buffer reuse") {
     CHECK(buffer_state_list.at(0)[1] == kBufferStateFlagSrvPsOnly);
     CHECK(buffer_state_list.at(0)[2] == kBufferStateFlagRtv);
     CHECK(buffer_state_list.at(0)[3] == kBufferStateFlagSrvPsOnly);
-    buffer_user_pass_list = UpdateBuffersToReusableBuffers(reusable_buffers, std::move(buffer_user_pass_list));
     CHECK(buffer_user_pass_list.size() == 3);
     CHECK(!buffer_user_pass_list.contains(2));
     CHECK(buffer_user_pass_list.at(0).size() == 4);
     CHECK(buffer_user_pass_list.at(0)[0].size() == 1);
-    CHECK(buffer_user_pass_list.at(0)[0].contains(0));
+    CHECK(buffer_user_pass_list.at(0)[0][0] == 0);
     CHECK(buffer_user_pass_list.at(0)[1].size() == 1);
-    CHECK(buffer_user_pass_list.at(0)[1].contains(1));
+    CHECK(buffer_user_pass_list.at(0)[1][0] == 1);
     CHECK(buffer_user_pass_list.at(0)[2].size() == 1);
-    CHECK(buffer_user_pass_list.at(0)[2].contains(2));
+    CHECK(buffer_user_pass_list.at(0)[2][0] == 2);
     CHECK(buffer_user_pass_list.at(0)[3].size() == 1);
-    CHECK(buffer_user_pass_list.at(0)[3].contains(3));
+    CHECK(buffer_user_pass_list.at(0)[3][0] == 3);
+    unordered_map<BufferId, BufferStateFlags> flag_copy{&memory_resource_work};
+    for (auto& [id, config] : buffer_config_list) {
+      flag_copy.insert_or_assign(id, config.state_flags);
+    }
     buffer_config_list = MergeReusedBufferConfigs(reusable_buffers, std::move(buffer_config_list));
-#endif
+    CHECK(buffer_config_list.size() == 3);
+    CHECK(!buffer_config_list.contains(2));
+    for (auto& [id, config] : buffer_config_list) {
+      CHECK(config.state_flags == flag_copy.at(id));
+    }
   }
   RenderGraph render_graph(&memory_resource_scene);
   render_graph.Build(render_graph_config, &memory_resource_work);

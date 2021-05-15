@@ -81,6 +81,7 @@ class RenderGraphConfig {
       , buffer_depth_stencil_flag_list_(memory_resource_)
       , buffer_size_info_list_(memory_resource_)
       , buffer_dimension_type_list_(memory_resource_)
+      , external_buffer_name_(memory_resource_)
       , pass_num_(0)
   {
     SetBufferSizeInfo(StrId("swapchain"), BufferSizeType::kSwapchainRelative, 1.0f, 1.0f);
@@ -112,6 +113,7 @@ class RenderGraphConfig {
   }
   void AddBufferInitialState(const StrId& buffer_name, const BufferStateFlags flag) { initial_buffer_state_list_.insert_or_assign(buffer_name, flag); }
   void AddBufferFinalState(const StrId& buffer_name, const BufferStateFlags flag) { final_buffer_state_list_.insert_or_assign(buffer_name, flag); }
+  void AddExternalBufferName(const StrId& buffer_name) { external_buffer_name_.insert(buffer_name); }
   void SetBufferFormat(const StrId& buffer_name, const BufferFormat format) { buffer_format_list_.insert_or_assign(buffer_name, format); }
   void SetBufferSizeInfo(const StrId& buffer_name, const BufferSizeType type, const float width, const float height) { buffer_size_info_list_.insert_or_assign(buffer_name, BufferSizeInfo{.type = type, .width = width, .height = height}); }
   void SetBufferDefaultClearValue(const StrId& buffer_name, const ClearValue& clear_value) { buffer_default_clear_value_list_.insert_or_assign(buffer_name, clear_value); }
@@ -132,6 +134,7 @@ class RenderGraphConfig {
   constexpr const auto& GetBufferDepthStencilFlagList() const { return buffer_depth_stencil_flag_list_; }
   constexpr const auto& GetBufferSizeInfoList() const { return buffer_size_info_list_; }
   constexpr const auto& GetBufferDimensionTypeList() const { return buffer_dimension_type_list_; }
+  constexpr const auto& GetExternalBufferNameList() const { return external_buffer_name_; }
  private:
   std::pmr::memory_resource* memory_resource_;
   unordered_map<uint32_t, uint32_t> render_pass_id_map_;
@@ -146,6 +149,7 @@ class RenderGraphConfig {
   unordered_map<StrId, DepthStencilFlag> buffer_depth_stencil_flag_list_;
   unordered_map<StrId, BufferSizeInfo> buffer_size_info_list_;
   unordered_map<StrId, BufferDimensionType> buffer_dimension_type_list_;
+  unordered_set<StrId> external_buffer_name_;
   uint32_t pass_num_;
   [[maybe_unused]] std::byte _pad[4];
   RenderGraphConfig() = delete;
