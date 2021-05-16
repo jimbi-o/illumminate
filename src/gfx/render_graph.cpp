@@ -744,44 +744,49 @@ static auto CollectExternalBufferIds(const unordered_map<StrId, unordered_set<Bu
   }
   return external_buffer_id_list;
 }
-static auto ConfigureRenderPassValidBufferList(const uint32_t pass_num, const vector<BufferId>& buffer_id_list, const unordered_map<BufferId, unordered_set<uint32_t>>& initial_users, const unordered_map<BufferId, unordered_set<uint32_t>>& final_users, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>& node_distance_map, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
+static bool IsAncestor(const uint32_t ancestor_cand, const uint32_t descendant, const vector<CommandQueueType>& render_pass_command_queue_type_list, const unordered_map<uint32_t, unordered_set<uint32_t>>& inter_queue_pass_dependency_from_descendant_to_ancestors) {
+  auto& ancestor_cand_command_queue_type = render_pass_command_queue_type_list.at(ancestor_cand);
+  auto& descendant_command_queue_type = render_pass_command_queue_type_list.at(descendant);
+  if (ancestor_cand_command_queue_type == descendant_command_queue_type) return ancestor_cand < descendant;
+  for (uint32_t pass_index = descendant; pass_index >= ancestor_cand; pass_index--) {
+    auto pass_index_command_queue_type = render_pass_command_queue_type_list.at(pass_index);
+    if (pass_index_command_queue_type != descendant_command_queue_type) continue;
+    if (!inter_queue_pass_dependency_from_descendant_to_ancestors.contains(pass_index)) continue;
+    for (auto& ancestor : inter_queue_pass_dependency_from_descendant_to_ancestors.at(pass_index)) {
+      if (render_pass_command_queue_type_list.at(ancestor) != ancestor_cand_command_queue_type) continue;
+      if (ancestor_cand <= ancestor) return true;
+      // dependency patterns like transfer -> graphics -> compute are not considered here.
+      break;
+    }
+  }
+  return false;
+}
+static auto ConfigureRenderPassValidBufferList(const uint32_t pass_num, const vector<BufferId>& buffer_id_list, const unordered_map<BufferId, vector<uint32_t>>& buffer_user_pass_list_flatten, const vector<CommandQueueType>& render_pass_command_queue_type_list, const unordered_map<uint32_t, unordered_set<uint32_t>>& inter_queue_pass_dependency_from_descendant_to_ancestors, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
   vector<vector<BufferId>> render_pass_valid_buffer_list{memory_resource};
-  render_pass_valid_buffer_list.reserve(pass_num);
   for (uint32_t pass_index = 0; pass_index < pass_num; pass_index++) {
     render_pass_valid_buffer_list.push_back(vector<BufferId>{memory_resource});
   }
-  unordered_set<uint32_t> processed_pass{memory_resource_work};
+  unordered_set<uint32_t> valid_pass_list{memory_resource_work};
   for (auto& buffer_id : buffer_id_list) {
-    auto& initial_user_list = initial_users.at(buffer_id);
-    auto& final_user_list = final_users.at(buffer_id);
-    for (auto& initial_pass : initial_user_list) {
-      if (!processed_pass.contains(initial_pass)) {
-        processed_pass.insert(initial_pass);
-        render_pass_valid_buffer_list[initial_pass].push_back(buffer_id);
-      }
-      auto& distance_map = node_distance_map.at(initial_pass);
-      for (auto& final_pass : final_user_list) {
-        if (initial_pass == final_pass) continue;
-        if (!processed_pass.contains(final_pass)) {
-          processed_pass.insert(final_pass);
-          render_pass_valid_buffer_list[final_pass].push_back(buffer_id);
-        }
-        if (!distance_map.contains(final_pass)) continue;
-        int32_t max_distance = distance_map.at(final_pass);
-        for (auto& [pass_index, distance] : distance_map) {
-          if (pass_index == initial_pass) continue;
-          if (pass_index == final_pass) continue;
-          if (distance < 0) continue;
-          if (distance >= max_distance) continue;
-          if (processed_pass.contains(pass_index)) continue;
-          if (!node_distance_map.at(pass_index).contains(final_pass)) continue;
-          if (node_distance_map.at(pass_index).at(final_pass) <= 0) continue;
-          processed_pass.insert(pass_index);
-          render_pass_valid_buffer_list[pass_index].push_back(buffer_id);
+    valid_pass_list.clear();
+    auto& user_pass_list = buffer_user_pass_list_flatten.at(buffer_id);
+    auto user_pass_list_num = static_cast<uint32_t>(user_pass_list.size());
+    for (uint32_t i = 0; i < user_pass_list_num; i++) {
+      auto& src_pass_index = user_pass_list[i];
+      valid_pass_list.insert(src_pass_index);
+      for (uint32_t j = i + 1; j < user_pass_list_num; j++) {
+        auto& dst_pass_index = user_pass_list[j];
+        valid_pass_list.insert(dst_pass_index);
+        for (uint32_t pass_index = src_pass_index; pass_index <= dst_pass_index; pass_index++) {
+          if (!IsAncestor(src_pass_index, pass_index, render_pass_command_queue_type_list, inter_queue_pass_dependency_from_descendant_to_ancestors)) continue;
+          if (!IsAncestor(pass_index, dst_pass_index, render_pass_command_queue_type_list, inter_queue_pass_dependency_from_descendant_to_ancestors)) continue;
+          valid_pass_list.insert(pass_index);
         }
       }
     }
-    processed_pass.clear();
+    for (auto& pass_index : valid_pass_list) {
+      render_pass_valid_buffer_list[pass_index].push_back(buffer_id);
+    }
   }
   return render_pass_valid_buffer_list;
 }
@@ -1955,70 +1960,36 @@ TEST_CASE("memory aliasing") {
   render_pass_buffer_id_list.push_back(vector<BufferId>{&memory_resource_work});
   render_pass_buffer_id_list.back().push_back(3);
   render_pass_buffer_id_list.back().push_back(4);
+  vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  unordered_map<uint32_t, unordered_set<uint32_t>> inter_queue_pass_dependency_from_descendant_to_ancestors{&memory_resource_work};
   vector<BufferId> buffer_id_list{&memory_resource_work};
   buffer_id_list.push_back(0);
   buffer_id_list.push_back(1);
   buffer_id_list.push_back(2);
   buffer_id_list.push_back(3);
   buffer_id_list.push_back(4);
-  unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
-  buffer_user_pass_list.insert_or_assign(0, vector<vector<uint32_t>>{&memory_resource_work});
-  buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
-  buffer_user_pass_list.at(0).back().push_back(0);
-  buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
-  buffer_user_pass_list.at(0).back().push_back(1);
-  buffer_user_pass_list.at(0).back().push_back(2);
-  buffer_user_pass_list.insert_or_assign(1, vector<vector<uint32_t>>{&memory_resource_work});
-  buffer_user_pass_list.at(1).push_back(vector<uint32_t>{&memory_resource_work});
-  buffer_user_pass_list.at(1).back().push_back(1);
-  buffer_user_pass_list.at(1).push_back(vector<uint32_t>{&memory_resource_work});
-  buffer_user_pass_list.at(1).back().push_back(3);
-  buffer_user_pass_list.insert_or_assign(2, vector<vector<uint32_t>>{&memory_resource_work});
-  buffer_user_pass_list.at(2).push_back(vector<uint32_t>{&memory_resource_work});
-  buffer_user_pass_list.at(2).back().push_back(2);
-  buffer_user_pass_list.at(2).push_back(vector<uint32_t>{&memory_resource_work});
-  buffer_user_pass_list.at(2).back().push_back(3);
-  buffer_user_pass_list.insert_or_assign(3, vector<vector<uint32_t>>{&memory_resource_work});
-  buffer_user_pass_list.at(3).push_back(vector<uint32_t>{&memory_resource_work});
-  buffer_user_pass_list.at(3).back().push_back(3);
-  buffer_user_pass_list.at(3).push_back(vector<uint32_t>{&memory_resource_work});
-  buffer_user_pass_list.at(3).back().push_back(4);
-  buffer_user_pass_list.insert_or_assign(4, vector<vector<uint32_t>>{&memory_resource_work});
-  buffer_user_pass_list.at(4).push_back(vector<uint32_t>{&memory_resource_work});
-  buffer_user_pass_list.at(4).back().push_back(4);
-  unordered_map<uint32_t, unordered_map<uint32_t, int32_t>> node_distance_map{&memory_resource_work};
-  node_distance_map.insert_or_assign(0, unordered_map<uint32_t, int32_t>{&memory_resource_work});
-  node_distance_map.at(0).insert_or_assign(0, 0);
-  node_distance_map.at(0).insert_or_assign(1, 1);
-  node_distance_map.at(0).insert_or_assign(2, 2);
-  node_distance_map.at(0).insert_or_assign(3, 3);
-  node_distance_map.at(0).insert_or_assign(4, 4);
-  node_distance_map.insert_or_assign(1, unordered_map<uint32_t, int32_t>{&memory_resource_work});
-  node_distance_map.at(1).insert_or_assign(0, -1);
-  node_distance_map.at(1).insert_or_assign(1, 0);
-  node_distance_map.at(1).insert_or_assign(2, 1);
-  node_distance_map.at(1).insert_or_assign(3, 2);
-  node_distance_map.at(1).insert_or_assign(4, 3);
-  node_distance_map.insert_or_assign(2, unordered_map<uint32_t, int32_t>{&memory_resource_work});
-  node_distance_map.at(2).insert_or_assign(0, -2);
-  node_distance_map.at(2).insert_or_assign(1, -1);
-  node_distance_map.at(2).insert_or_assign(2, 0);
-  node_distance_map.at(2).insert_or_assign(3, 1);
-  node_distance_map.at(2).insert_or_assign(4, 2);
-  node_distance_map.insert_or_assign(3, unordered_map<uint32_t, int32_t>{&memory_resource_work});
-  node_distance_map.at(3).insert_or_assign(0, -3);
-  node_distance_map.at(3).insert_or_assign(1, -2);
-  node_distance_map.at(3).insert_or_assign(2, -1);
-  node_distance_map.at(3).insert_or_assign(3, 0);
-  node_distance_map.at(3).insert_or_assign(4, 1);
-  node_distance_map.insert_or_assign(4, unordered_map<uint32_t, int32_t>{&memory_resource_work});
-  node_distance_map.at(4).insert_or_assign(0, -4);
-  node_distance_map.at(4).insert_or_assign(1, -3);
-  node_distance_map.at(4).insert_or_assign(2, -2);
-  node_distance_map.at(4).insert_or_assign(3, -1);
-  node_distance_map.at(4).insert_or_assign(4, 0);
-  auto [initial_buffer_users, final_buffer_users] = GetInitialAndFinalUsersOfEachBuffers(buffer_user_pass_list, node_distance_map, {}, &memory_resource_work);
-  auto render_pass_valid_buffer_list = ConfigureRenderPassValidBufferList(static_cast<uint32_t>(render_pass_buffer_id_list.size()), buffer_id_list, initial_buffer_users, final_buffer_users, node_distance_map, &memory_resource_work, &memory_resource_work);
+  unordered_map<BufferId, vector<uint32_t>> buffer_user_pass_list_flatten{&memory_resource_work};
+  buffer_user_pass_list_flatten.insert_or_assign(0, vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list_flatten.at(0).push_back(0);
+  buffer_user_pass_list_flatten.at(0).push_back(1);
+  buffer_user_pass_list_flatten.at(0).push_back(2);
+  buffer_user_pass_list_flatten.insert_or_assign(1, vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list_flatten.at(1).push_back(1);
+  buffer_user_pass_list_flatten.at(1).push_back(3);
+  buffer_user_pass_list_flatten.insert_or_assign(2, vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list_flatten.at(2).push_back(2);
+  buffer_user_pass_list_flatten.at(2).push_back(3);
+  buffer_user_pass_list_flatten.insert_or_assign(3, vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list_flatten.at(3).push_back(3);
+  buffer_user_pass_list_flatten.at(3).push_back(4);
+  buffer_user_pass_list_flatten.insert_or_assign(4, vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list_flatten.at(4).push_back(4);
+  auto render_pass_valid_buffer_list = ConfigureRenderPassValidBufferList(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), buffer_id_list, buffer_user_pass_list_flatten, render_pass_command_queue_type_list, inter_queue_pass_dependency_from_descendant_to_ancestors, &memory_resource_work, &memory_resource_work);
   CHECK(render_pass_valid_buffer_list.size() == 5);
   CHECK(render_pass_valid_buffer_list[0].size() == 1);
   CHECK(render_pass_valid_buffer_list[0][0] == 0);
@@ -2042,3 +2013,5 @@ TEST_CASE("memory aliasing") {
 #pragma clang diagnostic pop
 #endif
 #endif
+// TODO pass culling
+// TODO implement function to flatten buffer_user_pass_list
