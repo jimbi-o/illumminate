@@ -796,6 +796,33 @@ static auto GetPassValidBufferList(const uint32_t pass_num, const vector<BufferI
   }
   return render_pass_valid_buffer_list;
 }
+static std::tuple<vector<vector<uint32_t>>, vector<vector<uint32_t>>> ConfigureRenderPassNewAndExpiredBuffers(const uint32_t pass_num, const vector<vector<BufferId>>& render_pass_valid_buffer_list, std::pmr::memory_resource* memory_resource) {
+  vector<vector<uint32_t>> render_pass_new_buffer_list{memory_resource};
+  render_pass_new_buffer_list.reserve(pass_num);
+  render_pass_new_buffer_list.push_back(vector<uint32_t>{memory_resource});
+  render_pass_new_buffer_list.back().reserve(render_pass_valid_buffer_list[0].size());
+  render_pass_new_buffer_list.back().assign(render_pass_valid_buffer_list[0].begin(), render_pass_valid_buffer_list[0].end());
+  vector<vector<uint32_t>> render_pass_expired_buffer_list{memory_resource};
+  render_pass_expired_buffer_list.reserve(pass_num);
+  for (uint32_t pass_index = 0; pass_index < pass_num - 1; pass_index++) {
+    render_pass_expired_buffer_list.push_back(vector<uint32_t>{memory_resource});
+    for (auto& buffer_id : render_pass_valid_buffer_list[pass_index]) {
+      if (std::find(render_pass_valid_buffer_list[pass_index+1].begin(), render_pass_valid_buffer_list[pass_index+1].end(), buffer_id) == render_pass_valid_buffer_list[pass_index+1].end()) {
+        render_pass_expired_buffer_list.back().push_back(buffer_id);
+      }
+    }
+    render_pass_new_buffer_list.push_back(vector<uint32_t>{memory_resource});
+    for (auto& buffer_id : render_pass_valid_buffer_list[pass_index+1]) {
+      if (std::find(render_pass_valid_buffer_list[pass_index].begin(), render_pass_valid_buffer_list[pass_index].end(), buffer_id) == render_pass_valid_buffer_list[pass_index].end()) {
+        render_pass_new_buffer_list.back().push_back(buffer_id);
+      }
+    }
+  }
+  render_pass_expired_buffer_list.push_back(vector<uint32_t>{memory_resource});
+  render_pass_expired_buffer_list.back().reserve(render_pass_valid_buffer_list[pass_num-1].size());
+  render_pass_expired_buffer_list.back().assign(render_pass_valid_buffer_list[pass_num-1].begin(), render_pass_valid_buffer_list[pass_num-1].end());
+  return {render_pass_new_buffer_list, render_pass_expired_buffer_list};
+}
 static auto AlignAddress(const uint32_t addr, const uint32_t align) {
   const auto mask = align - 1;
   return (addr + mask) & ~mask;
@@ -826,7 +853,7 @@ static void ReturnMemory(const uint32_t start_addr, vector<uint32_t>* used_range
     if (start > start_addr) return;
   }
 }
-std::tuple<unordered_map<BufferId, uint32_t>, unordered_map<BufferId, BufferId>, unordered_map<uint32_t, vector<vector<BufferId>>>, unordered_map<uint32_t, vector<vector<BufferId>>>> ConfigureBufferAddressOffset(const uint32_t pass_num, const vector<vector<BufferId>>& render_pass_valid_buffer_list, const unordered_map<BufferId, BufferConfig>& buffer_config_list, const unordered_map<BufferId, uint32_t>& buffer_size_list, const unordered_map<BufferId, uint32_t>& buffer_alignment_list, std::pmr::memory_resource* memory_resource) {
+static std::tuple<unordered_map<BufferId, uint32_t>, unordered_map<BufferId, BufferId>, unordered_map<uint32_t, vector<vector<BufferId>>>, unordered_map<uint32_t, vector<vector<BufferId>>>> ConfigureBufferAddressOffset(const uint32_t pass_num, const vector<vector<uint32_t>>& render_pass_new_buffer_list, const vector<vector<uint32_t>>& render_pass_expired_buffer_list, const unordered_map<BufferId, BufferConfig>& buffer_config_list, const unordered_map<BufferId, uint32_t>& buffer_size_list, const unordered_map<BufferId, uint32_t>& buffer_alignment_list, std::pmr::memory_resource* memory_resource) {
   unordered_map<BufferId, uint32_t> buffer_address_offset_list{memory_resource};
   unordered_map<BufferId, BufferId> renamed_buffers{memory_resource};
   unordered_map<uint32_t, vector<vector<BufferId>>> render_pass_before_memory_aliasing_list{memory_resource};
@@ -2092,7 +2119,30 @@ TEST_CASE("memory aliasing") {
   buffer_alignment_list.insert_or_assign(2, 8);
   buffer_alignment_list.insert_or_assign(3, 8);
   buffer_alignment_list.insert_or_assign(4, 8);
-  auto [buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list] = ConfigureBufferAddressOffset(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_valid_buffer_list, buffer_config_list, buffer_size_list, buffer_alignment_list, &memory_resource_work);
+  auto [render_pass_new_buffer_list, render_pass_expired_buffer_list] = ConfigureRenderPassNewAndExpiredBuffers(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_valid_buffer_list, &memory_resource_work);
+  CHECK(render_pass_new_buffer_list.size() == 5);
+  CHECK(render_pass_new_buffer_list[0].size() == 1);
+  CHECK(render_pass_new_buffer_list[0][0] == 0);
+  CHECK(render_pass_new_buffer_list[1].size() == 1);
+  CHECK(render_pass_new_buffer_list[1][0] == 1);
+  CHECK(render_pass_new_buffer_list[2].size() == 1);
+  CHECK(render_pass_new_buffer_list[2][0] == 2);
+  CHECK(render_pass_new_buffer_list[3].size() == 1);
+  CHECK(render_pass_new_buffer_list[3][0] == 3);
+  CHECK(render_pass_new_buffer_list[4].size() == 1);
+  CHECK(render_pass_new_buffer_list[4][0] == 4);
+  CHECK(render_pass_expired_buffer_list.size() == 5);
+  CHECK(render_pass_expired_buffer_list[0].empty());
+  CHECK(render_pass_expired_buffer_list[1].empty());
+  CHECK(render_pass_expired_buffer_list[2].size() == 1);
+  CHECK(render_pass_expired_buffer_list[2][0] == 0);
+  CHECK(render_pass_expired_buffer_list[3].size() == 2);
+  CHECK(render_pass_expired_buffer_list[3][0] == 1);
+  CHECK(render_pass_expired_buffer_list[3][1] == 2);
+  CHECK(render_pass_expired_buffer_list[4].size() == 2);
+  CHECK(render_pass_expired_buffer_list[4][0] == 3);
+  CHECK(render_pass_expired_buffer_list[4][1] == 4);
+  auto [buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list] = ConfigureBufferAddressOffset(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list, buffer_size_list, buffer_alignment_list, &memory_resource_work);
   CHECK(buffer_address_offset_list.size() == 5);
   CHECK(buffer_address_offset_list.at(0) == 0);
   CHECK(buffer_address_offset_list.at(1) == 8);
@@ -2110,6 +2160,9 @@ TEST_CASE("memory aliasing") {
   CHECK(render_pass_after_memory_aliasing_list.at(3).size() == 1);
   CHECK(render_pass_after_memory_aliasing_list.at(3)[0].size() == 1);
   CHECK(render_pass_after_memory_aliasing_list.at(3)[0][0] == 4);
+}
+TEST_CASE("ConfigureBufferValidPassList w/async compute") {
+  // TODO
 }
 TEST_CASE("buffer allocation address calc") {
   using namespace illuminate;
