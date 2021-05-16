@@ -784,13 +784,13 @@ static auto ConfigureBufferValidPassList(const vector<BufferId>& buffer_id_list,
   }
   return buffer_valid_pass_list;
 }
-static auto GetPassValidBufferList(const uint32_t pass_num, const unordered_map<BufferId, unordered_set<uint32_t>>& buffer_valid_pass_list, std::pmr::memory_resource* memory_resource) {
+static auto GetPassValidBufferList(const uint32_t pass_num, const vector<BufferId>& buffer_id_list, const unordered_map<BufferId, unordered_set<uint32_t>>& buffer_valid_pass_list, std::pmr::memory_resource* memory_resource) {
   vector<vector<BufferId>> render_pass_valid_buffer_list{memory_resource};
   for (uint32_t pass_index = 0; pass_index < pass_num; pass_index++) {
     render_pass_valid_buffer_list.push_back(vector<BufferId>{memory_resource});
   }
-  for (auto& [buffer_id, valid_pass_list] : buffer_valid_pass_list) {
-    for (auto& pass_index : valid_pass_list) {
+  for (auto& buffer_id : buffer_id_list) {
+    for (auto& pass_index : buffer_valid_pass_list.at(buffer_id)) {
       render_pass_valid_buffer_list[pass_index].push_back(buffer_id);
     }
   }
@@ -825,6 +825,14 @@ static void ReturnMemory(const uint32_t start_addr, vector<uint32_t>* used_range
     }
     if (start > start_addr) return;
   }
+}
+std::tuple<unordered_map<BufferId, uint32_t>, unordered_map<BufferId, BufferId>, unordered_map<uint32_t, vector<vector<BufferId>>>, unordered_map<uint32_t, vector<vector<BufferId>>>> ConfigureBufferAddressOffset(const uint32_t pass_num, const vector<vector<BufferId>>& render_pass_valid_buffer_list, const unordered_map<BufferId, BufferConfig>& buffer_config_list, const unordered_map<BufferId, uint32_t>& buffer_size_list, const unordered_map<BufferId, uint32_t>& buffer_alignment_list, std::pmr::memory_resource* memory_resource) {
+  unordered_map<BufferId, uint32_t> buffer_address_offset_list{memory_resource};
+  unordered_map<BufferId, BufferId> renamed_buffers{memory_resource};
+  unordered_map<uint32_t, vector<vector<BufferId>>> render_pass_before_memory_aliasing_list{memory_resource};
+  unordered_map<uint32_t, vector<vector<BufferId>>> render_pass_after_memory_aliasing_list{memory_resource};
+  // TODO
+  return {buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list};
 }
 void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resource* memory_resource_work) {
   render_pass_num_ = config.GetRenderPassNum();
@@ -2048,7 +2056,7 @@ TEST_CASE("memory aliasing") {
   CHECK(buffer_valid_pass_list.contains(4));
   CHECK(buffer_valid_pass_list.at(4).size() == 1);
   CHECK(buffer_valid_pass_list.at(4).contains(4));
-  auto render_pass_valid_buffer_list = GetPassValidBufferList(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), buffer_valid_pass_list, &memory_resource_work);
+  auto render_pass_valid_buffer_list = GetPassValidBufferList(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), buffer_id_list, buffer_valid_pass_list, &memory_resource_work);
   CHECK(render_pass_valid_buffer_list.size() == 5);
   CHECK(render_pass_valid_buffer_list[0].size() == 1);
   CHECK(render_pass_valid_buffer_list[0][0] == 0);
@@ -2066,7 +2074,42 @@ TEST_CASE("memory aliasing") {
   CHECK(render_pass_valid_buffer_list[4].size() == 2);
   CHECK(render_pass_valid_buffer_list[4][0] == 3);
   CHECK(render_pass_valid_buffer_list[4][1] == 4);
-  // TODO w/reused buffers
+  unordered_map<BufferId, BufferConfig> buffer_config_list{&memory_resource_work};
+  buffer_config_list.insert_or_assign(0, BufferConfig{.width=1,.height=2,.state_flags=kBufferStateFlagRtv,.initial_state_flags=kBufferStateFlagRtv,.clear_value=GetClearValueDefaultColorBuffer(),.format=BufferFormat::kR8G8B8A8Unorm,.depth_stencil_flag=DepthStencilFlag::kDefault,});
+  buffer_config_list.insert_or_assign(1, BufferConfig{.width=1,.height=2,.state_flags=kBufferStateFlagRtv,.initial_state_flags=kBufferStateFlagRtv,.clear_value=GetClearValueDefaultColorBuffer(),.format=BufferFormat::kR8G8B8A8Unorm,.depth_stencil_flag=DepthStencilFlag::kDefault,});
+  buffer_config_list.insert_or_assign(2, BufferConfig{.width=1,.height=2,.state_flags=kBufferStateFlagRtv,.initial_state_flags=kBufferStateFlagRtv,.clear_value=GetClearValueDefaultColorBuffer(),.format=BufferFormat::kR8G8B8A8Unorm,.depth_stencil_flag=DepthStencilFlag::kDefault,});
+  buffer_config_list.insert_or_assign(3, BufferConfig{.width=1,.height=2,.state_flags=MergeBufferStateFlags(kBufferStateFlagRtv,kBufferStateFlagSrvPsOnly),.initial_state_flags=kBufferStateFlagRtv,.clear_value=GetClearValueDefaultColorBuffer(),.format=BufferFormat::kR8G8B8A8Unorm,.depth_stencil_flag=DepthStencilFlag::kDefault,});
+  buffer_config_list.insert_or_assign(4, BufferConfig{.width=1,.height=2,.state_flags=kBufferStateFlagRtv,.initial_state_flags=kBufferStateFlagRtv,.clear_value=GetClearValueDefaultColorBuffer(),.format=BufferFormat::kR8G8B8A8Unorm,.depth_stencil_flag=DepthStencilFlag::kDefault,});
+  unordered_map<BufferId, uint32_t> buffer_size_list{&memory_resource_work};
+  buffer_size_list.insert_or_assign(0, 8);
+  buffer_size_list.insert_or_assign(1, 8);
+  buffer_size_list.insert_or_assign(2, 8);
+  buffer_size_list.insert_or_assign(3, 8);
+  buffer_size_list.insert_or_assign(4, 16);
+  unordered_map<BufferId, uint32_t> buffer_alignment_list{&memory_resource_work};
+  buffer_alignment_list.insert_or_assign(0, 8);
+  buffer_alignment_list.insert_or_assign(1, 8);
+  buffer_alignment_list.insert_or_assign(2, 8);
+  buffer_alignment_list.insert_or_assign(3, 8);
+  buffer_alignment_list.insert_or_assign(4, 8);
+  auto [buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list] = ConfigureBufferAddressOffset(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_valid_buffer_list, buffer_config_list, buffer_size_list, buffer_alignment_list, &memory_resource_work);
+  CHECK(buffer_address_offset_list.size() == 5);
+  CHECK(buffer_address_offset_list.at(0) == 0);
+  CHECK(buffer_address_offset_list.at(1) == 8);
+  CHECK(buffer_address_offset_list.at(2) == 16);
+  CHECK(buffer_address_offset_list.at(3) == 0);
+  CHECK(buffer_address_offset_list.at(4) == 8);
+  CHECK(renamed_buffers.size() == 1);
+  CHECK(renamed_buffers.at(3) == 0);
+  CHECK(render_pass_before_memory_aliasing_list.size() == 1);
+  CHECK(render_pass_before_memory_aliasing_list.at(3).size() == 1);
+  CHECK(render_pass_before_memory_aliasing_list.at(3)[0].size() == 2);
+  CHECK(render_pass_before_memory_aliasing_list.at(3)[0][0] == 1);
+  CHECK(render_pass_before_memory_aliasing_list.at(3)[0][1] == 2);
+  CHECK(render_pass_after_memory_aliasing_list.size() == 1);
+  CHECK(render_pass_after_memory_aliasing_list.at(3).size() == 1);
+  CHECK(render_pass_after_memory_aliasing_list.at(3)[0].size() == 1);
+  CHECK(render_pass_after_memory_aliasing_list.at(3)[0][0] == 4);
 }
 TEST_CASE("buffer allocation address calc") {
   using namespace illuminate;
