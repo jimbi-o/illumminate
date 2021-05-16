@@ -761,14 +761,11 @@ static bool IsAncestor(const uint32_t ancestor_cand, const uint32_t descendant, 
   }
   return false;
 }
-static auto ConfigureRenderPassValidBufferList(const uint32_t pass_num, const vector<BufferId>& buffer_id_list, const unordered_map<BufferId, vector<uint32_t>>& buffer_user_pass_list_flatten, const vector<CommandQueueType>& render_pass_command_queue_type_list, const unordered_map<uint32_t, unordered_set<uint32_t>>& inter_queue_pass_dependency_from_descendant_to_ancestors, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
-  vector<vector<BufferId>> render_pass_valid_buffer_list{memory_resource};
-  for (uint32_t pass_index = 0; pass_index < pass_num; pass_index++) {
-    render_pass_valid_buffer_list.push_back(vector<BufferId>{memory_resource});
-  }
-  unordered_set<uint32_t> valid_pass_list{memory_resource_work};
+static auto ConfigureBufferValidPassList(const vector<BufferId>& buffer_id_list, const unordered_map<BufferId, vector<uint32_t>>& buffer_user_pass_list_flatten, const vector<CommandQueueType>& render_pass_command_queue_type_list, const unordered_map<uint32_t, unordered_set<uint32_t>>& inter_queue_pass_dependency_from_descendant_to_ancestors, std::pmr::memory_resource* memory_resource) {
+  unordered_map<BufferId, unordered_set<uint32_t>> buffer_valid_pass_list{memory_resource};
   for (auto& buffer_id : buffer_id_list) {
-    valid_pass_list.clear();
+    auto [it, result] = buffer_valid_pass_list.insert_or_assign(buffer_id, unordered_set<uint32_t>{memory_resource});
+    auto& valid_pass_list = it->second;
     auto& user_pass_list = buffer_user_pass_list_flatten.at(buffer_id);
     auto user_pass_list_num = static_cast<uint32_t>(user_pass_list.size());
     for (uint32_t i = 0; i < user_pass_list_num; i++) {
@@ -784,6 +781,15 @@ static auto ConfigureRenderPassValidBufferList(const uint32_t pass_num, const ve
         }
       }
     }
+  }
+  return buffer_valid_pass_list;
+}
+static auto GetPassValidBufferList(const uint32_t pass_num, const unordered_map<BufferId, unordered_set<uint32_t>>& buffer_valid_pass_list, std::pmr::memory_resource* memory_resource) {
+  vector<vector<BufferId>> render_pass_valid_buffer_list{memory_resource};
+  for (uint32_t pass_index = 0; pass_index < pass_num; pass_index++) {
+    render_pass_valid_buffer_list.push_back(vector<BufferId>{memory_resource});
+  }
+  for (auto& [buffer_id, valid_pass_list] : buffer_valid_pass_list) {
     for (auto& pass_index : valid_pass_list) {
       render_pass_valid_buffer_list[pass_index].push_back(buffer_id);
     }
@@ -2019,7 +2025,30 @@ TEST_CASE("memory aliasing") {
   buffer_user_pass_list_flatten.at(3).push_back(4);
   buffer_user_pass_list_flatten.insert_or_assign(4, vector<uint32_t>{&memory_resource_work});
   buffer_user_pass_list_flatten.at(4).push_back(4);
-  auto render_pass_valid_buffer_list = ConfigureRenderPassValidBufferList(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), buffer_id_list, buffer_user_pass_list_flatten, render_pass_command_queue_type_list, inter_queue_pass_dependency_from_descendant_to_ancestors, &memory_resource_work, &memory_resource_work);
+  auto buffer_valid_pass_list = ConfigureBufferValidPassList(buffer_id_list, buffer_user_pass_list_flatten, render_pass_command_queue_type_list, inter_queue_pass_dependency_from_descendant_to_ancestors, &memory_resource_work);
+  CHECK(buffer_valid_pass_list.size() == 5);
+  CHECK(buffer_valid_pass_list.contains(0));
+  CHECK(buffer_valid_pass_list.at(0).size() == 3);
+  CHECK(buffer_valid_pass_list.at(0).contains(0));
+  CHECK(buffer_valid_pass_list.at(0).contains(1));
+  CHECK(buffer_valid_pass_list.at(0).contains(2));
+  CHECK(buffer_valid_pass_list.contains(1));
+  CHECK(buffer_valid_pass_list.at(1).size() == 3);
+  CHECK(buffer_valid_pass_list.at(1).contains(1));
+  CHECK(buffer_valid_pass_list.at(1).contains(2));
+  CHECK(buffer_valid_pass_list.at(1).contains(3));
+  CHECK(buffer_valid_pass_list.contains(2));
+  CHECK(buffer_valid_pass_list.at(2).size() == 2);
+  CHECK(buffer_valid_pass_list.at(2).contains(2));
+  CHECK(buffer_valid_pass_list.at(2).contains(3));
+  CHECK(buffer_valid_pass_list.contains(3));
+  CHECK(buffer_valid_pass_list.at(3).size() == 2);
+  CHECK(buffer_valid_pass_list.at(3).contains(3));
+  CHECK(buffer_valid_pass_list.at(3).contains(4));
+  CHECK(buffer_valid_pass_list.contains(4));
+  CHECK(buffer_valid_pass_list.at(4).size() == 1);
+  CHECK(buffer_valid_pass_list.at(4).contains(4));
+  auto render_pass_valid_buffer_list = GetPassValidBufferList(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), buffer_valid_pass_list, &memory_resource_work);
   CHECK(render_pass_valid_buffer_list.size() == 5);
   CHECK(render_pass_valid_buffer_list[0].size() == 1);
   CHECK(render_pass_valid_buffer_list[0][0] == 0);
