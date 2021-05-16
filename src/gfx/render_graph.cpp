@@ -790,6 +790,36 @@ static auto ConfigureRenderPassValidBufferList(const uint32_t pass_num, const ve
   }
   return render_pass_valid_buffer_list;
 }
+static auto AlignAddress(const uint32_t addr, const uint32_t align) {
+  const auto mask = align - 1;
+  return (addr + mask) & ~mask;
+}
+static uint32_t RetainMemory(const uint32_t size_in_bytes, const uint32_t alignment_in_bytes, vector<uint32_t>* used_range_start, vector<uint32_t>* used_range_end) {
+  auto range_num = static_cast<uint32_t>(used_range_start->size());
+  for (uint32_t range_index = 0; range_index < range_num; range_index++) {
+    auto addr = AlignAddress((range_index > 0) ? (*used_range_end)[range_index - 1] : 0, alignment_in_bytes);
+    if (addr + size_in_bytes > (*used_range_start)[range_index]) continue;
+    used_range_start->insert(used_range_start->begin() + range_index, addr);
+    used_range_end->insert(used_range_end->begin() + range_index, addr + size_in_bytes);
+    return addr;
+  }
+  uint32_t addr = (range_num == 0) ? 0 : AlignAddress(used_range_end->back(), alignment_in_bytes);
+  used_range_start->push_back(addr);
+  used_range_end->push_back(addr + size_in_bytes);
+  return addr;
+}
+static void ReturnMemory(const uint32_t start_addr, vector<uint32_t>* used_range_start, vector<uint32_t>* used_range_end) {
+  auto range_num = static_cast<uint32_t>(used_range_start->size());
+  for (uint32_t range_index = 0; range_index < range_num; range_index++) {
+    auto start = (*used_range_start)[range_index];
+    if (start == start_addr) {
+      used_range_start->erase(used_range_start->begin() + range_index);
+      used_range_end->erase(used_range_end->begin() + range_index);
+      return;
+    }
+    if (start > start_addr) return;
+  }
+}
 void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resource* memory_resource_work) {
   render_pass_num_ = config.GetRenderPassNum();
   std::tie(buffer_id_list_, render_pass_buffer_id_list_, render_pass_buffer_state_flag_list_) = InitBufferIdList(render_pass_num_, config.GetRenderPassBufferStateList(), memory_resource_);
@@ -2008,6 +2038,84 @@ TEST_CASE("memory aliasing") {
   CHECK(render_pass_valid_buffer_list[4][0] == 3);
   CHECK(render_pass_valid_buffer_list[4][1] == 4);
   // TODO w/reused buffers
+}
+TEST_CASE("buffer allocation address calc") {
+  using namespace illuminate;
+  using namespace illuminate::core;
+  using namespace illuminate::gfx;
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
+  vector<uint32_t> used_range_start{&memory_resource_work};
+  vector<uint32_t> used_range_end{&memory_resource_work};
+  auto offset = RetainMemory(4, 8, &used_range_start, &used_range_end);
+  CHECK(offset == 0);
+  CHECK(used_range_start.size() == 1);
+  CHECK(used_range_start[0] == 0);
+  CHECK(used_range_end.size() == 1);
+  CHECK(used_range_end[0] == 4);
+  offset = RetainMemory(4, 8, &used_range_start, &used_range_end);
+  CHECK(offset == 8);
+  CHECK(used_range_start.size() == 2);
+  CHECK(used_range_start[0] == 0);
+  CHECK(used_range_start[1] == 8);
+  CHECK(used_range_end.size() == 2);
+  CHECK(used_range_end[0] == 4);
+  CHECK(used_range_end[1] == 12);
+  offset = RetainMemory(5, 4, &used_range_start, &used_range_end);
+  CHECK(offset == 12);
+  CHECK(used_range_start.size() == 3);
+  CHECK(used_range_start[0] == 0);
+  CHECK(used_range_start[1] == 8);
+  CHECK(used_range_start[2] == 12);
+  CHECK(used_range_end.size() == 3);
+  CHECK(used_range_end[0] == 4);
+  CHECK(used_range_end[1] == 12);
+  CHECK(used_range_end[2] == 17);
+  ReturnMemory(8, &used_range_start, &used_range_end);
+  CHECK(used_range_start.size() == 2);
+  CHECK(used_range_start[0] == 0);
+  CHECK(used_range_start[1] == 12);
+  CHECK(used_range_end.size() == 2);
+  CHECK(used_range_end[0] == 4);
+  CHECK(used_range_end[1] == 17);
+  offset = RetainMemory(2, 8, &used_range_start, &used_range_end);
+  CHECK(offset == 8);
+  CHECK(used_range_start.size() == 3);
+  CHECK(used_range_start[0] == 0);
+  CHECK(used_range_start[1] == 8);
+  CHECK(used_range_start[2] == 12);
+  CHECK(used_range_end.size() == 3);
+  CHECK(used_range_end[0] == 4);
+  CHECK(used_range_end[1] == 10);
+  CHECK(used_range_end[2] == 17);
+  ReturnMemory(8, &used_range_start, &used_range_end);
+  CHECK(used_range_start.size() == 2);
+  CHECK(used_range_start[0] == 0);
+  CHECK(used_range_start[1] == 12);
+  CHECK(used_range_end.size() == 2);
+  CHECK(used_range_end[0] == 4);
+  CHECK(used_range_end[1] == 17);
+  ReturnMemory(0, &used_range_start, &used_range_end);
+  CHECK(used_range_start.size() == 1);
+  CHECK(used_range_start[0] == 12);
+  CHECK(used_range_end.size() == 1);
+  CHECK(used_range_end[0] == 17);
+  offset = RetainMemory(4, 8, &used_range_start, &used_range_end);
+  CHECK(offset == 0);
+  CHECK(used_range_start.size() == 2);
+  CHECK(used_range_start[0] == 0);
+  CHECK(used_range_start[1] == 12);
+  CHECK(used_range_end.size() == 2);
+  CHECK(used_range_end[0] == 4);
+  CHECK(used_range_end[1] == 17);
+  offset = RetainMemory(8, 4, &used_range_start, &used_range_end);
+  CHECK(used_range_start.size() == 3);
+  CHECK(used_range_start[0] == 0);
+  CHECK(used_range_start[1] == 4);
+  CHECK(used_range_start[2] == 12);
+  CHECK(used_range_end.size() == 3);
+  CHECK(used_range_end[0] == 4);
+  CHECK(used_range_end[1] == 12);
+  CHECK(used_range_end[2] == 17);
 }
 #ifdef __clang__
 #pragma clang diagnostic pop
