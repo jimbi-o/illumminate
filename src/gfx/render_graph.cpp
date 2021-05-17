@@ -830,7 +830,7 @@ static auto AlignAddress(const uint32_t addr, const uint32_t align) {
 static uint32_t RetainMemory(const uint32_t size_in_bytes, const uint32_t alignment_in_bytes, vector<uint32_t>* used_range_start, vector<uint32_t>* used_range_end) {
   auto range_num = static_cast<uint32_t>(used_range_start->size());
   for (uint32_t range_index = 0; range_index < range_num; range_index++) {
-    auto addr = AlignAddress((range_index > 0) ? (*used_range_end)[range_index - 1] : 0, alignment_in_bytes);
+    auto addr = (range_index > 0) ? AlignAddress((*used_range_end)[range_index - 1], alignment_in_bytes) : 0;
     if (addr + size_in_bytes > (*used_range_start)[range_index]) continue;
     used_range_start->insert(used_range_start->begin() + range_index, addr);
     used_range_end->insert(used_range_end->begin() + range_index, addr + size_in_bytes);
@@ -840,6 +840,18 @@ static uint32_t RetainMemory(const uint32_t size_in_bytes, const uint32_t alignm
   used_range_start->push_back(addr);
   used_range_end->push_back(addr + size_in_bytes);
   return addr;
+}
+static void RetainSpecificMemory(const uint32_t addr, const uint32_t size_in_bytes, vector<uint32_t>* used_range_start, vector<uint32_t>* used_range_end) {
+  auto range_num = static_cast<uint32_t>(used_range_start->size());
+  for (uint32_t range_index = 0; range_index < range_num; range_index++) {
+    if ((*used_range_start)[range_index] < addr) continue;
+    ASSERT((range_index < range_num - 1) ? (addr + size < used_range_start[range_index + 1]) : true);
+    used_range_start->insert(used_range_start->begin() + range_index, addr);
+    used_range_end->insert(used_range_end->begin() + range_index, addr + size_in_bytes);
+    return;
+  }
+  used_range_start->push_back(addr);
+  used_range_end->push_back(addr + size_in_bytes);
 }
 static void ReturnMemory(const uint32_t start_addr, vector<uint32_t>* used_range_start, vector<uint32_t>* used_range_end) {
   auto range_num = static_cast<uint32_t>(used_range_start->size());
@@ -853,12 +865,64 @@ static void ReturnMemory(const uint32_t start_addr, vector<uint32_t>* used_range
     if (start > start_addr) return;
   }
 }
-static std::tuple<unordered_map<BufferId, uint32_t>, unordered_map<BufferId, BufferId>, unordered_map<uint32_t, vector<vector<BufferId>>>, unordered_map<uint32_t, vector<vector<BufferId>>>> ConfigureBufferAddressOffset(const uint32_t pass_num, const vector<vector<uint32_t>>& render_pass_new_buffer_list, const vector<vector<uint32_t>>& render_pass_expired_buffer_list, const unordered_map<BufferId, BufferConfig>& buffer_config_list, const unordered_map<BufferId, uint32_t>& buffer_size_list, const unordered_map<BufferId, uint32_t>& buffer_alignment_list, std::pmr::memory_resource* memory_resource) {
+static std::tuple<unordered_map<BufferId, uint32_t>, unordered_map<BufferId, BufferId>, unordered_map<uint32_t, vector<BufferId>>, unordered_map<uint32_t, vector<BufferId>>> ConfigureBufferAddressOffset(const uint32_t pass_num, const vector<vector<uint32_t>>& render_pass_new_buffer_list, const vector<vector<uint32_t>>& render_pass_expired_buffer_list, const unordered_map<BufferId, BufferConfig>& buffer_config_list, const unordered_map<BufferId, uint32_t>& buffer_size_list, const unordered_map<BufferId, uint32_t>& buffer_alignment_list, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
   unordered_map<BufferId, uint32_t> buffer_address_offset_list{memory_resource};
+  buffer_address_offset_list.reserve(buffer_config_list.size());
   unordered_map<BufferId, BufferId> renamed_buffers{memory_resource};
-  unordered_map<uint32_t, vector<vector<BufferId>>> render_pass_before_memory_aliasing_list{memory_resource};
-  unordered_map<uint32_t, vector<vector<BufferId>>> render_pass_after_memory_aliasing_list{memory_resource};
-  // TODO
+  unordered_map<uint32_t, vector<BufferId>> render_pass_before_memory_aliasing_list{memory_resource};
+  unordered_map<uint32_t, vector<BufferId>> render_pass_after_memory_aliasing_list{memory_resource};
+  vector<uint32_t> used_range_start{memory_resource_work};
+  vector<uint32_t> used_range_end{memory_resource_work};
+  for (auto& new_buffer : render_pass_new_buffer_list[0]) {
+    buffer_address_offset_list.insert_or_assign(new_buffer, RetainMemory(buffer_size_list.at(new_buffer), buffer_alignment_list.at(new_buffer), &used_range_start, &used_range_end));
+  }
+  unordered_set<BufferId> processed_new_buffer_list{memory_resource_work};
+  vector<uint32_t> memory_reusable_buffer_list{memory_resource_work};
+  for (uint32_t pass_index = 1; pass_index < pass_num; pass_index++) {
+    // release expired buffers
+    for (auto& expired_buffer : render_pass_expired_buffer_list[pass_index-1]) {
+      ReturnMemory(buffer_address_offset_list.at(expired_buffer), &used_range_start, &used_range_end);
+      memory_reusable_buffer_list.push_back(expired_buffer);
+    }
+    // find reusable buffers
+    for (auto& new_buffer : render_pass_new_buffer_list[pass_index]) {
+      for (auto it = memory_reusable_buffer_list.begin(); it != memory_reusable_buffer_list.end(); it++) {
+        auto& expired_buffer = *it;
+        if (!IsBufferConfigMergeable(buffer_config_list.at(new_buffer), buffer_config_list.at(expired_buffer))) continue;
+        auto& addr = buffer_address_offset_list.at(expired_buffer);
+        RetainSpecificMemory(addr, buffer_size_list.at(new_buffer), &used_range_start, &used_range_end);
+        buffer_address_offset_list.insert_or_assign(new_buffer, addr);
+        renamed_buffers.insert_or_assign(new_buffer, expired_buffer);
+        processed_new_buffer_list.insert(new_buffer);
+        memory_reusable_buffer_list.erase(it);
+        break;
+      }
+    }
+    // allocate new buffers
+    for (auto& new_buffer : render_pass_new_buffer_list[pass_index]) {
+      if (processed_new_buffer_list.contains(new_buffer)) continue;
+      auto& buffer_size = buffer_size_list.at(new_buffer);
+      auto addr = RetainMemory(buffer_size, buffer_alignment_list.at(new_buffer), &used_range_start, &used_range_end);
+      buffer_address_offset_list.insert_or_assign(new_buffer, addr);
+      // check for memory aliasing
+      for (auto it = memory_reusable_buffer_list.begin(); it != memory_reusable_buffer_list.end(); it++) {
+        auto& expired_buffer = *it;
+        auto expired_region_start = buffer_address_offset_list.at(expired_buffer);
+        auto expired_region_end = expired_region_start + buffer_alignment_list.at(expired_buffer);
+        if (addr + buffer_size <= expired_region_start) continue;
+        if (addr >= expired_region_end) continue;
+        if (!render_pass_before_memory_aliasing_list.contains(pass_index-1)) {
+          render_pass_before_memory_aliasing_list.insert_or_assign(pass_index-1, vector<BufferId>{memory_resource});
+          render_pass_after_memory_aliasing_list.insert_or_assign(pass_index-1, vector<BufferId>{memory_resource});
+        }
+        render_pass_before_memory_aliasing_list.at(pass_index-1).push_back(expired_buffer);
+        render_pass_after_memory_aliasing_list.at(pass_index-1).push_back(new_buffer);
+        memory_reusable_buffer_list.erase(it);
+        break;
+      }
+    }
+    processed_new_buffer_list.clear();
+  }
   return {buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list};
 }
 void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resource* memory_resource_work) {
@@ -2106,7 +2170,7 @@ TEST_CASE("memory aliasing") {
   buffer_config_list.insert_or_assign(1, BufferConfig{.width=1,.height=2,.state_flags=kBufferStateFlagRtv,.initial_state_flags=kBufferStateFlagRtv,.clear_value=GetClearValueDefaultColorBuffer(),.format=BufferFormat::kR8G8B8A8Unorm,.depth_stencil_flag=DepthStencilFlag::kDefault,});
   buffer_config_list.insert_or_assign(2, BufferConfig{.width=1,.height=2,.state_flags=kBufferStateFlagRtv,.initial_state_flags=kBufferStateFlagRtv,.clear_value=GetClearValueDefaultColorBuffer(),.format=BufferFormat::kR8G8B8A8Unorm,.depth_stencil_flag=DepthStencilFlag::kDefault,});
   buffer_config_list.insert_or_assign(3, BufferConfig{.width=1,.height=2,.state_flags=MergeBufferStateFlags(kBufferStateFlagRtv,kBufferStateFlagSrvPsOnly),.initial_state_flags=kBufferStateFlagRtv,.clear_value=GetClearValueDefaultColorBuffer(),.format=BufferFormat::kR8G8B8A8Unorm,.depth_stencil_flag=DepthStencilFlag::kDefault,});
-  buffer_config_list.insert_or_assign(4, BufferConfig{.width=1,.height=2,.state_flags=kBufferStateFlagRtv,.initial_state_flags=kBufferStateFlagRtv,.clear_value=GetClearValueDefaultColorBuffer(),.format=BufferFormat::kR8G8B8A8Unorm,.depth_stencil_flag=DepthStencilFlag::kDefault,});
+  buffer_config_list.insert_or_assign(4, BufferConfig{.width=3,.height=2,.state_flags=kBufferStateFlagRtv,.initial_state_flags=kBufferStateFlagRtv,.clear_value=GetClearValueDefaultColorBuffer(),.format=BufferFormat::kR8G8B8A8Unorm,.depth_stencil_flag=DepthStencilFlag::kDefault,});
   unordered_map<BufferId, uint32_t> buffer_size_list{&memory_resource_work};
   buffer_size_list.insert_or_assign(0, 8);
   buffer_size_list.insert_or_assign(1, 8);
@@ -2142,7 +2206,7 @@ TEST_CASE("memory aliasing") {
   CHECK(render_pass_expired_buffer_list[4].size() == 2);
   CHECK(render_pass_expired_buffer_list[4][0] == 3);
   CHECK(render_pass_expired_buffer_list[4][1] == 4);
-  auto [buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list] = ConfigureBufferAddressOffset(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list, buffer_size_list, buffer_alignment_list, &memory_resource_work);
+  auto [buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list] = ConfigureBufferAddressOffset(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list, buffer_size_list, buffer_alignment_list, &memory_resource_work, &memory_resource_work);
   CHECK(buffer_address_offset_list.size() == 5);
   CHECK(buffer_address_offset_list.at(0) == 0);
   CHECK(buffer_address_offset_list.at(1) == 8);
@@ -2152,14 +2216,14 @@ TEST_CASE("memory aliasing") {
   CHECK(renamed_buffers.size() == 1);
   CHECK(renamed_buffers.at(3) == 0);
   CHECK(render_pass_before_memory_aliasing_list.size() == 1);
-  CHECK(render_pass_before_memory_aliasing_list.at(3).size() == 1);
-  CHECK(render_pass_before_memory_aliasing_list.at(3)[0].size() == 2);
-  CHECK(render_pass_before_memory_aliasing_list.at(3)[0][0] == 1);
-  CHECK(render_pass_before_memory_aliasing_list.at(3)[0][1] == 2);
+  CHECK(!render_pass_before_memory_aliasing_list.contains(0));
+  CHECK(!render_pass_before_memory_aliasing_list.contains(1));
+  CHECK(!render_pass_before_memory_aliasing_list.contains(2));
+  CHECK(render_pass_before_memory_aliasing_list.contains(3));
+  CHECK(!render_pass_before_memory_aliasing_list.contains(4));
+  CHECK(render_pass_before_memory_aliasing_list.at(3)[0] == 1);
   CHECK(render_pass_after_memory_aliasing_list.size() == 1);
-  CHECK(render_pass_after_memory_aliasing_list.at(3).size() == 1);
-  CHECK(render_pass_after_memory_aliasing_list.at(3)[0].size() == 1);
-  CHECK(render_pass_after_memory_aliasing_list.at(3)[0][0] == 4);
+  CHECK(render_pass_after_memory_aliasing_list.at(3)[0] == 4);
 }
 TEST_CASE("ConfigureBufferValidPassList w/async compute") {
   // TODO
