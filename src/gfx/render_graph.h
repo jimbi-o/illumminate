@@ -63,6 +63,17 @@ struct BufferSizeInfo {
   float width;
   float height;
 };
+struct BufferConfig {
+  uint32_t width;
+  uint32_t height;
+  BufferStateFlags state_flags;
+  BufferStateFlags initial_state_flags;
+  ClearValue clear_value;
+  BufferDimensionType dimension;
+  BufferFormat format;
+  DepthStencilFlag depth_stencil_flag;
+  std::byte _pad{};
+};
 class RenderGraphConfig {
  public:
   RenderGraphConfig(std::pmr::memory_resource* memory_resource)
@@ -94,6 +105,7 @@ class RenderGraphConfig {
     swapchain_buffer_width_ = width;
     swapchain_buffer_height_ = height;
   }
+  void SetBufferSizeInfoFunction(std::function<std::tuple<uint32_t, uint32_t>(const BufferConfig&)>&& buffer_size_info_function) { buffer_size_info_function_ = std::move(buffer_size_info_function); }
   uint32_t CreateNewRenderPass(RenderPassConfig&& render_pass_config) {
     if (render_pass_id_map_.contains(render_pass_config.pass_name)) {
       logerror("render pass name dup. {}", render_pass_config.pass_name);
@@ -135,6 +147,7 @@ class RenderGraphConfig {
   constexpr const auto& GetBufferSizeInfoList() const { return buffer_size_info_list_; }
   constexpr const auto& GetBufferDimensionTypeList() const { return buffer_dimension_type_list_; }
   constexpr const auto& GetExternalBufferNameList() const { return external_buffer_name_; }
+  constexpr const auto& GetBufferSizeInfoFunction() const { return buffer_size_info_function_; }
  private:
   std::pmr::memory_resource* memory_resource_;
   unordered_map<uint32_t, uint32_t> render_pass_id_map_;
@@ -150,6 +163,7 @@ class RenderGraphConfig {
   unordered_map<StrId, BufferSizeInfo> buffer_size_info_list_;
   unordered_map<StrId, BufferDimensionType> buffer_dimension_type_list_;
   unordered_set<StrId> external_buffer_name_;
+  std::function<std::tuple<uint32_t, uint32_t>(const BufferConfig&)> buffer_size_info_function_;
   uint32_t pass_num_;
   [[maybe_unused]] std::byte _pad[4];
   RenderGraphConfig() = delete;
@@ -165,17 +179,6 @@ struct BufferStateChangeInfo {
   BarrierPosType barrier_begin_pass_pos_type;
   BarrierPosType barrier_end_pass_pos_type;
   std::byte _pad[2]{};
-};
-struct BufferConfig {
-  uint32_t width;
-  uint32_t height;
-  BufferStateFlags state_flags;
-  BufferStateFlags initial_state_flags;
-  ClearValue clear_value;
-  BufferDimensionType dimension;
-  BufferFormat format;
-  DepthStencilFlag depth_stencil_flag;
-  std::byte _pad{};
 };
 struct BarrierTransition {
   BufferStateFlags state_before;

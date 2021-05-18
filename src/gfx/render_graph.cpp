@@ -644,53 +644,6 @@ constexpr bool IsBufferConfigMergeable(const BufferConfig& a, const BufferConfig
   if (!IsMergeableForBufferCreation(a.state_flags, b.state_flags)) return false;
   return true;
 }
-static bool IsAllDescendant(const unordered_set<uint32_t>& ancestor_candidates, const unordered_set<uint32_t>& descendant_candidates, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>& node_distance_map) {
-  if (ancestor_candidates.empty()) return false;
-  if (descendant_candidates.empty()) return false;
-  for (auto ancestor_cand : ancestor_candidates) {
-    auto& distance_map = node_distance_map.at(ancestor_cand);
-    for (auto descendant_cand : descendant_candidates) {
-      if (ancestor_cand == descendant_cand) return false;
-      if (!distance_map.contains(descendant_cand)) return false;
-      if (distance_map.at(descendant_cand) < 0) return false;
-    }
-  }
-  return true;
-}
-static std::tuple<unordered_map<BufferId, BufferId>, unordered_set<BufferId>> FindReusableBuffers(const vector<BufferId>& buffer_id_list, const unordered_map<BufferId, BufferConfig>& buffer_config_list, unordered_map<BufferId, unordered_set<uint32_t>>&& initial_users, unordered_map<BufferId, unordered_set<uint32_t>>&& final_users, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>& node_distance_map, const unordered_set<BufferId>& excluded_buffers, std::pmr::memory_resource* memory_resource) {
-  unordered_map<BufferId, BufferId> reusable_buffers{memory_resource};
-  unordered_set<BufferId> successor_id_list{memory_resource};
-  auto buffer_num = static_cast<uint32_t>(buffer_id_list.size());
-  for (uint32_t main_index = 0; main_index < buffer_num - 1; main_index++) {
-    auto& main_buffer_id = buffer_id_list[main_index];
-    if (excluded_buffers.contains(main_buffer_id)) continue;
-    if (reusable_buffers.contains(main_buffer_id)) continue;
-    auto main_buffer_config = buffer_config_list.at(main_buffer_id);
-    auto&& main_buffer_initial_users = initial_users.at(main_buffer_id);
-    auto&& main_buffer_final_users   = final_users.at(main_buffer_id);
-    for (uint32_t cand_index = main_index + 1; cand_index < buffer_num; cand_index++) {
-      auto& cand_buffer_id = buffer_id_list[cand_index];
-      if (excluded_buffers.contains(cand_buffer_id)) continue;
-      if (reusable_buffers.contains(cand_buffer_id)) continue;
-      auto& cand_buffer_config = buffer_config_list.at(cand_buffer_id);
-      if (!IsBufferConfigMergeable(main_buffer_config, cand_buffer_config)) continue;
-      auto&& cand_buffer_initial_users = initial_users.at(cand_buffer_id);
-      auto&& cand_buffer_final_users   = final_users.at(cand_buffer_id);
-      if (bool is_main_ancestor = IsAllDescendant(main_buffer_final_users, cand_buffer_initial_users, node_distance_map);
-          is_main_ancestor || IsAllDescendant(cand_buffer_final_users, main_buffer_initial_users, node_distance_map)) {
-        reusable_buffers.insert_or_assign(cand_buffer_id, main_buffer_id);
-        main_buffer_config.state_flags = MergeBufferStateFlags(main_buffer_config.state_flags, cand_buffer_config.state_flags);
-        if (is_main_ancestor) {
-          main_buffer_final_users = std::move(cand_buffer_final_users);
-        } else {
-          main_buffer_initial_users = std::move(cand_buffer_initial_users);
-          successor_id_list.insert(cand_buffer_id);
-        }
-      }
-    }
-  }
-  return {reusable_buffers, successor_id_list};
-}
 static auto UpdateBufferIdListUsingReusableBuffers(const unordered_map<BufferId, BufferId>& reusable_buffers, vector<BufferId>&& buffer_id_list) {
   auto new_end = std::remove_if(buffer_id_list.begin(), buffer_id_list.end(), [&reusable_buffers](const auto& id) { return reusable_buffers.contains(id); });
   buffer_id_list.erase(new_end, buffer_id_list.end());
@@ -707,19 +660,14 @@ static auto UpdateRenderPassBufferIdListUsingReusableBuffers(const unordered_map
   }
   return std::move(render_pass_buffer_id_list);
 }
-static std::tuple<unordered_map<BufferId, vector<BufferStateFlags>>, unordered_map<BufferId, vector<vector<uint32_t>>>> UpdateBufferStateListAndUserPassListUsingReusableBuffers(const unordered_map<BufferId, BufferId>& reusable_buffers, const unordered_set<BufferId>& successor_id_list, unordered_map<BufferId, vector<BufferStateFlags>>&& buffer_state_list, unordered_map<BufferId, vector<vector<uint32_t>>>&& buffer_user_pass_list) {
+static std::tuple<unordered_map<BufferId, vector<BufferStateFlags>>, unordered_map<BufferId, vector<vector<uint32_t>>>> UpdateBufferStateListAndUserPassListUsingReusableBuffers(const unordered_map<BufferId, BufferId>& reusable_buffers, unordered_map<BufferId, vector<BufferStateFlags>>&& buffer_state_list, unordered_map<BufferId, vector<vector<uint32_t>>>&& buffer_user_pass_list) {
   for (auto& [original_id, new_id] : reusable_buffers) {
     auto&& src_state = buffer_state_list.at(original_id);
     auto&& dst_state = buffer_state_list.at(new_id);
     auto&& src_user_pass = buffer_user_pass_list.at(original_id);
     auto&& dst_user_pass = buffer_user_pass_list.at(new_id);
-    if (successor_id_list.contains(original_id)) {
-      dst_state.insert(dst_state.begin(), std::make_move_iterator(src_state.begin()), std::make_move_iterator(src_state.end()));
-      dst_user_pass.insert(dst_user_pass.begin(), std::make_move_iterator(src_user_pass.begin()), std::make_move_iterator(src_user_pass.end()));
-    } else {
-      dst_state.insert(dst_state.end(), std::make_move_iterator(src_state.begin()), std::make_move_iterator(src_state.end()));
-      dst_user_pass.insert(dst_user_pass.end(), std::make_move_iterator(src_user_pass.begin()), std::make_move_iterator(src_user_pass.end()));
-    }
+    dst_state.insert(dst_state.end(), std::make_move_iterator(src_state.begin()), std::make_move_iterator(src_state.end()));
+    dst_user_pass.insert(dst_user_pass.end(), std::make_move_iterator(src_user_pass.begin()), std::make_move_iterator(src_user_pass.end()));
     buffer_state_list.erase(original_id);
     buffer_user_pass_list.erase(original_id);
   }
@@ -865,7 +813,7 @@ static void ReturnMemory(const uint32_t start_addr, vector<uint32_t>* used_range
     if (start > start_addr) return;
   }
 }
-static std::tuple<unordered_map<BufferId, uint32_t>, unordered_map<BufferId, BufferId>, unordered_map<uint32_t, vector<BufferId>>, unordered_map<uint32_t, vector<BufferId>>> ConfigureBufferAddressOffset(const uint32_t pass_num, const vector<vector<uint32_t>>& render_pass_new_buffer_list, const vector<vector<uint32_t>>& render_pass_expired_buffer_list, const unordered_map<BufferId, BufferConfig>& buffer_config_list, const unordered_map<BufferId, uint32_t>& buffer_size_list, const unordered_map<BufferId, uint32_t>& buffer_alignment_list, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
+static std::tuple<unordered_map<BufferId, uint32_t>, unordered_map<BufferId, BufferId>, unordered_map<uint32_t, vector<BufferId>>, unordered_map<uint32_t, vector<BufferId>>> ConfigureBufferAddressOffset(const uint32_t pass_num, const vector<vector<uint32_t>>& render_pass_new_buffer_list, const vector<vector<uint32_t>>& render_pass_expired_buffer_list, const unordered_map<BufferId, BufferConfig>& buffer_config_list, const unordered_map<BufferId, uint32_t>& buffer_size_list, const unordered_map<BufferId, uint32_t>& buffer_alignment_list, const unordered_set<BufferId>& excluded_buffers, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
   unordered_map<BufferId, uint32_t> buffer_address_offset_list{memory_resource};
   buffer_address_offset_list.reserve(buffer_config_list.size());
   unordered_map<BufferId, BufferId> renamed_buffers{memory_resource};
@@ -874,6 +822,7 @@ static std::tuple<unordered_map<BufferId, uint32_t>, unordered_map<BufferId, Buf
   vector<uint32_t> used_range_start{memory_resource_work};
   vector<uint32_t> used_range_end{memory_resource_work};
   for (auto& new_buffer : render_pass_new_buffer_list[0]) {
+    if (excluded_buffers.contains(new_buffer)) continue;
     buffer_address_offset_list.insert_or_assign(new_buffer, RetainMemory(buffer_size_list.at(new_buffer), buffer_alignment_list.at(new_buffer), &used_range_start, &used_range_end));
   }
   unordered_set<BufferId> processed_new_buffer_list{memory_resource_work};
@@ -881,11 +830,13 @@ static std::tuple<unordered_map<BufferId, uint32_t>, unordered_map<BufferId, Buf
   for (uint32_t pass_index = 1; pass_index < pass_num; pass_index++) {
     // release expired buffers
     for (auto& expired_buffer : render_pass_expired_buffer_list[pass_index-1]) {
+      if (excluded_buffers.contains(expired_buffer)) continue;
       ReturnMemory(buffer_address_offset_list.at(expired_buffer), &used_range_start, &used_range_end);
       memory_reusable_buffer_list.push_back(expired_buffer);
     }
     // find reusable buffers
     for (auto& new_buffer : render_pass_new_buffer_list[pass_index]) {
+      if (excluded_buffers.contains(new_buffer)) continue;
       for (auto it = memory_reusable_buffer_list.begin(); it != memory_reusable_buffer_list.end(); it++) {
         auto& expired_buffer = *it;
         if (!IsBufferConfigMergeable(buffer_config_list.at(new_buffer), buffer_config_list.at(expired_buffer))) continue;
@@ -900,6 +851,7 @@ static std::tuple<unordered_map<BufferId, uint32_t>, unordered_map<BufferId, Buf
     }
     // allocate new buffers
     for (auto& new_buffer : render_pass_new_buffer_list[pass_index]) {
+      if (excluded_buffers.contains(new_buffer)) continue;
       if (processed_new_buffer_list.contains(new_buffer)) continue;
       auto& buffer_size = buffer_size_list.at(new_buffer);
       auto addr = RetainMemory(buffer_size, buffer_alignment_list.at(new_buffer), &used_range_start, &used_range_end);
@@ -924,6 +876,33 @@ static std::tuple<unordered_map<BufferId, uint32_t>, unordered_map<BufferId, Buf
     processed_new_buffer_list.clear();
   }
   return {buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list};
+}
+static std::tuple<unordered_map<BufferId, uint32_t>, unordered_map<BufferId, uint32_t>> GetBufferSizeInfo(const unordered_map<BufferId, BufferConfig>& buffer_config_list, const std::function<std::tuple<uint32_t, uint32_t>(const BufferConfig&)>& configure_function, std::pmr::memory_resource* memory_resource) {
+  unordered_map<BufferId, uint32_t> buffer_size_list{memory_resource};
+  unordered_map<BufferId, uint32_t> buffer_alignment_list{memory_resource};
+  for (auto [buffer_id, buffer_config] : buffer_config_list) {
+    auto [size, alignment] = configure_function(buffer_config);
+    buffer_size_list.insert_or_assign(buffer_id, size);
+    buffer_alignment_list.insert_or_assign(buffer_id, alignment);
+  }
+  return {buffer_size_list, buffer_alignment_list};
+}
+static auto FlattenBufferUserPassList(const unordered_map<BufferId, vector<vector<uint32_t>>>& buffer_user_pass_list, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
+  unordered_map<BufferId, vector<uint32_t>> buffer_user_pass_list_flatten{memory_resource};
+  unordered_set<uint32_t> pass_set{memory_resource_work};
+  for (auto& [buffer_id, v] : buffer_user_pass_list) {
+    pass_set.clear();
+    for (auto& vv : v) {
+      for (auto& pass_index : vv) {
+        pass_set.insert(pass_index);
+      }
+    }
+    auto [it, result] = buffer_user_pass_list_flatten.insert_or_assign(buffer_id, vector<uint32_t>{memory_resource});
+    auto& dst = it->second;
+    dst.reserve(pass_set.size());
+    dst.assign(pass_set.begin(), pass_set.end());
+  }
+  return buffer_user_pass_list_flatten;
 }
 void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resource* memory_resource_work) {
   render_pass_num_ = config.GetRenderPassNum();
@@ -956,12 +935,17 @@ void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resour
                                                config.GetBufferDepthStencilFlagList(),
                                                memory_resource_);
   auto excluded_buffers = CollectExternalBufferIds(buffer_name_id_map, config.GetExternalBufferNameList(), memory_resource_);
+  auto [buffer_size_list, buffer_alignment_list] = GetBufferSizeInfo(buffer_config_list_, config.GetBufferSizeInfoFunction(), memory_resource_work);
   auto [initial_buffer_users, final_buffer_users] = GetInitialAndFinalUsersOfEachBuffers(buffer_user_pass_list, node_distance_map, excluded_buffers, memory_resource_work);
-  auto [reusable_buffers, successor_id_list] = FindReusableBuffers(buffer_id_list_, buffer_config_list_, std::move(initial_buffer_users), std::move(final_buffer_users), node_distance_map, excluded_buffers, memory_resource_work);
-  buffer_id_list_ = UpdateBufferIdListUsingReusableBuffers(reusable_buffers, std::move(buffer_id_list_));
-  render_pass_buffer_id_list_ = UpdateRenderPassBufferIdListUsingReusableBuffers(reusable_buffers, std::move(render_pass_buffer_id_list_));
-  std::tie(buffer_state_list, buffer_user_pass_list) = UpdateBufferStateListAndUserPassListUsingReusableBuffers(reusable_buffers, successor_id_list, std::move(buffer_state_list), std::move(buffer_user_pass_list));
-  buffer_config_list_ = MergeReusedBufferConfigs(reusable_buffers, std::move(buffer_config_list_));
+  auto buffer_user_pass_list_flatten = FlattenBufferUserPassList(buffer_user_pass_list, memory_resource_work, memory_resource_work);
+  auto buffer_valid_pass_list = ConfigureBufferValidPassList(buffer_id_list_, buffer_user_pass_list_flatten, render_pass_command_queue_type_list_, inter_queue_pass_dependency, memory_resource_work);
+  auto render_pass_valid_buffer_list = GetPassValidBufferList(render_pass_num_, buffer_id_list_, buffer_valid_pass_list, memory_resource_work);
+  auto [render_pass_new_buffer_list, render_pass_expired_buffer_list] = ConfigureRenderPassNewAndExpiredBuffers(render_pass_num_, render_pass_valid_buffer_list, memory_resource_work);
+  auto [buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list] = ConfigureBufferAddressOffset(render_pass_num_, render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list_, buffer_size_list, buffer_alignment_list, excluded_buffers, memory_resource_work, memory_resource_work);
+  buffer_id_list_ = UpdateBufferIdListUsingReusableBuffers(renamed_buffers, std::move(buffer_id_list_));
+  render_pass_buffer_id_list_ = UpdateRenderPassBufferIdListUsingReusableBuffers(renamed_buffers, std::move(render_pass_buffer_id_list_));
+  std::tie(buffer_state_list, buffer_user_pass_list) = UpdateBufferStateListAndUserPassListUsingReusableBuffers(renamed_buffers, std::move(buffer_state_list), std::move(buffer_user_pass_list));
+  buffer_config_list_ = MergeReusedBufferConfigs(renamed_buffers, std::move(buffer_config_list_));
   std::tie(buffer_state_list, buffer_user_pass_list) = RevertBufferStateToInitialState(std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work);
   auto buffer_state_change_info_list_map = CreateBufferStateChangeInfoList(render_pass_command_queue_type_flag_list, node_distance_map, buffer_state_list, buffer_user_pass_list, memory_resource_work);
   std::tie(barriers_pre_pass_, barriers_post_pass_) = ConfigureBarriers(render_pass_num_, buffer_id_list_, buffer_state_change_info_list_map, memory_resource_);
@@ -978,261 +962,15 @@ const uint32_t buffer_size_in_bytes_frame = 4 * 1024;
 const uint32_t buffer_offset_in_bytes_work = buffer_offset_in_bytes_frame + buffer_size_in_bytes_frame;
 const uint32_t buffer_size_in_bytes_work = 32 * 1024;
 std::byte buffer[buffer_offset_in_bytes_work + buffer_size_in_bytes_work]{};
+std::tuple<uint32_t, uint32_t> GetBufferSizeAndAlignmentImpl([[maybe_unused]]const illuminate::gfx::BufferConfig& config) {
+  return {16, 8};
+}
 }
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wfloat-equal"
 #endif
 #include "doctest/doctest.h"
-TEST_CASE("graph node test / find descendant") {
-  using namespace illuminate;
-  using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
-  unordered_map<uint32_t, unordered_map<uint32_t, int32_t>> node_distance_map;
-  node_distance_map.insert_or_assign(0, unordered_map<uint32_t, int32_t>{});
-  node_distance_map.at(0).insert_or_assign(0, 0);
-  node_distance_map.at(0).insert_or_assign(1, 1);
-  node_distance_map.at(0).insert_or_assign(2, 2);
-  node_distance_map.insert_or_assign(1, unordered_map<uint32_t, int32_t>{});
-  node_distance_map.at(1).insert_or_assign(0, -1);
-  node_distance_map.at(1).insert_or_assign(1, 0);
-  node_distance_map.at(1).insert_or_assign(2, 1);
-  node_distance_map.insert_or_assign(2, unordered_map<uint32_t, int32_t>{});
-  node_distance_map.at(2).insert_or_assign(0, -2);
-  node_distance_map.at(2).insert_or_assign(1, -1);
-  node_distance_map.at(2).insert_or_assign(2, 0);
-  vector<uint32_t> ancestors;
-  ancestors.push_back(0);
-  vector<CommandQueueTypeFlags> render_pass_command_queue_type_list;
-  render_pass_command_queue_type_list.push_back(kCommandQueueTypeFlagsGraphics);
-  render_pass_command_queue_type_list.push_back(kCommandQueueTypeFlagsGraphics);
-  render_pass_command_queue_type_list.push_back(kCommandQueueTypeFlagsGraphics);
-  CommandQueueTypeFlags valid_queues{kCommandQueueTypeFlagsAll};
-  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 0);
-  ancestors.push_back(1);
-  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 1);
-  ancestors.push_back(2);
-  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 2);
-  ancestors.clear();
-  ancestors.push_back(1);
-  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 1);
-  ancestors.clear();
-  ancestors.push_back(2);
-  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 2);
-  ancestors.clear();
-  ancestors.push_back(0);
-  render_pass_command_queue_type_list[0] = kCommandQueueTypeFlagsCompute;
-  valid_queues = kCommandQueueTypeFlagsGraphics;
-  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 1);
-  node_distance_map.insert_or_assign(3, unordered_map<uint32_t, int32_t>{});
-  node_distance_map.at(3).insert_or_assign(3, 0);
-  node_distance_map.at(3).insert_or_assign(1, 1);
-  node_distance_map.at(3).insert_or_assign(2, 2);
-  node_distance_map.at(1).insert_or_assign(3, -1);
-  node_distance_map.at(2).insert_or_assign(3, -2);
-  render_pass_command_queue_type_list.push_back(kCommandQueueTypeFlagsGraphics);
-  ancestors.clear();
-  ancestors.push_back(0);
-  ancestors.push_back(3);
-  valid_queues = kCommandQueueTypeFlagsAll;
-  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 1);
-  valid_queues = kCommandQueueTypeFlagsGraphics;
-  render_pass_command_queue_type_list[1] = kCommandQueueTypeFlagsCompute;
-  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 2);
-  ancestors.clear();
-  ancestors.push_back(0);
-  ancestors.push_back(1);
-  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 2);
-  ancestors.clear();
-  valid_queues = kCommandQueueTypeFlagsAll;
-  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 0);
-  ancestors.clear();
-  valid_queues = kCommandQueueTypeFlagsGraphics;
-  CHECK(FindClosestCommonDescendant(ancestors, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 3);
-}
-TEST_CASE("graph node test / find ancestor") {
-  using namespace illuminate;
-  using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
-  unordered_map<uint32_t, unordered_map<uint32_t, int32_t>> node_distance_map;
-  node_distance_map.insert_or_assign(0, unordered_map<uint32_t, int32_t>{});
-  node_distance_map.at(0).insert_or_assign(0, 0);
-  node_distance_map.at(0).insert_or_assign(1, 1);
-  node_distance_map.at(0).insert_or_assign(2, 2);
-  node_distance_map.insert_or_assign(1, unordered_map<uint32_t, int32_t>{});
-  node_distance_map.at(1).insert_or_assign(0, -1);
-  node_distance_map.at(1).insert_or_assign(1, 0);
-  node_distance_map.at(1).insert_or_assign(2, 1);
-  node_distance_map.insert_or_assign(2, unordered_map<uint32_t, int32_t>{});
-  node_distance_map.at(2).insert_or_assign(0, -2);
-  node_distance_map.at(2).insert_or_assign(1, -1);
-  node_distance_map.at(2).insert_or_assign(2, 0);
-  vector<CommandQueueTypeFlags> render_pass_command_queue_type_list;
-  render_pass_command_queue_type_list.push_back(kCommandQueueTypeFlagsGraphics);
-  render_pass_command_queue_type_list.push_back(kCommandQueueTypeFlagsGraphics);
-  render_pass_command_queue_type_list.push_back(kCommandQueueTypeFlagsGraphics);
-  CommandQueueTypeFlags valid_queues{kCommandQueueTypeFlagsAll};
-  vector<uint32_t> descendants;
-  descendants.push_back(2);
-  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 2);
-  descendants.push_back(1);
-  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 1);
-  descendants.push_back(0);
-  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 0);
-  descendants.clear();
-  descendants.push_back(0);
-  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 0);
-  descendants.clear();
-  descendants.push_back(1);
-  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 1);
-  descendants.clear();
-  descendants.push_back(2);
-  render_pass_command_queue_type_list[2] = kCommandQueueTypeFlagsCompute;
-  valid_queues = kCommandQueueTypeFlagsGraphics;
-  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 1);
-  node_distance_map.insert_or_assign(3, unordered_map<uint32_t, int32_t>{});
-  render_pass_command_queue_type_list.push_back(kCommandQueueTypeFlagsGraphics);
-  node_distance_map.at(3).insert_or_assign(3, 0);
-  node_distance_map.at(3).insert_or_assign(0, -2);
-  node_distance_map.at(3).insert_or_assign(1, -1);
-  node_distance_map.at(0).insert_or_assign(3, 2);
-  node_distance_map.at(1).insert_or_assign(3, 1);
-  descendants.clear();
-  descendants.push_back(2);
-  descendants.push_back(3);
-  valid_queues = kCommandQueueTypeFlagsAll;
-  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 1);
-  valid_queues = kCommandQueueTypeFlagsGraphics;
-  render_pass_command_queue_type_list[1] = kCommandQueueTypeFlagsCompute;
-  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 0);
-  descendants.clear();
-  descendants.push_back(2);
-  descendants.push_back(1);
-  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 0);
-  descendants.clear();
-  valid_queues = kCommandQueueTypeFlagsAll;
-  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 2);
-  descendants.clear();
-  valid_queues = kCommandQueueTypeFlagsGraphics;
-  CHECK(FindClosestCommonAncestor(descendants, node_distance_map, render_pass_command_queue_type_list, valid_queues) == 3);
-}
-TEST_CASE("graph node test / IsAllDescendant") {
-  using namespace illuminate;
-  using namespace illuminate::gfx;
-  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
-  unordered_map<uint32_t, unordered_map<uint32_t, int32_t>> node_distance_map{&memory_resource_work};
-  node_distance_map.insert_or_assign(0, unordered_map<uint32_t, int32_t>{});
-  node_distance_map.at(0).insert_or_assign(0, 0);
-  node_distance_map.at(0).insert_or_assign(1, 1);
-  node_distance_map.at(0).insert_or_assign(2, 2);
-  node_distance_map.insert_or_assign(1, unordered_map<uint32_t, int32_t>{});
-  node_distance_map.at(1).insert_or_assign(0, -1);
-  node_distance_map.at(1).insert_or_assign(1, 0);
-  node_distance_map.at(1).insert_or_assign(2, 1);
-  node_distance_map.insert_or_assign(2, unordered_map<uint32_t, int32_t>{});
-  node_distance_map.at(2).insert_or_assign(0, -2);
-  node_distance_map.at(2).insert_or_assign(1, -1);
-  node_distance_map.at(2).insert_or_assign(2, 0);
-  unordered_set<uint32_t> ancestor_candidates{&memory_resource_work};
-  unordered_set<uint32_t> descendant_candidates{&memory_resource_work};
-  CHECK(!IsAllDescendant(ancestor_candidates, descendant_candidates, node_distance_map));
-  ancestor_candidates.insert(0);
-  CHECK(!IsAllDescendant(ancestor_candidates, descendant_candidates, node_distance_map));
-  CHECK(!IsAllDescendant(descendant_candidates, ancestor_candidates, node_distance_map));
-  descendant_candidates.insert(1);
-  CHECK(IsAllDescendant(ancestor_candidates, descendant_candidates, node_distance_map));
-  CHECK(!IsAllDescendant(descendant_candidates, ancestor_candidates, node_distance_map));
-  ancestor_candidates.insert(1);
-  CHECK(!IsAllDescendant(ancestor_candidates, descendant_candidates, node_distance_map));
-  CHECK(!IsAllDescendant(descendant_candidates, ancestor_candidates, node_distance_map));
-  ancestor_candidates.clear();
-  ancestor_candidates.insert(0);
-  ancestor_candidates.insert(2);
-  CHECK(!IsAllDescendant(ancestor_candidates, descendant_candidates, node_distance_map));
-  CHECK(!IsAllDescendant(descendant_candidates, ancestor_candidates, node_distance_map));
-  ancestor_candidates.clear();
-  ancestor_candidates.insert(0);
-  descendant_candidates.clear();
-  descendant_candidates.insert(2);
-  CHECK(IsAllDescendant(ancestor_candidates, descendant_candidates, node_distance_map));
-  CHECK(!IsAllDescendant(descendant_candidates, ancestor_candidates, node_distance_map));
-  ancestor_candidates.clear();
-  ancestor_candidates.insert(1);
-  CHECK(IsAllDescendant(ancestor_candidates, descendant_candidates, node_distance_map));
-  CHECK(!IsAllDescendant(descendant_candidates, ancestor_candidates, node_distance_map));
-  descendant_candidates.insert(1);
-  CHECK(!IsAllDescendant(ancestor_candidates, descendant_candidates, node_distance_map));
-  CHECK(!IsAllDescendant(descendant_candidates, ancestor_candidates, node_distance_map));
-  node_distance_map.clear();
-  node_distance_map.insert_or_assign(0, unordered_map<uint32_t, int32_t>{});
-  node_distance_map.at(0).insert_or_assign(0, 0);
-  node_distance_map.at(0).insert_or_assign(2, 1);
-  node_distance_map.insert_or_assign(1, unordered_map<uint32_t, int32_t>{});
-  node_distance_map.at(1).insert_or_assign(1, 0);
-  node_distance_map.at(1).insert_or_assign(2, 1);
-  node_distance_map.insert_or_assign(2, unordered_map<uint32_t, int32_t>{});
-  node_distance_map.at(2).insert_or_assign(0, -1);
-  node_distance_map.at(2).insert_or_assign(1, -1);
-  node_distance_map.at(2).insert_or_assign(2, 0);
-  ancestor_candidates.clear();
-  ancestor_candidates.insert(0);
-  descendant_candidates.clear();
-  descendant_candidates.insert(2);
-  CHECK(IsAllDescendant(ancestor_candidates, descendant_candidates, node_distance_map));
-  CHECK(!IsAllDescendant(descendant_candidates, ancestor_candidates, node_distance_map));
-  ancestor_candidates.clear();
-  ancestor_candidates.insert(1);
-  CHECK(IsAllDescendant(ancestor_candidates, descendant_candidates, node_distance_map));
-  CHECK(!IsAllDescendant(descendant_candidates, ancestor_candidates, node_distance_map));
-  ancestor_candidates.clear();
-  ancestor_candidates.insert(0);
-  ancestor_candidates.insert(1);
-  CHECK(IsAllDescendant(ancestor_candidates, descendant_candidates, node_distance_map));
-  CHECK(!IsAllDescendant(descendant_candidates, ancestor_candidates, node_distance_map));
-  ancestor_candidates.clear();
-  ancestor_candidates.insert(0);
-  ancestor_candidates.insert(1);
-  descendant_candidates.clear();
-  descendant_candidates.insert(1);
-  CHECK(!IsAllDescendant(ancestor_candidates, descendant_candidates, node_distance_map));
-  CHECK(!IsAllDescendant(descendant_candidates, ancestor_candidates, node_distance_map));
-  ancestor_candidates.clear();
-  ancestor_candidates.insert(0);
-  ancestor_candidates.insert(2);
-  CHECK(!IsAllDescendant(ancestor_candidates, descendant_candidates, node_distance_map));
-  CHECK(!IsAllDescendant(descendant_candidates, ancestor_candidates, node_distance_map));
-  node_distance_map.clear();
-  node_distance_map.insert_or_assign(0, unordered_map<uint32_t, int32_t>{});
-  node_distance_map.at(0).insert_or_assign(0, 0);
-  node_distance_map.at(0).insert_or_assign(1, 1);
-  node_distance_map.at(0).insert_or_assign(2, 1);
-  node_distance_map.insert_or_assign(1, unordered_map<uint32_t, int32_t>{});
-  node_distance_map.at(1).insert_or_assign(0, -1);
-  node_distance_map.at(1).insert_or_assign(1, 0);
-  node_distance_map.insert_or_assign(2, unordered_map<uint32_t, int32_t>{});
-  node_distance_map.at(2).insert_or_assign(0, -1);
-  node_distance_map.at(2).insert_or_assign(2, 0);
-  ancestor_candidates.clear();
-  ancestor_candidates.insert(0);
-  descendant_candidates.clear();
-  descendant_candidates.insert(1);
-  CHECK(IsAllDescendant(ancestor_candidates, descendant_candidates, node_distance_map));
-  CHECK(!IsAllDescendant(descendant_candidates, ancestor_candidates, node_distance_map));
-  descendant_candidates.clear();
-  descendant_candidates.insert(2);
-  CHECK(IsAllDescendant(ancestor_candidates, descendant_candidates, node_distance_map));
-  CHECK(!IsAllDescendant(descendant_candidates, ancestor_candidates, node_distance_map));
-  ancestor_candidates.insert(1);
-  CHECK(!IsAllDescendant(ancestor_candidates, descendant_candidates, node_distance_map));
-  CHECK(!IsAllDescendant(descendant_candidates, ancestor_candidates, node_distance_map));
-  ancestor_candidates.clear();
-  ancestor_candidates.insert(0);
-  descendant_candidates.clear();
-  descendant_candidates.insert(1);
-  descendant_candidates.insert(2);
-  CHECK(IsAllDescendant(ancestor_candidates, descendant_candidates, node_distance_map));
-  CHECK(!IsAllDescendant(descendant_candidates, ancestor_candidates, node_distance_map));
-}
 TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - single pass") {
   using namespace illuminate;
   using namespace illuminate::gfx;
@@ -1713,6 +1451,7 @@ TEST_CASE("barrier for load from srv") {
   PmrLinearAllocator memory_resource_scene(&buffer[buffer_offset_in_bytes_scene], buffer_size_in_bytes_scene);
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   RenderGraphConfig render_graph_config(&memory_resource_scene);
+  render_graph_config.SetBufferSizeInfoFunction(GetBufferSizeAndAlignmentImpl);
   CHECK(render_graph_config.GetRenderPassNum() == 0);
   auto render_pass_id = render_graph_config.CreateNewRenderPass({.pass_name = StrId("draw"), .command_queue_type = CommandQueueType::kGraphics});
   render_graph_config.AppendRenderPassBufferConfig(render_pass_id, {StrId("mainbuffer"), kBufferStateFlagRtv, kWriteFlag});
@@ -1824,6 +1563,7 @@ TEST_CASE("barrier for use compute queue") {
   PmrLinearAllocator memory_resource_scene(&buffer[buffer_offset_in_bytes_scene], buffer_size_in_bytes_scene);
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   RenderGraphConfig render_graph_config(&memory_resource_scene);
+  render_graph_config.SetBufferSizeInfoFunction(GetBufferSizeAndAlignmentImpl);
   auto render_pass_index = render_graph_config.CreateNewRenderPass({.pass_name = StrId("draw"), .command_queue_type = CommandQueueType::kCompute});
   CHECK(render_graph_config.GetRenderPassIndex(StrId("draw")) == 0);
   render_graph_config.AppendRenderPassBufferConfig(render_pass_index, {StrId("mainbuffer"), kBufferStateFlagUav, kWriteFlag});
@@ -1898,6 +1638,7 @@ TEST_CASE("buffer reuse") {
   }
   render_graph_config.AddBufferInitialState(StrId("swapchain"),  kBufferStateFlagPresent);
   render_graph_config.AddBufferFinalState(StrId("swapchain"),  kBufferStateFlagPresent);
+  render_graph_config.SetBufferSizeInfoFunction(GetBufferSizeAndAlignmentImpl);
   render_graph_config.AddExternalBufferName(StrId("swapchain"));
   CHECK(render_graph_config.GetExternalBufferNameList().size() == 1);
   CHECK(render_graph_config.GetExternalBufferNameList().contains(StrId("swapchain")));
@@ -1931,38 +1672,34 @@ TEST_CASE("buffer reuse") {
                                                      &memory_resource_work);
     unordered_set<BufferId> excluded_buffers{&memory_resource_work};
     excluded_buffers.insert(3);
-    auto [initial_users, final_users] = GetInitialAndFinalUsersOfEachBuffers(buffer_user_pass_list, node_distance_map, excluded_buffers, &memory_resource_work);
-    CHECK(initial_users.size() == 3);
-    CHECK(initial_users.contains(0));
-    CHECK(initial_users.contains(1));
-    CHECK(initial_users.contains(2));
-    CHECK(initial_users.at(0).size() == 1);
-    CHECK(initial_users.at(0).contains(0));
-    CHECK(initial_users.at(1).size() == 1);
-    CHECK(initial_users.at(1).contains(1));
-    CHECK(initial_users.at(2).size() == 1);
-    CHECK(initial_users.at(2).contains(2));
-    CHECK(final_users.size() == 3);
-    CHECK(final_users.contains(0));
-    CHECK(final_users.contains(1));
-    CHECK(final_users.contains(2));
-    CHECK(final_users.at(0).size() == 1);
-    CHECK(final_users.at(0).contains(1));
-    CHECK(final_users.at(1).size() == 1);
-    CHECK(final_users.at(1).contains(2));
-    CHECK(final_users.at(2).size() == 1);
-    CHECK(final_users.at(2).contains(3));
-    auto [reusable_buffers, successor_id_list] = FindReusableBuffers(buffer_id_list, buffer_config_list, std::move(initial_users), std::move(final_users), node_distance_map, excluded_buffers, &memory_resource_work);
-    CHECK(reusable_buffers.size() == 1);
-    CHECK(reusable_buffers.contains(2));
-    CHECK(reusable_buffers.at(2) == 0);
-    CHECK(successor_id_list.empty());
-    buffer_id_list = UpdateBufferIdListUsingReusableBuffers(reusable_buffers, std::move(buffer_id_list));
+    auto buffer_user_pass_list_flatten = FlattenBufferUserPassList(buffer_user_pass_list, &memory_resource_work, &memory_resource_work);
+    auto buffer_valid_pass_list = ConfigureBufferValidPassList(buffer_id_list, buffer_user_pass_list_flatten, render_pass_command_queue_type_list, inter_queue_pass_dependency, &memory_resource_work);
+    auto render_pass_valid_buffer_list = GetPassValidBufferList(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), buffer_id_list, buffer_valid_pass_list, &memory_resource_work);
+    auto [render_pass_new_buffer_list, render_pass_expired_buffer_list] = ConfigureRenderPassNewAndExpiredBuffers(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_valid_buffer_list, &memory_resource_work);
+    unordered_map<BufferId, uint32_t> buffer_size_list{&memory_resource_work};
+    buffer_size_list.insert_or_assign(0, 8);
+    buffer_size_list.insert_or_assign(1, 8);
+    buffer_size_list.insert_or_assign(2, 8);
+    buffer_size_list.insert_or_assign(3, 8);
+    buffer_size_list.insert_or_assign(4, 8);
+    unordered_map<BufferId, uint32_t> buffer_alignment_list{&memory_resource_work};
+    buffer_alignment_list.insert_or_assign(0, 8);
+    buffer_alignment_list.insert_or_assign(1, 8);
+    buffer_alignment_list.insert_or_assign(2, 8);
+    buffer_alignment_list.insert_or_assign(3, 8);
+    buffer_alignment_list.insert_or_assign(4, 8);
+    auto [buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list] = ConfigureBufferAddressOffset(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list, buffer_size_list, buffer_alignment_list, excluded_buffers, &memory_resource_work, &memory_resource_work);
+    CHECK(renamed_buffers.size() == 1);
+    CHECK(renamed_buffers.contains(2));
+    CHECK(renamed_buffers.at(2) == 0);
+    CHECK(render_pass_before_memory_aliasing_list.empty());
+    CHECK(render_pass_after_memory_aliasing_list.empty());
+    buffer_id_list = UpdateBufferIdListUsingReusableBuffers(renamed_buffers, std::move(buffer_id_list));
     CHECK(buffer_id_list.size() == 3);
     CHECK(buffer_id_list[0] == 0);
     CHECK(buffer_id_list[1] == 1);
     CHECK(buffer_id_list[2] == 3);
-    render_pass_buffer_id_list = UpdateRenderPassBufferIdListUsingReusableBuffers(reusable_buffers, std::move(render_pass_buffer_id_list));
+    render_pass_buffer_id_list = UpdateRenderPassBufferIdListUsingReusableBuffers(renamed_buffers, std::move(render_pass_buffer_id_list));
     CHECK(render_pass_buffer_id_list[0][0] == 0);
     CHECK(render_pass_buffer_id_list[1][0] == 0);
     CHECK(render_pass_buffer_id_list[1][1] == 1);
@@ -1970,7 +1707,7 @@ TEST_CASE("buffer reuse") {
     CHECK(render_pass_buffer_id_list[2][1] == 0);
     CHECK(render_pass_buffer_id_list[3][0] == 0);
     CHECK(render_pass_buffer_id_list[3][1] == 3);
-    std::tie(buffer_state_list, buffer_user_pass_list) = UpdateBufferStateListAndUserPassListUsingReusableBuffers(reusable_buffers, successor_id_list, std::move(buffer_state_list), std::move(buffer_user_pass_list));
+    std::tie(buffer_state_list, buffer_user_pass_list) = UpdateBufferStateListAndUserPassListUsingReusableBuffers(renamed_buffers, std::move(buffer_state_list), std::move(buffer_user_pass_list));
     CHECK(buffer_state_list.size() == 3);
     CHECK(!buffer_state_list.contains(2));
     CHECK(buffer_state_list.at(0).size() == 4);
@@ -1993,7 +1730,7 @@ TEST_CASE("buffer reuse") {
     for (auto& [id, config] : buffer_config_list) {
       flag_copy.insert_or_assign(id, config.state_flags);
     }
-    buffer_config_list = MergeReusedBufferConfigs(reusable_buffers, std::move(buffer_config_list));
+    buffer_config_list = MergeReusedBufferConfigs(renamed_buffers, std::move(buffer_config_list));
     CHECK(buffer_config_list.size() == 3);
     CHECK(!buffer_config_list.contains(2));
     for (auto& [id, config] : buffer_config_list) {
@@ -2206,7 +1943,7 @@ TEST_CASE("memory aliasing") {
   CHECK(render_pass_expired_buffer_list[4].size() == 2);
   CHECK(render_pass_expired_buffer_list[4][0] == 3);
   CHECK(render_pass_expired_buffer_list[4][1] == 4);
-  auto [buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list] = ConfigureBufferAddressOffset(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list, buffer_size_list, buffer_alignment_list, &memory_resource_work, &memory_resource_work);
+  auto [buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list] = ConfigureBufferAddressOffset(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list, buffer_size_list, buffer_alignment_list, {}, &memory_resource_work, &memory_resource_work);
   CHECK(buffer_address_offset_list.size() == 5);
   CHECK(buffer_address_offset_list.at(0) == 0);
   CHECK(buffer_address_offset_list.at(1) == 8);
