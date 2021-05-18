@@ -205,6 +205,11 @@ class RenderGraph {
   constexpr const auto& GetBarriersPrePass() const { return barriers_pre_pass_; }
   constexpr const auto& GetBarriersPostPass() const { return barriers_post_pass_; }
   constexpr const auto& GetQueueSignals() const { return queue_signals_; }
+  constexpr const auto& GetBufferSizeList() const { return buffer_size_list_; }
+  constexpr const auto& GetBufferAlignmentSizeList() const { return buffer_alignment_list_; }
+  constexpr const auto& GetBufferAddressOffsetList() const { return buffer_address_offset_list_; }
+  constexpr const auto& GetRenderPassBuffersBeforeMemoryAliasingList() const { return render_pass_before_memory_aliasing_list_; }
+  constexpr const auto& GetRenderPassBuffersAfterMemoryAliasingList() const { return render_pass_after_memory_aliasing_list_; }
  private:
   std::pmr::memory_resource* memory_resource_;
   vector<BufferId> buffer_id_list_;
@@ -215,6 +220,11 @@ class RenderGraph {
   vector<vector<BarrierConfig>> barriers_pre_pass_;
   vector<vector<BarrierConfig>> barriers_post_pass_;
   unordered_map<uint32_t, unordered_set<uint32_t>> queue_signals_;
+  unordered_map<BufferId, uint32_t> buffer_size_list_;
+  unordered_map<BufferId, uint32_t> buffer_alignment_list_;
+  unordered_map<BufferId, uint32_t> buffer_address_offset_list_;
+  unordered_map<uint32_t, vector<BufferId>> render_pass_before_memory_aliasing_list_;
+  unordered_map<uint32_t, vector<BufferId>> render_pass_after_memory_aliasing_list_;
   uint32_t render_pass_num_;
   [[maybe_unused]] std::byte _pad[4]{};
   RenderGraph() = delete;

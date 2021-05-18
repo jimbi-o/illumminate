@@ -579,48 +579,6 @@ static unordered_map<uint32_t, unordered_set<uint32_t>> ConfigureQueueSignals(co
   }
   return queue_signal;
 }
-static std::tuple<unordered_map<BufferId, unordered_set<uint32_t>>, unordered_map<BufferId, unordered_set<uint32_t>>> GetInitialAndFinalUsersOfEachBuffers(const unordered_map<BufferId, vector<vector<uint32_t>>>& buffer_user_pass_list, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>& node_distance_map, const unordered_set<BufferId>& excluded_buffers, std::pmr::memory_resource* memory_resource) {
-  unordered_map<BufferId, unordered_set<uint32_t>> initial_users{memory_resource};
-  initial_users.reserve(buffer_user_pass_list.size());
-  unordered_map<BufferId, unordered_set<uint32_t>> final_users{memory_resource};
-  final_users.reserve(buffer_user_pass_list.size());
-  for (auto& [buffer_id, user_pass_list] : buffer_user_pass_list) {
-    if (excluded_buffers.contains(buffer_id)) continue;
-    auto [initial_users_it, initial_result] = initial_users.insert_or_assign(buffer_id, unordered_set<uint32_t>{memory_resource});
-    auto& initial_user_set = initial_users_it->second;
-    auto [final_users_it, final_result] = final_users.insert_or_assign(buffer_id, unordered_set<uint32_t>{memory_resource});
-    auto& final_user_set = final_users_it->second;
-    auto user_pass_list_num = static_cast<uint32_t>(user_pass_list.size());
-    for (uint32_t user_pass_list_index = 0; user_pass_list_index < user_pass_list_num; user_pass_list_index++) {
-      for (auto& pass : user_pass_list[user_pass_list_index]) {
-        if (initial_user_set.empty()) {
-          initial_user_set.insert(pass);
-          continue;
-        }
-        auto& distance_map = node_distance_map.at(pass);
-        for (auto& initial_user : initial_user_set) {
-          if (distance_map.contains(initial_user)) continue;
-          initial_user_set.insert(pass);
-        }
-      }
-      auto& final_pass_list = user_pass_list[user_pass_list_num - user_pass_list_index - 1];
-      auto final_pass_list_num = static_cast<uint32_t>(final_pass_list.size());
-      for (uint32_t i = 0; i < final_pass_list_num; i++) {
-        auto& pass = final_pass_list[final_pass_list_num - i - 1];
-        if (final_user_set.empty()) {
-          final_user_set.insert(pass);
-          continue;
-        }
-        auto& distance_map = node_distance_map.at(pass);
-        for (auto& final_user : final_user_set) {
-          if (distance_map.contains(final_user)) continue;
-          final_user_set.insert(pass);
-        }
-      }
-    }
-  }
-  return {initial_users, final_users};
-}
 constexpr bool IsMergeableForBufferCreationImpl(const BufferStateFlags& a, const BufferStateFlags& b) {
   if (a & kBufferStateFlagRtv) {
     if (b & kBufferStateFlagDsv) return false;
@@ -921,7 +879,6 @@ void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resour
   queue_signals_ = ConfigureQueueSignals(render_pass_num_, inter_queue_pass_dependency, render_pass_command_queue_type_list_, memory_resource_, memory_resource_work);
   node_distance_map = AppendInterQueueNodeDistanceMap(inter_queue_pass_dependency, std::move(node_distance_map));
   node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
-  auto render_pass_command_queue_type_flag_list = ConvertToCommandQueueTypeFlagsList(render_pass_command_queue_type_list_, memory_resource_work);
   auto buffer_id_name_map = CreateBufferIdNameMap(render_pass_num_, static_cast<uint32_t>(buffer_id_list_.size()), config.GetRenderPassBufferStateList(), render_pass_buffer_id_list_, memory_resource_);
   buffer_config_list_ = CreateBufferConfigList(buffer_id_list_,
                                                buffer_id_name_map,
@@ -935,18 +892,19 @@ void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resour
                                                config.GetBufferDepthStencilFlagList(),
                                                memory_resource_);
   auto excluded_buffers = CollectExternalBufferIds(buffer_name_id_map, config.GetExternalBufferNameList(), memory_resource_);
-  auto [buffer_size_list, buffer_alignment_list] = GetBufferSizeInfo(buffer_config_list_, config.GetBufferSizeInfoFunction(), memory_resource_work);
-  auto [initial_buffer_users, final_buffer_users] = GetInitialAndFinalUsersOfEachBuffers(buffer_user_pass_list, node_distance_map, excluded_buffers, memory_resource_work);
+  std::tie(buffer_size_list_, buffer_alignment_list_) = GetBufferSizeInfo(buffer_config_list_, config.GetBufferSizeInfoFunction(), memory_resource_work);
   auto buffer_user_pass_list_flatten = FlattenBufferUserPassList(buffer_user_pass_list, memory_resource_work, memory_resource_work);
   auto buffer_valid_pass_list = ConfigureBufferValidPassList(buffer_id_list_, buffer_user_pass_list_flatten, render_pass_command_queue_type_list_, inter_queue_pass_dependency, memory_resource_work);
   auto render_pass_valid_buffer_list = GetPassValidBufferList(render_pass_num_, buffer_id_list_, buffer_valid_pass_list, memory_resource_work);
   auto [render_pass_new_buffer_list, render_pass_expired_buffer_list] = ConfigureRenderPassNewAndExpiredBuffers(render_pass_num_, render_pass_valid_buffer_list, memory_resource_work);
-  auto [buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list] = ConfigureBufferAddressOffset(render_pass_num_, render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list_, buffer_size_list, buffer_alignment_list, excluded_buffers, memory_resource_work, memory_resource_work);
+  unordered_map<BufferId, BufferId> renamed_buffers{memory_resource_work};
+  std::tie(buffer_address_offset_list_, renamed_buffers, render_pass_before_memory_aliasing_list_, render_pass_after_memory_aliasing_list_) = ConfigureBufferAddressOffset(render_pass_num_, render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list_, buffer_size_list_, buffer_alignment_list_, excluded_buffers, memory_resource_work, memory_resource_work);
   buffer_id_list_ = UpdateBufferIdListUsingReusableBuffers(renamed_buffers, std::move(buffer_id_list_));
   render_pass_buffer_id_list_ = UpdateRenderPassBufferIdListUsingReusableBuffers(renamed_buffers, std::move(render_pass_buffer_id_list_));
   std::tie(buffer_state_list, buffer_user_pass_list) = UpdateBufferStateListAndUserPassListUsingReusableBuffers(renamed_buffers, std::move(buffer_state_list), std::move(buffer_user_pass_list));
   buffer_config_list_ = MergeReusedBufferConfigs(renamed_buffers, std::move(buffer_config_list_));
   std::tie(buffer_state_list, buffer_user_pass_list) = RevertBufferStateToInitialState(std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work);
+  auto render_pass_command_queue_type_flag_list = ConvertToCommandQueueTypeFlagsList(render_pass_command_queue_type_list_, memory_resource_work);
   auto buffer_state_change_info_list_map = CreateBufferStateChangeInfoList(render_pass_command_queue_type_flag_list, node_distance_map, buffer_state_list, buffer_user_pass_list, memory_resource_work);
   std::tie(barriers_pre_pass_, barriers_post_pass_) = ConfigureBarriers(render_pass_num_, buffer_id_list_, buffer_state_change_info_list_map, memory_resource_);
 }
