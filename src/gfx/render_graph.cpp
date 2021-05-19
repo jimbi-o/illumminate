@@ -241,6 +241,22 @@ static auto ConfigureInterQueuePassDependency(const unordered_map<BufferId, vect
   }
   return inter_queue_pass_dependency;
 }
+static unordered_map<uint32_t, unordered_map<uint32_t, int32_t>> ConfigureTripleInterQueueDependency(const uint32_t pass_num, unordered_map<uint32_t, unordered_map<uint32_t, int32_t>>&& node_distance_map) {
+  for (uint32_t ancestor = 0; ancestor < pass_num; ancestor++) {
+    auto& ancestor_map = node_distance_map.at(ancestor);
+    for (auto& [middle_pass, distance_to_middle_pass] : ancestor_map) {
+      if (distance_to_middle_pass <= 0) continue;
+      auto& middle_map = node_distance_map.at(middle_pass);
+      for (uint32_t descendant = middle_pass + 1; descendant < pass_num; descendant++) {
+        if (ancestor_map.contains(descendant)) continue;
+        if (!middle_map.contains(descendant)) continue;
+        if (middle_map.at(descendant) <= 0) continue;
+        ancestor_map.insert_or_assign(descendant, distance_to_middle_pass + middle_map.at(descendant));
+      }
+    }
+  }
+  return std::move(node_distance_map);
+}
 static unordered_map<uint32_t, unordered_set<uint32_t>> RemoveRedundantDependencyFromSameQueuePredecessors(const uint32_t pass_num, const vector<CommandQueueType>& render_pass_command_queue_type_list, unordered_map<uint32_t, unordered_set<uint32_t>>&& inter_queue_pass_dependency, std::pmr::memory_resource* memory_resource_work) {
   unordered_map<CommandQueueType, unordered_map<CommandQueueType, uint32_t>> processed_pass_per_queue{memory_resource_work};
   for (uint32_t pass_index = 0; pass_index < pass_num; pass_index++) {
@@ -650,86 +666,31 @@ static auto CollectExternalBufferIds(const unordered_map<StrId, unordered_set<Bu
   }
   return external_buffer_id_list;
 }
-static bool IsAncestor(const uint32_t ancestor_cand, const uint32_t descendant, const vector<CommandQueueType>& render_pass_command_queue_type_list, const unordered_map<uint32_t, unordered_set<uint32_t>>& inter_queue_pass_dependency_from_descendant_to_ancestors) {
-  auto& ancestor_cand_command_queue_type = render_pass_command_queue_type_list.at(ancestor_cand);
-  auto& descendant_command_queue_type = render_pass_command_queue_type_list.at(descendant);
-  if (ancestor_cand_command_queue_type == descendant_command_queue_type) return ancestor_cand < descendant;
-  for (uint32_t pass_index = descendant; pass_index >= ancestor_cand; pass_index--) {
-    auto pass_index_command_queue_type = render_pass_command_queue_type_list.at(pass_index);
-    if (pass_index_command_queue_type != descendant_command_queue_type) continue;
-    if (!inter_queue_pass_dependency_from_descendant_to_ancestors.contains(pass_index)) continue;
-    for (auto& ancestor : inter_queue_pass_dependency_from_descendant_to_ancestors.at(pass_index)) {
-      if (render_pass_command_queue_type_list.at(ancestor) != ancestor_cand_command_queue_type) continue;
-      if (ancestor_cand <= ancestor) return true;
-      // dependency patterns like transfer -> graphics -> compute are not considered here.
-      break;
-    }
-  }
-  return false;
-}
-static auto ConfigureBufferValidPassList(const vector<BufferId>& buffer_id_list, const unordered_map<BufferId, vector<uint32_t>>& buffer_user_pass_list_flatten, const vector<CommandQueueType>& render_pass_command_queue_type_list, const unordered_map<uint32_t, unordered_set<uint32_t>>& inter_queue_pass_dependency_from_descendant_to_ancestors, std::pmr::memory_resource* memory_resource) {
-  unordered_map<BufferId, unordered_set<uint32_t>> buffer_valid_pass_list{memory_resource};
-  for (auto& buffer_id : buffer_id_list) {
-    auto [it, result] = buffer_valid_pass_list.insert_or_assign(buffer_id, unordered_set<uint32_t>{memory_resource});
-    auto& valid_pass_list = it->second;
-    auto& user_pass_list = buffer_user_pass_list_flatten.at(buffer_id);
-    auto user_pass_list_num = static_cast<uint32_t>(user_pass_list.size());
-    for (uint32_t i = 0; i < user_pass_list_num; i++) {
-      auto& src_pass_index = user_pass_list[i];
-      valid_pass_list.insert(src_pass_index);
-      for (uint32_t j = i + 1; j < user_pass_list_num; j++) {
-        auto& dst_pass_index = user_pass_list[j];
-        valid_pass_list.insert(dst_pass_index);
-        for (uint32_t pass_index = src_pass_index; pass_index <= dst_pass_index; pass_index++) {
-          if (!IsAncestor(src_pass_index, pass_index, render_pass_command_queue_type_list, inter_queue_pass_dependency_from_descendant_to_ancestors)) continue;
-          if (!IsAncestor(pass_index, dst_pass_index, render_pass_command_queue_type_list, inter_queue_pass_dependency_from_descendant_to_ancestors)) continue;
-          valid_pass_list.insert(pass_index);
-        }
-      }
-    }
-  }
-  return buffer_valid_pass_list;
-}
-static auto GetPassValidBufferList(const uint32_t pass_num, const vector<BufferId>& buffer_id_list, const unordered_map<BufferId, unordered_set<uint32_t>>& buffer_valid_pass_list, std::pmr::memory_resource* memory_resource) {
-  vector<vector<BufferId>> render_pass_valid_buffer_list{memory_resource};
-  for (uint32_t pass_index = 0; pass_index < pass_num; pass_index++) {
-    render_pass_valid_buffer_list.push_back(vector<BufferId>{memory_resource});
-  }
-  for (auto& buffer_id : buffer_id_list) {
-    for (auto& pass_index : buffer_valid_pass_list.at(buffer_id)) {
-      render_pass_valid_buffer_list[pass_index].push_back(buffer_id);
-    }
-  }
-  return render_pass_valid_buffer_list;
-}
-static std::tuple<vector<vector<uint32_t>>, vector<vector<uint32_t>>> ConfigureRenderPassNewAndExpiredBuffers(const uint32_t pass_num, const vector<vector<BufferId>>& render_pass_valid_buffer_list, std::pmr::memory_resource* memory_resource) {
+static std::tuple<vector<vector<uint32_t>>, vector<vector<uint32_t>>> ConfigureRenderPassNewAndExpiredBuffers(const uint32_t pass_num, const vector<uint32_t>& buffer_id_list, const unordered_map<BufferId, vector<vector<uint32_t>>>& buffer_user_pass_list, std::pmr::memory_resource* memory_resource) {
   vector<vector<uint32_t>> render_pass_new_buffer_list{memory_resource};
-  render_pass_new_buffer_list.reserve(pass_num);
-  render_pass_new_buffer_list.push_back(vector<uint32_t>{memory_resource});
-  render_pass_new_buffer_list.back().reserve(render_pass_valid_buffer_list[0].size());
-  render_pass_new_buffer_list.back().assign(render_pass_valid_buffer_list[0].begin(), render_pass_valid_buffer_list[0].end());
   vector<vector<uint32_t>> render_pass_expired_buffer_list{memory_resource};
+  render_pass_new_buffer_list.reserve(pass_num);
   render_pass_expired_buffer_list.reserve(pass_num);
-  for (uint32_t pass_index = 0; pass_index < pass_num - 1; pass_index++) {
-    render_pass_expired_buffer_list.push_back(vector<uint32_t>{memory_resource});
-    for (auto& buffer_id : render_pass_valid_buffer_list[pass_index]) {
-      if (std::find(render_pass_valid_buffer_list[pass_index+1].begin(), render_pass_valid_buffer_list[pass_index+1].end(), buffer_id) == render_pass_valid_buffer_list[pass_index+1].end()) {
-        render_pass_expired_buffer_list.back().push_back(buffer_id);
-      }
-    }
+  for (uint32_t i = 0; i < pass_num; i++) {
     render_pass_new_buffer_list.push_back(vector<uint32_t>{memory_resource});
-    for (auto& buffer_id : render_pass_valid_buffer_list[pass_index+1]) {
-      if (std::find(render_pass_valid_buffer_list[pass_index].begin(), render_pass_valid_buffer_list[pass_index].end(), buffer_id) == render_pass_valid_buffer_list[pass_index].end()) {
-        render_pass_new_buffer_list.back().push_back(buffer_id);
+    render_pass_expired_buffer_list.push_back(vector<uint32_t>{memory_resource});
+  }
+  for (auto& buffer_id : buffer_id_list) {
+    auto& list_list = buffer_user_pass_list.at(buffer_id);
+    uint32_t min = pass_num;
+    uint32_t max = 0;
+    for (auto& list : list_list) {
+      for (auto& pass : list) {
+        if (pass < min) min = pass;
+        if (pass > max) max = pass;
       }
     }
+    render_pass_new_buffer_list[min].push_back(buffer_id);
+    render_pass_expired_buffer_list[max].push_back(buffer_id);
   }
-  render_pass_expired_buffer_list.push_back(vector<uint32_t>{memory_resource});
-  render_pass_expired_buffer_list.back().reserve(render_pass_valid_buffer_list[pass_num-1].size());
-  render_pass_expired_buffer_list.back().assign(render_pass_valid_buffer_list[pass_num-1].begin(), render_pass_valid_buffer_list[pass_num-1].end());
   return {render_pass_new_buffer_list, render_pass_expired_buffer_list};
 }
-static auto AlignAddress(const uint32_t addr, const uint32_t align) {
+static constexpr auto AlignAddress(const uint32_t addr, const uint32_t align) {
   const auto mask = align - 1;
   return (addr + mask) & ~mask;
 }
@@ -771,7 +732,7 @@ static void ReturnMemory(const uint32_t start_addr, vector<uint32_t>* used_range
     if (start > start_addr) return;
   }
 }
-static std::tuple<unordered_map<BufferId, uint32_t>, unordered_map<BufferId, BufferId>, unordered_map<uint32_t, vector<BufferId>>, unordered_map<uint32_t, vector<BufferId>>> ConfigureBufferAddressOffset(const uint32_t pass_num, const vector<vector<uint32_t>>& render_pass_new_buffer_list, const vector<vector<uint32_t>>& render_pass_expired_buffer_list, const unordered_map<BufferId, BufferConfig>& buffer_config_list, const unordered_map<BufferId, uint32_t>& buffer_size_list, const unordered_map<BufferId, uint32_t>& buffer_alignment_list, const unordered_set<BufferId>& excluded_buffers, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
+static std::tuple<unordered_map<BufferId, uint32_t>, unordered_map<BufferId, BufferId>, unordered_map<uint32_t, vector<BufferId>>, unordered_map<uint32_t, vector<BufferId>>> ConfigureBufferAddressOffset(const uint32_t pass_num, const vector<vector<BufferId>>& render_pass_buffer_id_list, const unordered_map<BufferId, unordered_map<BufferId, int32_t>>& node_distance_map, const vector<vector<uint32_t>>& render_pass_new_buffer_list, const vector<vector<uint32_t>>& render_pass_expired_buffer_list, const unordered_map<BufferId, BufferConfig>& buffer_config_list, const unordered_map<BufferId, uint32_t>& buffer_size_list, const unordered_map<BufferId, uint32_t>& buffer_alignment_list, const unordered_set<BufferId>& excluded_buffers, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
   unordered_map<BufferId, uint32_t> buffer_address_offset_list{memory_resource};
   buffer_address_offset_list.reserve(buffer_config_list.size());
   unordered_map<BufferId, BufferId> renamed_buffers{memory_resource};
@@ -845,23 +806,6 @@ static std::tuple<unordered_map<BufferId, uint32_t>, unordered_map<BufferId, uin
   }
   return {buffer_size_list, buffer_alignment_list};
 }
-static auto FlattenBufferUserPassList(const unordered_map<BufferId, vector<vector<uint32_t>>>& buffer_user_pass_list, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
-  unordered_map<BufferId, vector<uint32_t>> buffer_user_pass_list_flatten{memory_resource};
-  unordered_set<uint32_t> pass_set{memory_resource_work};
-  for (auto& [buffer_id, v] : buffer_user_pass_list) {
-    pass_set.clear();
-    for (auto& vv : v) {
-      for (auto& pass_index : vv) {
-        pass_set.insert(pass_index);
-      }
-    }
-    auto [it, result] = buffer_user_pass_list_flatten.insert_or_assign(buffer_id, vector<uint32_t>{memory_resource});
-    auto& dst = it->second;
-    dst.reserve(pass_set.size());
-    dst.assign(pass_set.begin(), pass_set.end());
-  }
-  return buffer_user_pass_list_flatten;
-}
 void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resource* memory_resource_work) {
   render_pass_num_ = config.GetRenderPassNum();
   std::tie(buffer_id_list_, render_pass_buffer_id_list_, render_pass_buffer_state_flag_list_) = InitBufferIdList(render_pass_num_, config.GetRenderPassBufferStateList(), memory_resource_);
@@ -879,6 +823,8 @@ void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resour
   queue_signals_ = ConfigureQueueSignals(render_pass_num_, inter_queue_pass_dependency, render_pass_command_queue_type_list_, memory_resource_, memory_resource_work);
   node_distance_map = AppendInterQueueNodeDistanceMap(inter_queue_pass_dependency, std::move(node_distance_map));
   node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
+  node_distance_map = ConfigureTripleInterQueueDependency(render_pass_num_, std::move(node_distance_map));
+  node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
   auto buffer_id_name_map = CreateBufferIdNameMap(render_pass_num_, static_cast<uint32_t>(buffer_id_list_.size()), config.GetRenderPassBufferStateList(), render_pass_buffer_id_list_, memory_resource_);
   buffer_config_list_ = CreateBufferConfigList(buffer_id_list_,
                                                buffer_id_name_map,
@@ -893,12 +839,9 @@ void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resour
                                                memory_resource_);
   auto excluded_buffers = CollectExternalBufferIds(buffer_name_id_map, config.GetExternalBufferNameList(), memory_resource_);
   std::tie(buffer_size_list_, buffer_alignment_list_) = GetBufferSizeInfo(buffer_config_list_, config.GetBufferSizeInfoFunction(), memory_resource_work);
-  auto buffer_user_pass_list_flatten = FlattenBufferUserPassList(buffer_user_pass_list, memory_resource_work, memory_resource_work);
-  auto buffer_valid_pass_list = ConfigureBufferValidPassList(buffer_id_list_, buffer_user_pass_list_flatten, render_pass_command_queue_type_list_, inter_queue_pass_dependency, memory_resource_work);
-  auto render_pass_valid_buffer_list = GetPassValidBufferList(render_pass_num_, buffer_id_list_, buffer_valid_pass_list, memory_resource_work);
-  auto [render_pass_new_buffer_list, render_pass_expired_buffer_list] = ConfigureRenderPassNewAndExpiredBuffers(render_pass_num_, render_pass_valid_buffer_list, memory_resource_work);
+  auto [render_pass_new_buffer_list, render_pass_expired_buffer_list] = ConfigureRenderPassNewAndExpiredBuffers(render_pass_num_, buffer_id_list_, buffer_user_pass_list, memory_resource_work);
   unordered_map<BufferId, BufferId> renamed_buffers{memory_resource_work};
-  std::tie(buffer_address_offset_list_, renamed_buffers, render_pass_before_memory_aliasing_list_, render_pass_after_memory_aliasing_list_) = ConfigureBufferAddressOffset(render_pass_num_, render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list_, buffer_size_list_, buffer_alignment_list_, excluded_buffers, memory_resource_work, memory_resource_work);
+  std::tie(buffer_address_offset_list_, renamed_buffers, render_pass_before_memory_aliasing_list_, render_pass_after_memory_aliasing_list_) = ConfigureBufferAddressOffset(render_pass_num_, render_pass_buffer_id_list_, node_distance_map, render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list_, buffer_size_list_, buffer_alignment_list_, excluded_buffers, memory_resource_work, memory_resource_work);
   buffer_id_list_ = UpdateBufferIdListUsingReusableBuffers(renamed_buffers, std::move(buffer_id_list_));
   render_pass_buffer_id_list_ = UpdateRenderPassBufferIdListUsingReusableBuffers(renamed_buffers, std::move(render_pass_buffer_id_list_));
   std::tie(buffer_state_list, buffer_user_pass_list) = UpdateBufferStateListAndUserPassListUsingReusableBuffers(renamed_buffers, std::move(buffer_state_list), std::move(buffer_user_pass_list));
@@ -908,6 +851,39 @@ void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resour
   auto buffer_state_change_info_list_map = CreateBufferStateChangeInfoList(render_pass_command_queue_type_flag_list, node_distance_map, buffer_state_list, buffer_user_pass_list, memory_resource_work);
   std::tie(barriers_pre_pass_, barriers_post_pass_) = ConfigureBarriers(render_pass_num_, buffer_id_list_, buffer_state_change_info_list_map, memory_resource_);
 }
+#ifdef BUILD_WITH_TEST
+static std::tuple<vector<BufferId>, unordered_map<BufferId, vector<vector<uint32_t>>>> CollectBufferDataForTest(const vector<vector<BufferId>>& render_pass_buffer_id_list, std::pmr::memory_resource* memory_resource) {
+  vector<BufferId> buffer_id_list{memory_resource};
+  unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{memory_resource};
+  auto pass_num = static_cast<uint32_t>(render_pass_buffer_id_list.size());
+  for (uint32_t pass_index = 0; pass_index < pass_num; pass_index++) {
+    auto buffer_num = static_cast<uint32_t>(render_pass_buffer_id_list[pass_index].size());
+    for (uint32_t buffer_index = 0; buffer_index < buffer_num; buffer_index++) {
+      auto& buffer_id = render_pass_buffer_id_list[pass_index][buffer_index];
+      if (!buffer_user_pass_list.contains(buffer_id)) {
+        if (!buffer_id_list.empty()) {
+          if (buffer_id_list.back() <= buffer_id) {
+            buffer_id_list.push_back(buffer_id);
+          } else {
+            for (auto it = buffer_id_list.begin(); it != buffer_id_list.end(); it++) {
+              if (*it >= buffer_id) {
+                buffer_id_list.insert(it, buffer_id);
+                break;
+              }
+            }
+          }
+        } else {
+          buffer_id_list.push_back(buffer_id);
+        }
+        buffer_user_pass_list.insert_or_assign(buffer_id, vector<vector<uint32_t>>{memory_resource});
+      }
+      buffer_user_pass_list.at(buffer_id).push_back(vector<uint32_t>{memory_resource});
+      buffer_user_pass_list.at(buffer_id).back().push_back(pass_index);
+    }
+  }
+  return {buffer_id_list, buffer_user_pass_list};
+}
+#endif
 }
 #ifdef BUILD_WITH_TEST
 namespace {
@@ -918,7 +894,7 @@ const uint32_t buffer_size_in_bytes_scene = 8 * 1024;
 const uint32_t buffer_offset_in_bytes_frame = buffer_offset_in_bytes_scene + buffer_size_in_bytes_scene;
 const uint32_t buffer_size_in_bytes_frame = 4 * 1024;
 const uint32_t buffer_offset_in_bytes_work = buffer_offset_in_bytes_frame + buffer_size_in_bytes_frame;
-const uint32_t buffer_size_in_bytes_work = 32 * 1024;
+const uint32_t buffer_size_in_bytes_work = 64 * 1024;
 std::byte buffer[buffer_offset_in_bytes_work + buffer_size_in_bytes_work]{};
 std::tuple<uint32_t, uint32_t> GetBufferSizeAndAlignmentImpl([[maybe_unused]]const illuminate::gfx::BufferConfig& config) {
   return {16, 8};
@@ -1600,6 +1576,7 @@ TEST_CASE("buffer reuse") {
   render_graph_config.AddExternalBufferName(StrId("swapchain"));
   CHECK(render_graph_config.GetExternalBufferNameList().size() == 1);
   CHECK(render_graph_config.GetExternalBufferNameList().contains(StrId("swapchain")));
+  unordered_map<BufferId, unordered_map<BufferId, int32_t>> node_distance_map;
   {
     auto render_pass_num = render_graph_config.GetRenderPassNum();
     auto [buffer_id_list, render_pass_buffer_id_list, render_pass_buffer_state_flag_list] = InitBufferIdList(render_pass_num, render_graph_config.GetRenderPassBufferStateList(), &memory_resource_work);
@@ -1611,7 +1588,7 @@ TEST_CASE("buffer reuse") {
     std::tie(buffer_state_list, buffer_user_pass_list) = MergeFinalBufferState(final_state_flag_list, std::move(buffer_state_list), std::move(buffer_user_pass_list), &memory_resource_work);
     // std::tie(buffer_state_list, buffer_user_pass_list) = RevertBufferStateToInitialState(std::move(buffer_state_list), std::move(buffer_user_pass_list), &memory_resource_work);
     auto render_pass_command_queue_type_list = vector<CommandQueueType>(render_graph_config.GetRenderPassCommandQueueTypeList(), &memory_resource_work);
-    auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(render_pass_num, render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(render_pass_num, render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
     auto inter_queue_pass_dependency = ConfigureInterQueuePassDependency(buffer_user_pass_list, render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     inter_queue_pass_dependency = RemoveRedundantDependencyFromSameQueuePredecessors(render_pass_num, render_pass_command_queue_type_list, std::move(inter_queue_pass_dependency), &memory_resource_work);
@@ -1630,10 +1607,7 @@ TEST_CASE("buffer reuse") {
                                                      &memory_resource_work);
     unordered_set<BufferId> excluded_buffers{&memory_resource_work};
     excluded_buffers.insert(3);
-    auto buffer_user_pass_list_flatten = FlattenBufferUserPassList(buffer_user_pass_list, &memory_resource_work, &memory_resource_work);
-    auto buffer_valid_pass_list = ConfigureBufferValidPassList(buffer_id_list, buffer_user_pass_list_flatten, render_pass_command_queue_type_list, inter_queue_pass_dependency, &memory_resource_work);
-    auto render_pass_valid_buffer_list = GetPassValidBufferList(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), buffer_id_list, buffer_valid_pass_list, &memory_resource_work);
-    auto [render_pass_new_buffer_list, render_pass_expired_buffer_list] = ConfigureRenderPassNewAndExpiredBuffers(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_valid_buffer_list, &memory_resource_work);
+    auto [render_pass_new_buffer_list, render_pass_expired_buffer_list] = ConfigureRenderPassNewAndExpiredBuffers(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), buffer_id_list, buffer_user_pass_list, &memory_resource_work);
     unordered_map<BufferId, uint32_t> buffer_size_list{&memory_resource_work};
     buffer_size_list.insert_or_assign(0, 8);
     buffer_size_list.insert_or_assign(1, 8);
@@ -1646,7 +1620,7 @@ TEST_CASE("buffer reuse") {
     buffer_alignment_list.insert_or_assign(2, 8);
     buffer_alignment_list.insert_or_assign(3, 8);
     buffer_alignment_list.insert_or_assign(4, 8);
-    auto [buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list] = ConfigureBufferAddressOffset(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list, buffer_size_list, buffer_alignment_list, excluded_buffers, &memory_resource_work, &memory_resource_work);
+    auto [buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list] = ConfigureBufferAddressOffset(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_buffer_id_list, node_distance_map, render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list, buffer_size_list, buffer_alignment_list, excluded_buffers, &memory_resource_work, &memory_resource_work);
     CHECK(renamed_buffers.size() == 1);
     CHECK(renamed_buffers.contains(2));
     CHECK(renamed_buffers.at(2) == 0);
@@ -1803,82 +1777,32 @@ TEST_CASE("memory aliasing") {
   buffer_id_list.push_back(2);
   buffer_id_list.push_back(3);
   buffer_id_list.push_back(4);
-  unordered_map<BufferId, vector<uint32_t>> buffer_user_pass_list_flatten{&memory_resource_work};
-  buffer_user_pass_list_flatten.insert_or_assign(0, vector<uint32_t>{&memory_resource_work});
-  buffer_user_pass_list_flatten.at(0).push_back(0);
-  buffer_user_pass_list_flatten.at(0).push_back(1);
-  buffer_user_pass_list_flatten.at(0).push_back(2);
-  buffer_user_pass_list_flatten.insert_or_assign(1, vector<uint32_t>{&memory_resource_work});
-  buffer_user_pass_list_flatten.at(1).push_back(1);
-  buffer_user_pass_list_flatten.at(1).push_back(3);
-  buffer_user_pass_list_flatten.insert_or_assign(2, vector<uint32_t>{&memory_resource_work});
-  buffer_user_pass_list_flatten.at(2).push_back(2);
-  buffer_user_pass_list_flatten.at(2).push_back(3);
-  buffer_user_pass_list_flatten.insert_or_assign(3, vector<uint32_t>{&memory_resource_work});
-  buffer_user_pass_list_flatten.at(3).push_back(3);
-  buffer_user_pass_list_flatten.at(3).push_back(4);
-  buffer_user_pass_list_flatten.insert_or_assign(4, vector<uint32_t>{&memory_resource_work});
-  buffer_user_pass_list_flatten.at(4).push_back(4);
-  auto buffer_valid_pass_list = ConfigureBufferValidPassList(buffer_id_list, buffer_user_pass_list_flatten, render_pass_command_queue_type_list, inter_queue_pass_dependency_from_descendant_to_ancestors, &memory_resource_work);
-  CHECK(buffer_valid_pass_list.size() == 5);
-  CHECK(buffer_valid_pass_list.contains(0));
-  CHECK(buffer_valid_pass_list.at(0).size() == 3);
-  CHECK(buffer_valid_pass_list.at(0).contains(0));
-  CHECK(buffer_valid_pass_list.at(0).contains(1));
-  CHECK(buffer_valid_pass_list.at(0).contains(2));
-  CHECK(buffer_valid_pass_list.contains(1));
-  CHECK(buffer_valid_pass_list.at(1).size() == 3);
-  CHECK(buffer_valid_pass_list.at(1).contains(1));
-  CHECK(buffer_valid_pass_list.at(1).contains(2));
-  CHECK(buffer_valid_pass_list.at(1).contains(3));
-  CHECK(buffer_valid_pass_list.contains(2));
-  CHECK(buffer_valid_pass_list.at(2).size() == 2);
-  CHECK(buffer_valid_pass_list.at(2).contains(2));
-  CHECK(buffer_valid_pass_list.at(2).contains(3));
-  CHECK(buffer_valid_pass_list.contains(3));
-  CHECK(buffer_valid_pass_list.at(3).size() == 2);
-  CHECK(buffer_valid_pass_list.at(3).contains(3));
-  CHECK(buffer_valid_pass_list.at(3).contains(4));
-  CHECK(buffer_valid_pass_list.contains(4));
-  CHECK(buffer_valid_pass_list.at(4).size() == 1);
-  CHECK(buffer_valid_pass_list.at(4).contains(4));
-  auto render_pass_valid_buffer_list = GetPassValidBufferList(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), buffer_id_list, buffer_valid_pass_list, &memory_resource_work);
-  CHECK(render_pass_valid_buffer_list.size() == 5);
-  CHECK(render_pass_valid_buffer_list[0].size() == 1);
-  CHECK(render_pass_valid_buffer_list[0][0] == 0);
-  CHECK(render_pass_valid_buffer_list[1].size() == 2);
-  CHECK(render_pass_valid_buffer_list[1][0] == 0);
-  CHECK(render_pass_valid_buffer_list[1][1] == 1);
-  CHECK(render_pass_valid_buffer_list[2].size() == 3);
-  CHECK(render_pass_valid_buffer_list[2][0] == 0);
-  CHECK(render_pass_valid_buffer_list[2][1] == 1);
-  CHECK(render_pass_valid_buffer_list[2][2] == 2);
-  CHECK(render_pass_valid_buffer_list[3].size() == 3);
-  CHECK(render_pass_valid_buffer_list[3][0] == 1);
-  CHECK(render_pass_valid_buffer_list[3][1] == 2);
-  CHECK(render_pass_valid_buffer_list[3][2] == 3);
-  CHECK(render_pass_valid_buffer_list[4].size() == 2);
-  CHECK(render_pass_valid_buffer_list[4][0] == 3);
-  CHECK(render_pass_valid_buffer_list[4][1] == 4);
-  unordered_map<BufferId, BufferConfig> buffer_config_list{&memory_resource_work};
-  buffer_config_list.insert_or_assign(0, BufferConfig{.width=1,.height=2,.state_flags=kBufferStateFlagRtv,.initial_state_flags=kBufferStateFlagRtv,.clear_value=GetClearValueDefaultColorBuffer(),.format=BufferFormat::kR8G8B8A8Unorm,.depth_stencil_flag=DepthStencilFlag::kDefault,});
-  buffer_config_list.insert_or_assign(1, BufferConfig{.width=1,.height=2,.state_flags=kBufferStateFlagRtv,.initial_state_flags=kBufferStateFlagRtv,.clear_value=GetClearValueDefaultColorBuffer(),.format=BufferFormat::kR8G8B8A8Unorm,.depth_stencil_flag=DepthStencilFlag::kDefault,});
-  buffer_config_list.insert_or_assign(2, BufferConfig{.width=1,.height=2,.state_flags=kBufferStateFlagRtv,.initial_state_flags=kBufferStateFlagRtv,.clear_value=GetClearValueDefaultColorBuffer(),.format=BufferFormat::kR8G8B8A8Unorm,.depth_stencil_flag=DepthStencilFlag::kDefault,});
-  buffer_config_list.insert_or_assign(3, BufferConfig{.width=1,.height=2,.state_flags=MergeBufferStateFlags(kBufferStateFlagRtv,kBufferStateFlagSrvPsOnly),.initial_state_flags=kBufferStateFlagRtv,.clear_value=GetClearValueDefaultColorBuffer(),.format=BufferFormat::kR8G8B8A8Unorm,.depth_stencil_flag=DepthStencilFlag::kDefault,});
-  buffer_config_list.insert_or_assign(4, BufferConfig{.width=3,.height=2,.state_flags=kBufferStateFlagRtv,.initial_state_flags=kBufferStateFlagRtv,.clear_value=GetClearValueDefaultColorBuffer(),.format=BufferFormat::kR8G8B8A8Unorm,.depth_stencil_flag=DepthStencilFlag::kDefault,});
-  unordered_map<BufferId, uint32_t> buffer_size_list{&memory_resource_work};
-  buffer_size_list.insert_or_assign(0, 8);
-  buffer_size_list.insert_or_assign(1, 8);
-  buffer_size_list.insert_or_assign(2, 8);
-  buffer_size_list.insert_or_assign(3, 8);
-  buffer_size_list.insert_or_assign(4, 16);
-  unordered_map<BufferId, uint32_t> buffer_alignment_list{&memory_resource_work};
-  buffer_alignment_list.insert_or_assign(0, 8);
-  buffer_alignment_list.insert_or_assign(1, 8);
-  buffer_alignment_list.insert_or_assign(2, 8);
-  buffer_alignment_list.insert_or_assign(3, 8);
-  buffer_alignment_list.insert_or_assign(4, 8);
-  auto [render_pass_new_buffer_list, render_pass_expired_buffer_list] = ConfigureRenderPassNewAndExpiredBuffers(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_valid_buffer_list, &memory_resource_work);
+  unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
+  buffer_user_pass_list.insert_or_assign(0, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(0).back().push_back(0);
+  buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(0).back().push_back(1);
+  buffer_user_pass_list.at(0).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(0).back().push_back(2);
+  buffer_user_pass_list.insert_or_assign(1, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_user_pass_list.at(1).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(1).back().push_back(1);
+  buffer_user_pass_list.at(1).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(1).back().push_back(3);
+  buffer_user_pass_list.insert_or_assign(2, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_user_pass_list.at(2).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(2).back().push_back(2);
+  buffer_user_pass_list.at(2).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(2).back().push_back(3);
+  buffer_user_pass_list.insert_or_assign(3, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_user_pass_list.at(3).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(3).back().push_back(3);
+  buffer_user_pass_list.at(3).back().push_back(4);
+  buffer_user_pass_list.insert_or_assign(4, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_user_pass_list.at(4).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(4).back().push_back(4);
+  auto [render_pass_new_buffer_list, render_pass_expired_buffer_list] = ConfigureRenderPassNewAndExpiredBuffers(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), buffer_id_list, buffer_user_pass_list, &memory_resource_work);
   CHECK(render_pass_new_buffer_list.size() == 5);
   CHECK(render_pass_new_buffer_list[0].size() == 1);
   CHECK(render_pass_new_buffer_list[0][0] == 0);
@@ -1901,7 +1825,27 @@ TEST_CASE("memory aliasing") {
   CHECK(render_pass_expired_buffer_list[4].size() == 2);
   CHECK(render_pass_expired_buffer_list[4][0] == 3);
   CHECK(render_pass_expired_buffer_list[4][1] == 4);
-  auto [buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list] = ConfigureBufferAddressOffset(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list, buffer_size_list, buffer_alignment_list, {}, &memory_resource_work, &memory_resource_work);
+  unordered_map<BufferId, BufferConfig> buffer_config_list{&memory_resource_work};
+  buffer_config_list.insert_or_assign(0, BufferConfig{.width=1,.height=2,.state_flags=kBufferStateFlagRtv,.initial_state_flags=kBufferStateFlagRtv,.clear_value=GetClearValueDefaultColorBuffer(),.format=BufferFormat::kR8G8B8A8Unorm,.depth_stencil_flag=DepthStencilFlag::kDefault,});
+  buffer_config_list.insert_or_assign(1, BufferConfig{.width=1,.height=2,.state_flags=kBufferStateFlagRtv,.initial_state_flags=kBufferStateFlagRtv,.clear_value=GetClearValueDefaultColorBuffer(),.format=BufferFormat::kR8G8B8A8Unorm,.depth_stencil_flag=DepthStencilFlag::kDefault,});
+  buffer_config_list.insert_or_assign(2, BufferConfig{.width=1,.height=2,.state_flags=kBufferStateFlagRtv,.initial_state_flags=kBufferStateFlagRtv,.clear_value=GetClearValueDefaultColorBuffer(),.format=BufferFormat::kR8G8B8A8Unorm,.depth_stencil_flag=DepthStencilFlag::kDefault,});
+  buffer_config_list.insert_or_assign(3, BufferConfig{.width=1,.height=2,.state_flags=MergeBufferStateFlags(kBufferStateFlagRtv,kBufferStateFlagSrvPsOnly),.initial_state_flags=kBufferStateFlagRtv,.clear_value=GetClearValueDefaultColorBuffer(),.format=BufferFormat::kR8G8B8A8Unorm,.depth_stencil_flag=DepthStencilFlag::kDefault,});
+  buffer_config_list.insert_or_assign(4, BufferConfig{.width=3,.height=2,.state_flags=kBufferStateFlagRtv,.initial_state_flags=kBufferStateFlagRtv,.clear_value=GetClearValueDefaultColorBuffer(),.format=BufferFormat::kR8G8B8A8Unorm,.depth_stencil_flag=DepthStencilFlag::kDefault,});
+  unordered_map<BufferId, uint32_t> buffer_size_list{&memory_resource_work};
+  buffer_size_list.insert_or_assign(0, 8);
+  buffer_size_list.insert_or_assign(1, 8);
+  buffer_size_list.insert_or_assign(2, 8);
+  buffer_size_list.insert_or_assign(3, 8);
+  buffer_size_list.insert_or_assign(4, 16);
+  unordered_map<BufferId, uint32_t> buffer_alignment_list{&memory_resource_work};
+  buffer_alignment_list.insert_or_assign(0, 8);
+  buffer_alignment_list.insert_or_assign(1, 8);
+  buffer_alignment_list.insert_or_assign(2, 8);
+  buffer_alignment_list.insert_or_assign(3, 8);
+  buffer_alignment_list.insert_or_assign(4, 8);
+  auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+  node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
+  auto [buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list] = ConfigureBufferAddressOffset(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_buffer_id_list, node_distance_map, render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list, buffer_size_list, buffer_alignment_list, {}, &memory_resource_work, &memory_resource_work);
   CHECK(buffer_address_offset_list.size() == 5);
   CHECK(buffer_address_offset_list.at(0) == 0);
   CHECK(buffer_address_offset_list.at(1) == 8);
@@ -1921,7 +1865,240 @@ TEST_CASE("memory aliasing") {
   CHECK(render_pass_after_memory_aliasing_list.at(3)[0] == 4);
 }
 TEST_CASE("ConfigureBufferValidPassList w/async compute") {
-  // TODO
+  using namespace illuminate;
+  using namespace illuminate::core;
+  using namespace illuminate::gfx;
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
+  vector<vector<BufferId>> render_pass_buffer_id_list{&memory_resource_work};
+  render_pass_buffer_id_list.push_back(vector<BufferId>{&memory_resource_work});
+  render_pass_buffer_id_list.back().push_back(0);
+  render_pass_buffer_id_list.push_back(vector<BufferId>{&memory_resource_work});
+  render_pass_buffer_id_list.back().push_back(1);
+  render_pass_buffer_id_list.back().push_back(7);
+  render_pass_buffer_id_list.push_back(vector<BufferId>{&memory_resource_work});
+  render_pass_buffer_id_list.back().push_back(1);
+  render_pass_buffer_id_list.back().push_back(2);
+  render_pass_buffer_id_list.push_back(vector<BufferId>{&memory_resource_work});
+  render_pass_buffer_id_list.back().push_back(3);
+  render_pass_buffer_id_list.back().push_back(8);
+  render_pass_buffer_id_list.push_back(vector<BufferId>{&memory_resource_work});
+  render_pass_buffer_id_list.back().push_back(3);
+  render_pass_buffer_id_list.back().push_back(4);
+  render_pass_buffer_id_list.push_back(vector<BufferId>{&memory_resource_work});
+  render_pass_buffer_id_list.back().push_back(4);
+  render_pass_buffer_id_list.back().push_back(5);
+  render_pass_buffer_id_list.push_back(vector<BufferId>{&memory_resource_work});
+  render_pass_buffer_id_list.back().push_back(5);
+  render_pass_buffer_id_list.back().push_back(6);
+  vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+  node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
+  auto [buffer_id_list, buffer_user_pass_list] = CollectBufferDataForTest(render_pass_buffer_id_list, &memory_resource_work);
+  auto inter_queue_pass_dependency = ConfigureInterQueuePassDependency(buffer_user_pass_list, render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+  inter_queue_pass_dependency = RemoveRedundantDependencyFromSameQueuePredecessors(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, std::move(inter_queue_pass_dependency), &memory_resource_work);
+  CHECK(inter_queue_pass_dependency.size() == 3);
+  CHECK(!inter_queue_pass_dependency.contains(0));
+  CHECK(!inter_queue_pass_dependency.contains(1));
+  CHECK(inter_queue_pass_dependency.contains(2));
+  CHECK(inter_queue_pass_dependency.at(2).size() == 1);
+  CHECK(inter_queue_pass_dependency.at(2).contains(1));
+  CHECK(!inter_queue_pass_dependency.contains(3));
+  CHECK(inter_queue_pass_dependency.contains(4));
+  CHECK(inter_queue_pass_dependency.at(4).size() == 1);
+  CHECK(inter_queue_pass_dependency.at(4).contains(3));
+  CHECK(!inter_queue_pass_dependency.contains(5));
+  CHECK(inter_queue_pass_dependency.contains(6));
+  CHECK(inter_queue_pass_dependency.at(6).size() == 1);
+  CHECK(inter_queue_pass_dependency.at(6).contains(5));
+  node_distance_map = AppendInterQueueNodeDistanceMap(inter_queue_pass_dependency, std::move(node_distance_map));
+  node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
+  node_distance_map = ConfigureTripleInterQueueDependency(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), std::move(node_distance_map));
+  node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
+  CHECK(node_distance_map.at(0).size() == 3);
+  CHECK(node_distance_map.at(0).contains(0));
+  CHECK(node_distance_map.at(0).at(0) == 0);
+  CHECK(!node_distance_map.at(0).contains(1));
+  CHECK(node_distance_map.at(0).contains(2));
+  CHECK(node_distance_map.at(0).at(2) == 1);
+  CHECK(!node_distance_map.at(0).contains(3));
+  CHECK(!node_distance_map.at(0).contains(4));
+  CHECK(!node_distance_map.at(0).contains(5));
+  CHECK(node_distance_map.at(0).contains(6));
+  CHECK(node_distance_map.at(0).at(6) == 2);
+  CHECK(node_distance_map.at(1).size() == 6);
+  CHECK(!node_distance_map.at(1).contains(0));
+  CHECK(node_distance_map.at(1).contains(1));
+  CHECK(node_distance_map.at(1).at(1) == 0);
+  CHECK(node_distance_map.at(1).contains(2));
+  CHECK(node_distance_map.at(1).at(2) == 1);
+  CHECK(node_distance_map.at(1).contains(3));
+  CHECK(node_distance_map.at(1).at(3) == 1);
+  CHECK(node_distance_map.at(1).contains(4));
+  CHECK(node_distance_map.at(1).at(4) == 2);
+  CHECK(node_distance_map.at(1).contains(5));
+  CHECK(node_distance_map.at(1).at(5) == 3);
+  CHECK(node_distance_map.at(1).contains(6));
+  CHECK(node_distance_map.at(1).at(6) == 2);
+  CHECK(node_distance_map.at(2).size() == 4);
+  CHECK(node_distance_map.at(2).contains(0));
+  CHECK(node_distance_map.at(2).at(0) == -1);
+  CHECK(node_distance_map.at(2).contains(1));
+  CHECK(node_distance_map.at(2).at(1) == -1);
+  CHECK(node_distance_map.at(2).contains(2));
+  CHECK(node_distance_map.at(2).at(2) == 0);
+  CHECK(!node_distance_map.at(2).contains(3));
+  CHECK(!node_distance_map.at(2).contains(4));
+  CHECK(!node_distance_map.at(2).contains(5));
+  CHECK(node_distance_map.at(2).contains(6));
+  CHECK(node_distance_map.at(2).at(6) == 1);
+  CHECK(node_distance_map.at(3).size() == 5);
+  CHECK(!node_distance_map.at(3).contains(0));
+  CHECK(node_distance_map.at(3).contains(1));
+  CHECK(node_distance_map.at(3).at(1) == -1);
+  CHECK(!node_distance_map.at(3).contains(2));
+  CHECK(node_distance_map.at(3).contains(3));
+  CHECK(node_distance_map.at(3).at(3) == 0);
+  CHECK(node_distance_map.at(3).contains(4));
+  CHECK(node_distance_map.at(3).at(4) == 1);
+  CHECK(node_distance_map.at(3).contains(5));
+  CHECK(node_distance_map.at(3).at(5) == 2);
+  CHECK(node_distance_map.at(3).contains(6));
+  CHECK(node_distance_map.at(3).at(6) == 3);
+  CHECK(node_distance_map.at(4).size() == 5);
+  CHECK(!node_distance_map.at(4).contains(0));
+  CHECK(node_distance_map.at(4).contains(1));
+  CHECK(node_distance_map.at(4).at(1) == -2);
+  CHECK(!node_distance_map.at(4).contains(2));
+  CHECK(node_distance_map.at(4).contains(3));
+  CHECK(node_distance_map.at(4).at(3) == -1);
+  CHECK(node_distance_map.at(4).contains(4));
+  CHECK(node_distance_map.at(4).at(4) == 0);
+  CHECK(node_distance_map.at(4).contains(5));
+  CHECK(node_distance_map.at(4).at(5) == 1);
+  CHECK(node_distance_map.at(4).contains(6));
+  CHECK(node_distance_map.at(4).at(6) == 2);
+  CHECK(node_distance_map.at(5).size() == 5);
+  CHECK(!node_distance_map.at(5).contains(0));
+  CHECK(node_distance_map.at(5).contains(1));
+  CHECK(node_distance_map.at(5).at(1) == -3);
+  CHECK(!node_distance_map.at(5).contains(2));
+  CHECK(node_distance_map.at(5).contains(3));
+  CHECK(node_distance_map.at(5).at(3) == -2);
+  CHECK(node_distance_map.at(5).contains(4));
+  CHECK(node_distance_map.at(5).at(4) == -1);
+  CHECK(node_distance_map.at(5).contains(5));
+  CHECK(node_distance_map.at(5).at(5) == 0);
+  CHECK(node_distance_map.at(5).contains(6));
+  CHECK(node_distance_map.at(5).at(6) == 1);
+  CHECK(node_distance_map.at(6).size() == 7);
+  CHECK(node_distance_map.at(6).contains(0));
+  CHECK(node_distance_map.at(6).contains(1));
+  CHECK(node_distance_map.at(6).contains(2));
+  CHECK(node_distance_map.at(6).contains(3));
+  CHECK(node_distance_map.at(6).contains(4));
+  CHECK(node_distance_map.at(6).contains(5));
+  CHECK(node_distance_map.at(6).contains(6));
+  CHECK(node_distance_map.at(6).contains(0));
+  CHECK(node_distance_map.at(6).at(0) == -2);
+  CHECK(node_distance_map.at(6).at(1) == -2);
+  CHECK(node_distance_map.at(6).at(2) == -1);
+  CHECK(node_distance_map.at(6).at(3) == -3);
+  CHECK(node_distance_map.at(6).at(4) == -2);
+  CHECK(node_distance_map.at(6).at(5) == -1);
+  CHECK(node_distance_map.at(6).at(6) == 0);
+  auto [render_pass_new_buffer_list, render_pass_expired_buffer_list] = ConfigureRenderPassNewAndExpiredBuffers(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), buffer_id_list, buffer_user_pass_list, &memory_resource_work);
+  CHECK(render_pass_new_buffer_list.size() == 7);
+  CHECK(render_pass_new_buffer_list[0].size() == 1);
+  CHECK(render_pass_new_buffer_list[0][0] == 0);
+  CHECK(render_pass_new_buffer_list[1].size() == 2);
+  CHECK(render_pass_new_buffer_list[1][0] == 1);
+  CHECK(render_pass_new_buffer_list[1][1] == 7);
+  CHECK(render_pass_new_buffer_list[2].size() == 1);
+  CHECK(render_pass_new_buffer_list[2][0] == 2);
+  CHECK(render_pass_new_buffer_list[3].size() == 2);
+  CHECK(render_pass_new_buffer_list[3][0] == 3);
+  CHECK(render_pass_new_buffer_list[3][1] == 8);
+  CHECK(render_pass_new_buffer_list[4].size() == 1);
+  CHECK(render_pass_new_buffer_list[4][0] == 4);
+  CHECK(render_pass_new_buffer_list[5].size() == 1);
+  CHECK(render_pass_new_buffer_list[5][0] == 5);
+  CHECK(render_pass_new_buffer_list[6].size() == 1);
+  CHECK(render_pass_new_buffer_list[6][0] == 6);
+  CHECK(render_pass_expired_buffer_list.size() == 7);
+  CHECK(render_pass_expired_buffer_list[0].size() == 1);
+  CHECK(render_pass_expired_buffer_list[0][0] == 0);
+  CHECK(render_pass_expired_buffer_list[1].size() == 1);
+  CHECK(render_pass_expired_buffer_list[1][0] == 7);
+  CHECK(render_pass_expired_buffer_list[2].size() == 2);
+  CHECK(render_pass_expired_buffer_list[2][0] == 1);
+  CHECK(render_pass_expired_buffer_list[2][1] == 2);
+  CHECK(render_pass_expired_buffer_list[3].size() == 1);
+  CHECK(render_pass_expired_buffer_list[3][0] == 8);
+  CHECK(render_pass_expired_buffer_list[4].size() == 1);
+  CHECK(render_pass_expired_buffer_list[4][0] == 3);
+  CHECK(render_pass_expired_buffer_list[5].size() == 1);
+  CHECK(render_pass_expired_buffer_list[5][0] == 4);
+  CHECK(render_pass_expired_buffer_list[6].size() == 2);
+  CHECK(render_pass_expired_buffer_list[6][0] == 5);
+  CHECK(render_pass_expired_buffer_list[6][1] == 6);
+  unordered_map<BufferId, BufferConfig> buffer_config_list{&memory_resource_work};
+  buffer_config_list.insert_or_assign(0, BufferConfig{.width=1,.height=2,.state_flags=kBufferStateFlagRtv,.initial_state_flags=kBufferStateFlagRtv,.clear_value=GetClearValueDefaultColorBuffer(),.format=BufferFormat::kR8G8B8A8Unorm,.depth_stencil_flag=DepthStencilFlag::kDefault,});
+  buffer_config_list.insert_or_assign(1, buffer_config_list.at(0));
+  buffer_config_list.insert_or_assign(2, buffer_config_list.at(0));
+  buffer_config_list.insert_or_assign(3, buffer_config_list.at(0));
+  buffer_config_list.insert_or_assign(4, buffer_config_list.at(0));
+  buffer_config_list.insert_or_assign(5, buffer_config_list.at(0));
+  buffer_config_list.insert_or_assign(6, buffer_config_list.at(0));
+  buffer_config_list.insert_or_assign(7, buffer_config_list.at(0));
+  buffer_config_list.insert_or_assign(8, buffer_config_list.at(0));
+  unordered_map<BufferId, uint32_t> buffer_size_list{&memory_resource_work};
+  buffer_size_list.insert_or_assign(0, 8);
+  buffer_size_list.insert_or_assign(1, 8);
+  buffer_size_list.insert_or_assign(2, 8);
+  buffer_size_list.insert_or_assign(3, 8);
+  buffer_size_list.insert_or_assign(4, 8);
+  buffer_size_list.insert_or_assign(5, 8);
+  buffer_size_list.insert_or_assign(6, 8);
+  buffer_size_list.insert_or_assign(7, 8);
+  buffer_size_list.insert_or_assign(8, 8);
+  unordered_map<BufferId, uint32_t> buffer_alignment_list{&memory_resource_work};
+  buffer_alignment_list.insert_or_assign(0, 8);
+  buffer_alignment_list.insert_or_assign(1, 8);
+  buffer_alignment_list.insert_or_assign(2, 8);
+  buffer_alignment_list.insert_or_assign(3, 8);
+  buffer_alignment_list.insert_or_assign(4, 8);
+  buffer_alignment_list.insert_or_assign(5, 8);
+  buffer_alignment_list.insert_or_assign(6, 8);
+  buffer_alignment_list.insert_or_assign(7, 8);
+  buffer_alignment_list.insert_or_assign(8, 8);
+  auto [buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list] = ConfigureBufferAddressOffset(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_buffer_id_list, node_distance_map, render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list, buffer_size_list, buffer_alignment_list, {}, &memory_resource_work, &memory_resource_work);
+  CHECK(buffer_address_offset_list.size() == 9);
+  CHECK(buffer_address_offset_list.at(0) == 0);
+  CHECK(buffer_address_offset_list.at(1) == 8);
+  CHECK(buffer_address_offset_list.at(2) == 0);
+  CHECK(buffer_address_offset_list.at(3) == 16);
+  CHECK(buffer_address_offset_list.at(4) == 24);
+  CHECK(buffer_address_offset_list.at(5) == 16);
+  CHECK(buffer_address_offset_list.at(6) == 0);
+  CHECK(buffer_address_offset_list.at(7) == 16);
+  CHECK(buffer_address_offset_list.at(8) == 24);
+  CHECK(renamed_buffers.size() == 5);
+  CHECK(renamed_buffers.at(2) == 0);
+  CHECK(renamed_buffers.at(6) == 2);
+  CHECK(renamed_buffers.at(5) == 3);
+  CHECK(renamed_buffers.at(7) == 3);
+  CHECK(renamed_buffers.at(8) == 4);
+  // renamed_buffers == CombineRenamedBufferDuplicativeBufferIds(std::move(renamed_buffers), &memory_resource_work); // TODO
+  CHECK(render_pass_before_memory_aliasing_list.empty());
+  CHECK(render_pass_after_memory_aliasing_list.empty());
+  // TODO check update renamed buffer
 }
 TEST_CASE("buffer allocation address calc") {
   using namespace illuminate;
