@@ -854,6 +854,15 @@ static std::tuple<unordered_map<BufferId, uint32_t>, unordered_map<BufferId, uin
   }
   return {buffer_size_list, buffer_alignment_list};
 }
+static auto MergeRenamedBufferDuplicativeBufferIds(const vector<BufferId>& buffer_id_list, unordered_map<BufferId, BufferId>&& renamed_buffers) {
+  for (auto& buffer_id : buffer_id_list) {
+    if (!renamed_buffers.contains(buffer_id)) continue;
+    auto& new_id = renamed_buffers.at(buffer_id);
+    if (!renamed_buffers.contains(new_id)) continue;
+    renamed_buffers.at(buffer_id) = renamed_buffers.at(new_id);
+  }
+  return std::move(renamed_buffers);
+}
 void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resource* memory_resource_work) {
   render_pass_num_ = config.GetRenderPassNum();
   std::tie(buffer_id_list_, render_pass_buffer_id_list_, render_pass_buffer_state_flag_list_) = InitBufferIdList(render_pass_num_, config.GetRenderPassBufferStateList(), memory_resource_);
@@ -911,21 +920,8 @@ static std::tuple<vector<BufferId>, unordered_map<BufferId, vector<vector<uint32
     for (uint32_t buffer_index = 0; buffer_index < buffer_num; buffer_index++) {
       auto& buffer_id = render_pass_buffer_id_list[pass_index][buffer_index];
       if (!buffer_user_pass_list.contains(buffer_id)) {
-        if (!buffer_id_list.empty()) {
-          if (buffer_id_list.back() <= buffer_id) {
-            buffer_id_list.push_back(buffer_id);
-          } else {
-            for (auto it = buffer_id_list.begin(); it != buffer_id_list.end(); it++) {
-              if (*it >= buffer_id) {
-                buffer_id_list.insert(it, buffer_id);
-                break;
-              }
-            }
-          }
-        } else {
-          buffer_id_list.push_back(buffer_id);
-        }
         buffer_user_pass_list.insert_or_assign(buffer_id, vector<vector<uint32_t>>{memory_resource});
+        buffer_id_list.push_back(buffer_id);
       }
       buffer_user_pass_list.at(buffer_id).push_back(vector<uint32_t>{memory_resource});
       buffer_user_pass_list.at(buffer_id).back().push_back(pass_index);
@@ -2187,8 +2183,15 @@ TEST_CASE("ConfigureBufferValidPassList w/async compute") {
   CHECK(renamed_buffers.at(4) == 8);
   CHECK(render_pass_before_memory_aliasing_list.empty());
   CHECK(render_pass_after_memory_aliasing_list.empty());
-  // renamed_buffers == CombineRenamedBufferDuplicativeBufferIds(std::move(renamed_buffers), &memory_resource_work); // TODO
+  renamed_buffers = MergeRenamedBufferDuplicativeBufferIds(buffer_id_list, std::move(renamed_buffers));
+  CHECK(renamed_buffers.size() == 5);
+  CHECK(renamed_buffers.at(2) == 0);
+  CHECK(renamed_buffers.at(6) == 0);
+  CHECK(renamed_buffers.at(5) == 7);
+  CHECK(renamed_buffers.at(3) == 7);
+  CHECK(renamed_buffers.at(4) == 8);
   // TODO check update renamed buffer
+  // TODO test with aliasing
 }
 TEST_CASE("buffer allocation address calc") {
   using namespace illuminate;
