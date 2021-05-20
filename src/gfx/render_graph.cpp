@@ -732,7 +732,31 @@ static void ReturnMemory(const uint32_t start_addr, vector<uint32_t>* used_range
     if (start > start_addr) return;
   }
 }
-static std::tuple<unordered_map<BufferId, uint32_t>, unordered_map<BufferId, BufferId>, unordered_map<uint32_t, vector<BufferId>>, unordered_map<uint32_t, vector<BufferId>>> ConfigureBufferAddressOffset(const uint32_t pass_num, const vector<vector<BufferId>>& render_pass_buffer_id_list, const unordered_map<BufferId, unordered_map<BufferId, int32_t>>& node_distance_map, const vector<vector<uint32_t>>& render_pass_new_buffer_list, const vector<vector<uint32_t>>& render_pass_expired_buffer_list, const unordered_map<BufferId, BufferConfig>& buffer_config_list, const unordered_map<BufferId, uint32_t>& buffer_size_list, const unordered_map<BufferId, uint32_t>& buffer_alignment_list, const unordered_set<BufferId>& excluded_buffers, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
+static auto FindConcurrentPass(const uint32_t pass_num, const unordered_map<uint32_t, unordered_map<uint32_t, int32_t>> node_distance_map, std::pmr::memory_resource* memory_resource) {
+  vector<vector<uint32_t>> concurrent_pass_list{memory_resource};
+  for (uint32_t src = 0; src < pass_num; src++) {
+    concurrent_pass_list.push_back(vector<uint32_t>{memory_resource});
+    auto& distance_map = node_distance_map.at(src);
+    for (uint32_t dst = 0; dst < pass_num; dst++) {
+      if (distance_map.contains(dst)) continue;
+      concurrent_pass_list.back().push_back(dst);
+    }
+  }
+  return concurrent_pass_list;
+}
+static auto FindConcurrentBuffers(const vector<vector<uint32_t>>& concurrent_pass_list, const vector<vector<BufferId>>& render_pass_buffer_id_list, std::pmr::memory_resource* memory_resource) {
+  vector<unordered_set<BufferId>> concurrent_buffer_list{memory_resource};
+  for (auto& pass_list : concurrent_pass_list) {
+    concurrent_buffer_list.push_back(unordered_set<BufferId>{memory_resource});
+    for (auto& pass : pass_list) {
+      for (auto& buffer_id : render_pass_buffer_id_list[pass]) {
+        concurrent_buffer_list.back().insert(buffer_id);
+      }
+    }
+  }
+  return concurrent_buffer_list;
+}
+static std::tuple<unordered_map<BufferId, uint32_t>, unordered_map<BufferId, BufferId>, unordered_map<uint32_t, vector<BufferId>>, unordered_map<uint32_t, vector<BufferId>>> ConfigureBufferAddressOffset(const uint32_t pass_num, const vector<unordered_set<BufferId>>& concurrent_buffer_list, const vector<vector<uint32_t>>& render_pass_new_buffer_list, const vector<vector<uint32_t>>& render_pass_expired_buffer_list, const unordered_map<BufferId, BufferConfig>& buffer_config_list, const unordered_map<BufferId, uint32_t>& buffer_size_list, const unordered_map<BufferId, uint32_t>& buffer_alignment_list, const unordered_set<BufferId>& excluded_buffers, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
   unordered_map<BufferId, uint32_t> buffer_address_offset_list{memory_resource};
   buffer_address_offset_list.reserve(buffer_config_list.size());
   unordered_map<BufferId, BufferId> renamed_buffers{memory_resource};
@@ -746,40 +770,64 @@ static std::tuple<unordered_map<BufferId, uint32_t>, unordered_map<BufferId, Buf
   }
   unordered_set<BufferId> processed_new_buffer_list{memory_resource_work};
   vector<uint32_t> memory_reusable_buffer_list{memory_resource_work};
+  vector<uint32_t> used_range_including_concurrent_buffers_start{memory_resource_work};
+  vector<uint32_t> used_range_including_concurrent_buffers_end{memory_resource_work};
   for (uint32_t pass_index = 1; pass_index < pass_num; pass_index++) {
     // release expired buffers
     for (auto& expired_buffer : render_pass_expired_buffer_list[pass_index-1]) {
       if (excluded_buffers.contains(expired_buffer)) continue;
-      ReturnMemory(buffer_address_offset_list.at(expired_buffer), &used_range_start, &used_range_end);
-      memory_reusable_buffer_list.push_back(expired_buffer);
+      auto addr = buffer_address_offset_list.at(expired_buffer);
+      ReturnMemory(addr, &used_range_start, &used_range_end);
+      bool append_addr = true;
+      for (auto it = memory_reusable_buffer_list.begin(); it != memory_reusable_buffer_list.end(); it++) {
+        auto& comp_buffer = *it;
+        auto& comp_buffer_addr = buffer_address_offset_list.at(comp_buffer);
+        if (comp_buffer_addr < addr) continue;
+        memory_reusable_buffer_list.insert(it, expired_buffer);
+        append_addr = false;
+        break;
+      }
+      if (append_addr) {
+        memory_reusable_buffer_list.push_back(expired_buffer);
+      }
     }
-    // find reusable buffers
+    // reuse buffers
     for (auto& new_buffer : render_pass_new_buffer_list[pass_index]) {
       if (excluded_buffers.contains(new_buffer)) continue;
+      auto& buffer_config = buffer_config_list.at(new_buffer);
       for (auto it = memory_reusable_buffer_list.begin(); it != memory_reusable_buffer_list.end(); it++) {
         auto& expired_buffer = *it;
-        if (!IsBufferConfigMergeable(buffer_config_list.at(new_buffer), buffer_config_list.at(expired_buffer))) continue;
-        auto& addr = buffer_address_offset_list.at(expired_buffer);
+        if (concurrent_buffer_list[pass_index].contains(expired_buffer)) continue;
+        if (!IsBufferConfigMergeable(buffer_config, buffer_config_list.at(expired_buffer))) continue;
+        auto addr = buffer_address_offset_list.at(expired_buffer);
         RetainSpecificMemory(addr, buffer_size_list.at(new_buffer), &used_range_start, &used_range_end);
         buffer_address_offset_list.insert_or_assign(new_buffer, addr);
         renamed_buffers.insert_or_assign(new_buffer, expired_buffer);
-        processed_new_buffer_list.insert(new_buffer);
         memory_reusable_buffer_list.erase(it);
+        processed_new_buffer_list.insert(new_buffer);
         break;
       }
+    }
+    // mark ranges used by concurrent buffers
+    used_range_including_concurrent_buffers_start.assign(used_range_start.begin(), used_range_start.end());
+    used_range_including_concurrent_buffers_end.assign(used_range_end.begin(), used_range_end.end());
+    for (auto& buffer_id : concurrent_buffer_list[pass_index]) {
+      if (!buffer_address_offset_list.contains(buffer_id)) continue;
+      RetainSpecificMemory(buffer_address_offset_list.at(buffer_id), buffer_size_list.at(buffer_id), &used_range_including_concurrent_buffers_start, &used_range_including_concurrent_buffers_end);
     }
     // allocate new buffers
     for (auto& new_buffer : render_pass_new_buffer_list[pass_index]) {
       if (excluded_buffers.contains(new_buffer)) continue;
       if (processed_new_buffer_list.contains(new_buffer)) continue;
       auto& buffer_size = buffer_size_list.at(new_buffer);
-      auto addr = RetainMemory(buffer_size, buffer_alignment_list.at(new_buffer), &used_range_start, &used_range_end);
+      auto addr = RetainMemory(buffer_size, buffer_alignment_list.at(new_buffer), &used_range_including_concurrent_buffers_start, &used_range_including_concurrent_buffers_end);
+      RetainSpecificMemory(addr, buffer_size, &used_range_start, &used_range_end);
       buffer_address_offset_list.insert_or_assign(new_buffer, addr);
       // check for memory aliasing
       for (auto it = memory_reusable_buffer_list.begin(); it != memory_reusable_buffer_list.end(); it++) {
         auto& expired_buffer = *it;
         auto expired_region_start = buffer_address_offset_list.at(expired_buffer);
-        auto expired_region_end = expired_region_start + buffer_alignment_list.at(expired_buffer);
+        auto expired_region_end = expired_region_start + buffer_size_list.at(expired_buffer);
         if (addr + buffer_size <= expired_region_start) continue;
         if (addr >= expired_region_end) continue;
         if (!render_pass_before_memory_aliasing_list.contains(pass_index-1)) {
@@ -840,8 +888,10 @@ void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resour
   auto excluded_buffers = CollectExternalBufferIds(buffer_name_id_map, config.GetExternalBufferNameList(), memory_resource_);
   std::tie(buffer_size_list_, buffer_alignment_list_) = GetBufferSizeInfo(buffer_config_list_, config.GetBufferSizeInfoFunction(), memory_resource_work);
   auto [render_pass_new_buffer_list, render_pass_expired_buffer_list] = ConfigureRenderPassNewAndExpiredBuffers(render_pass_num_, buffer_id_list_, buffer_user_pass_list, memory_resource_work);
+  auto concurrent_pass_list = FindConcurrentPass(render_pass_num_, node_distance_map, memory_resource_work);
+  auto concurrent_buffer_list = FindConcurrentBuffers(concurrent_pass_list, render_pass_buffer_id_list_, memory_resource_work);
   unordered_map<BufferId, BufferId> renamed_buffers{memory_resource_work};
-  std::tie(buffer_address_offset_list_, renamed_buffers, render_pass_before_memory_aliasing_list_, render_pass_after_memory_aliasing_list_) = ConfigureBufferAddressOffset(render_pass_num_, render_pass_buffer_id_list_, node_distance_map, render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list_, buffer_size_list_, buffer_alignment_list_, excluded_buffers, memory_resource_work, memory_resource_work);
+  std::tie(buffer_address_offset_list_, renamed_buffers, render_pass_before_memory_aliasing_list_, render_pass_after_memory_aliasing_list_) = ConfigureBufferAddressOffset(render_pass_num_, concurrent_buffer_list, render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list_, buffer_size_list_, buffer_alignment_list_, excluded_buffers, memory_resource_work, memory_resource_work);
   buffer_id_list_ = UpdateBufferIdListUsingReusableBuffers(renamed_buffers, std::move(buffer_id_list_));
   render_pass_buffer_id_list_ = UpdateRenderPassBufferIdListUsingReusableBuffers(renamed_buffers, std::move(render_pass_buffer_id_list_));
   std::tie(buffer_state_list, buffer_user_pass_list) = UpdateBufferStateListAndUserPassListUsingReusableBuffers(renamed_buffers, std::move(buffer_state_list), std::move(buffer_user_pass_list));
@@ -1620,7 +1670,14 @@ TEST_CASE("buffer reuse") {
     buffer_alignment_list.insert_or_assign(2, 8);
     buffer_alignment_list.insert_or_assign(3, 8);
     buffer_alignment_list.insert_or_assign(4, 8);
-    auto [buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list] = ConfigureBufferAddressOffset(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_buffer_id_list, node_distance_map, render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list, buffer_size_list, buffer_alignment_list, excluded_buffers, &memory_resource_work, &memory_resource_work);
+    auto concurrent_pass_list = FindConcurrentPass(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), node_distance_map, &memory_resource_work);
+    CHECK(concurrent_pass_list.size() == 4);
+    CHECK(concurrent_pass_list[0].empty());
+    CHECK(concurrent_pass_list[1].empty());
+    CHECK(concurrent_pass_list[2].empty());
+    CHECK(concurrent_pass_list[3].empty());
+    auto concurrent_buffer_list = FindConcurrentBuffers(concurrent_pass_list, render_pass_buffer_id_list, &memory_resource_work);
+    auto [buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list] = ConfigureBufferAddressOffset(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), concurrent_buffer_list, render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list, buffer_size_list, buffer_alignment_list, excluded_buffers, &memory_resource_work, &memory_resource_work);
     CHECK(renamed_buffers.size() == 1);
     CHECK(renamed_buffers.contains(2));
     CHECK(renamed_buffers.at(2) == 0);
@@ -1845,7 +1902,15 @@ TEST_CASE("memory aliasing") {
   buffer_alignment_list.insert_or_assign(4, 8);
   auto node_distance_map = CreateNodeDistanceMapInSameCommandQueueType(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_command_queue_type_list, &memory_resource_work, &memory_resource_work);
   node_distance_map = AddNodeDistanceInReverseOrder(std::move(node_distance_map));
-  auto [buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list] = ConfigureBufferAddressOffset(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_buffer_id_list, node_distance_map, render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list, buffer_size_list, buffer_alignment_list, {}, &memory_resource_work, &memory_resource_work);
+  auto concurrent_pass_list = FindConcurrentPass(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), node_distance_map, &memory_resource_work);
+  CHECK(concurrent_pass_list.size() == 5);
+  CHECK(concurrent_pass_list[0].empty());
+  CHECK(concurrent_pass_list[1].empty());
+  CHECK(concurrent_pass_list[2].empty());
+  CHECK(concurrent_pass_list[3].empty());
+  CHECK(concurrent_pass_list[4].empty());
+  auto concurrent_buffer_list = FindConcurrentBuffers(concurrent_pass_list, render_pass_buffer_id_list, &memory_resource_work);
+  auto [buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list] = ConfigureBufferAddressOffset(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), concurrent_buffer_list, render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list, buffer_size_list, buffer_alignment_list, {}, &memory_resource_work, &memory_resource_work);
   CHECK(buffer_address_offset_list.size() == 5);
   CHECK(buffer_address_offset_list.at(0) == 0);
   CHECK(buffer_address_offset_list.at(1) == 8);
@@ -2078,7 +2143,32 @@ TEST_CASE("ConfigureBufferValidPassList w/async compute") {
   buffer_alignment_list.insert_or_assign(6, 8);
   buffer_alignment_list.insert_or_assign(7, 8);
   buffer_alignment_list.insert_or_assign(8, 8);
-  auto [buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list] = ConfigureBufferAddressOffset(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), render_pass_buffer_id_list, node_distance_map, render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list, buffer_size_list, buffer_alignment_list, {}, &memory_resource_work, &memory_resource_work);
+  auto concurrent_pass_list = FindConcurrentPass(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), node_distance_map, &memory_resource_work);
+  CHECK(concurrent_pass_list.size() == 7);
+  CHECK(concurrent_pass_list[0].size() == 4);
+  CHECK(concurrent_pass_list[0][0] == 1);
+  CHECK(concurrent_pass_list[0][1] == 3);
+  CHECK(concurrent_pass_list[0][2] == 4);
+  CHECK(concurrent_pass_list[0][3] == 5);
+  CHECK(concurrent_pass_list[1].size() == 1);
+  CHECK(concurrent_pass_list[1][0] == 0);
+  CHECK(concurrent_pass_list[2].size() == 3);
+  CHECK(concurrent_pass_list[2][0] == 3);
+  CHECK(concurrent_pass_list[2][1] == 4);
+  CHECK(concurrent_pass_list[2][2] == 5);
+  CHECK(concurrent_pass_list[3].size() == 2);
+  CHECK(concurrent_pass_list[3][0] == 0);
+  CHECK(concurrent_pass_list[3][1] == 2);
+  CHECK(concurrent_pass_list[4].size() == 2);
+  CHECK(concurrent_pass_list[4][0] == 0);
+  CHECK(concurrent_pass_list[4][1] == 2);
+  CHECK(concurrent_pass_list[5].size() == 2);
+  CHECK(concurrent_pass_list[5][0] == 0);
+  CHECK(concurrent_pass_list[5][1] == 2);
+  CHECK(concurrent_pass_list[6].empty());
+  auto concurrent_buffer_list = FindConcurrentBuffers(concurrent_pass_list, render_pass_buffer_id_list, &memory_resource_work);
+  CHECK(concurrent_buffer_list.size() == 7);
+  auto [buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list] = ConfigureBufferAddressOffset(static_cast<uint32_t>(render_pass_command_queue_type_list.size()), concurrent_buffer_list, render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list, buffer_size_list, buffer_alignment_list, {}, &memory_resource_work, &memory_resource_work);
   CHECK(buffer_address_offset_list.size() == 9);
   CHECK(buffer_address_offset_list.at(0) == 0);
   CHECK(buffer_address_offset_list.at(1) == 8);
@@ -2093,11 +2183,11 @@ TEST_CASE("ConfigureBufferValidPassList w/async compute") {
   CHECK(renamed_buffers.at(2) == 0);
   CHECK(renamed_buffers.at(6) == 2);
   CHECK(renamed_buffers.at(5) == 3);
-  CHECK(renamed_buffers.at(7) == 3);
-  CHECK(renamed_buffers.at(8) == 4);
-  // renamed_buffers == CombineRenamedBufferDuplicativeBufferIds(std::move(renamed_buffers), &memory_resource_work); // TODO
+  CHECK(renamed_buffers.at(3) == 7);
+  CHECK(renamed_buffers.at(4) == 8);
   CHECK(render_pass_before_memory_aliasing_list.empty());
   CHECK(render_pass_after_memory_aliasing_list.empty());
+  // renamed_buffers == CombineRenamedBufferDuplicativeBufferIds(std::move(renamed_buffers), &memory_resource_work); // TODO
   // TODO check update renamed buffer
 }
 TEST_CASE("buffer allocation address calc") {
