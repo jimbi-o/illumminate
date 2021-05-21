@@ -640,8 +640,14 @@ static std::tuple<unordered_map<BufferId, vector<BufferStateFlags>>, unordered_m
     auto&& dst_state = buffer_state_list.at(new_id);
     auto&& src_user_pass = buffer_user_pass_list.at(original_id);
     auto&& dst_user_pass = buffer_user_pass_list.at(new_id);
-    dst_state.insert(dst_state.end(), std::make_move_iterator(src_state.begin()), std::make_move_iterator(src_state.end()));
-    dst_user_pass.insert(dst_user_pass.end(), std::make_move_iterator(src_user_pass.begin()), std::make_move_iterator(src_user_pass.end()));
+    auto dst_state_it = dst_state.begin();
+    auto dst_user_pass_it = dst_user_pass.begin();
+    while (dst_user_pass_it != dst_user_pass.end() && dst_user_pass_it->front() < src_user_pass.front().front()) {
+      dst_user_pass_it++;
+      dst_state_it++;
+    }
+    dst_state.insert(dst_state_it, std::make_move_iterator(src_state.begin()), std::make_move_iterator(src_state.end()));
+    dst_user_pass.insert(dst_user_pass_it, std::make_move_iterator(src_user_pass.begin()), std::make_move_iterator(src_user_pass.end()));
     buffer_state_list.erase(original_id);
     buffer_user_pass_list.erase(original_id);
   }
@@ -928,6 +934,18 @@ static std::tuple<vector<BufferId>, unordered_map<BufferId, vector<vector<uint32
     }
   }
   return {buffer_id_list, buffer_user_pass_list};
+}
+static auto CreateBufferStateListBasedOnBufferUserListForTest(const unordered_map<BufferId, vector<vector<uint32_t>>>& buffer_user_pass_list, std::pmr::memory_resource* memory_resource) {
+  unordered_map<BufferId, vector<BufferStateFlags>> buffer_state_list{memory_resource};
+  buffer_state_list.reserve(buffer_user_pass_list.size());
+  for (auto& [buffer_id, list_list] : buffer_user_pass_list) {
+    buffer_state_list.insert_or_assign(buffer_id, vector<BufferStateFlags>{memory_resource});
+    BufferStateFlags flags[2] = {kBufferStateFlagCopyDst, kBufferStateFlagCopySrc};
+    for (uint32_t i = 0; i < list_list.size(); i++) {
+      buffer_state_list.at(buffer_id).push_back(flags[i % 2]);
+    }
+  }
+  return buffer_state_list;
 }
 #endif
 }
@@ -2190,8 +2208,101 @@ TEST_CASE("ConfigureBufferValidPassList w/async compute") {
   CHECK(renamed_buffers.at(5) == 7);
   CHECK(renamed_buffers.at(3) == 7);
   CHECK(renamed_buffers.at(4) == 8);
-  // TODO check update renamed buffer
-  // TODO test with aliasing
+  buffer_id_list = UpdateBufferIdListUsingReusableBuffers(renamed_buffers, std::move(buffer_id_list));
+  CHECK(buffer_id_list.size() == 4);
+  CHECK(buffer_id_list[0] == 0);
+  CHECK(buffer_id_list[1] == 1);
+  CHECK(buffer_id_list[2] == 7);
+  CHECK(buffer_id_list[3] == 8);
+  render_pass_buffer_id_list = UpdateRenderPassBufferIdListUsingReusableBuffers(renamed_buffers, std::move(render_pass_buffer_id_list));
+  CHECK(render_pass_buffer_id_list[0][0] == 0);
+  CHECK(render_pass_buffer_id_list[1][0] == 1);
+  CHECK(render_pass_buffer_id_list[1][1] == 7);
+  CHECK(render_pass_buffer_id_list[2][0] == 1);
+  CHECK(render_pass_buffer_id_list[2][1] == 0);
+  CHECK(render_pass_buffer_id_list[3][0] == 7);
+  CHECK(render_pass_buffer_id_list[3][1] == 8);
+  CHECK(render_pass_buffer_id_list[4][0] == 7);
+  CHECK(render_pass_buffer_id_list[4][1] == 8);
+  CHECK(render_pass_buffer_id_list[5][0] == 8);
+  CHECK(render_pass_buffer_id_list[5][1] == 7);
+  CHECK(render_pass_buffer_id_list[6][0] == 7);
+  CHECK(render_pass_buffer_id_list[6][1] == 0);
+  auto buffer_state_list = CreateBufferStateListBasedOnBufferUserListForTest(buffer_user_pass_list, &memory_resource_work);
+  std::tie(buffer_state_list, buffer_user_pass_list) = UpdateBufferStateListAndUserPassListUsingReusableBuffers(renamed_buffers, std::move(buffer_state_list), std::move(buffer_user_pass_list));
+  CHECK(buffer_state_list.size() == 4);
+  CHECK(!buffer_state_list.contains(2));
+  CHECK(!buffer_state_list.contains(3));
+  CHECK(!buffer_state_list.contains(4));
+  CHECK(!buffer_state_list.contains(5));
+  CHECK(!buffer_state_list.contains(6));
+  CHECK(buffer_state_list.at(0).size() == 3);
+  CHECK(buffer_state_list.at(0)[0] == kBufferStateFlagCopyDst);
+  CHECK(buffer_state_list.at(0)[1] == kBufferStateFlagCopyDst);
+  CHECK(buffer_state_list.at(0)[2] == kBufferStateFlagCopyDst);
+  CHECK(buffer_state_list.at(1).size() == 2);
+  CHECK(buffer_state_list.at(1)[0] == kBufferStateFlagCopyDst);
+  CHECK(buffer_state_list.at(1)[1] == kBufferStateFlagCopySrc);
+  CHECK(buffer_state_list.at(7).size() == 5);
+  CHECK(buffer_state_list.at(7)[0] == kBufferStateFlagCopyDst);
+  CHECK(buffer_state_list.at(7)[1] == kBufferStateFlagCopyDst);
+  CHECK(buffer_state_list.at(7)[2] == kBufferStateFlagCopySrc);
+  CHECK(buffer_state_list.at(7)[3] == kBufferStateFlagCopyDst);
+  CHECK(buffer_state_list.at(7)[4] == kBufferStateFlagCopySrc);
+  CHECK(buffer_state_list.at(8).size() == 3);
+  CHECK(buffer_state_list.at(8)[0] == kBufferStateFlagCopyDst);
+  CHECK(buffer_state_list.at(8)[1] == kBufferStateFlagCopyDst);
+  CHECK(buffer_state_list.at(8)[2] == kBufferStateFlagCopySrc);
+  CHECK(buffer_user_pass_list.size() == 4);
+  CHECK(!buffer_user_pass_list.contains(2));
+  CHECK(!buffer_user_pass_list.contains(3));
+  CHECK(!buffer_user_pass_list.contains(4));
+  CHECK(!buffer_user_pass_list.contains(5));
+  CHECK(!buffer_user_pass_list.contains(6));
+  CHECK(buffer_user_pass_list.at(0).size() == 3);
+  CHECK(buffer_user_pass_list.at(0)[0][0] == 0);
+  CHECK(buffer_user_pass_list.at(0)[1][0] == 2);
+  CHECK(buffer_user_pass_list.at(0)[2][0] == 6);
+  CHECK(buffer_user_pass_list.at(1).size() == 2);
+  CHECK(buffer_user_pass_list.at(1)[0][0] == 1);
+  CHECK(buffer_user_pass_list.at(1)[1][0] == 2);
+  CHECK(buffer_user_pass_list.at(7).size() == 5);
+  CHECK(buffer_user_pass_list.at(7)[0][0] == 1);
+  CHECK(buffer_user_pass_list.at(7)[1][0] == 3);
+  CHECK(buffer_user_pass_list.at(7)[2][0] == 4);
+  CHECK(buffer_user_pass_list.at(7)[3][0] == 5);
+  CHECK(buffer_user_pass_list.at(7)[4][0] == 6);
+  CHECK(buffer_user_pass_list.at(8).size() == 3);
+  CHECK(buffer_user_pass_list.at(8)[0][0] == 3);
+  CHECK(buffer_user_pass_list.at(8)[1][0] == 4);
+  CHECK(buffer_user_pass_list.at(8)[2][0] == 5);
+  for (auto& [buffer_id, list_list] : buffer_user_pass_list) {
+    auto buffer_id_copy = buffer_id;
+    CAPTURE(buffer_id_copy);
+    for (uint32_t i = 0; i < list_list.size(); i++) {
+      CAPTURE(i);
+      CHECK(list_list[i].size() == 1);
+    }
+  }
+  unordered_map<BufferId, BufferStateFlags> flag_copy{&memory_resource_work};
+  for (auto& [id, config] : buffer_config_list) {
+    flag_copy.insert_or_assign(id, config.state_flags);
+  }
+  buffer_config_list = MergeReusedBufferConfigs(renamed_buffers, std::move(buffer_config_list));
+  CHECK(buffer_config_list.size() == 4);
+  CHECK(buffer_config_list.contains(0));
+  CHECK(buffer_config_list.contains(1));
+  CHECK(!buffer_config_list.contains(2));
+  CHECK(!buffer_config_list.contains(3));
+  CHECK(!buffer_config_list.contains(4));
+  CHECK(!buffer_config_list.contains(5));
+  CHECK(!buffer_config_list.contains(6));
+  CHECK(buffer_config_list.contains(7));
+  CHECK(buffer_config_list.contains(8));
+  for (auto& [id, config] : buffer_config_list) {
+    CHECK(config.state_flags == flag_copy.at(id));
+  }
+  // TODO test with memory aliasing
 }
 TEST_CASE("buffer allocation address calc") {
   using namespace illuminate;
