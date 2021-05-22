@@ -150,7 +150,7 @@ class RenderGraphConfig {
   constexpr const auto& GetBufferSizeInfoFunction() const { return buffer_size_info_function_; }
  private:
   std::pmr::memory_resource* memory_resource_;
-  unordered_map<uint32_t, uint32_t> render_pass_id_map_;
+  unordered_map<StrId, uint32_t> render_pass_id_map_;
   vector<CommandQueueType> render_pass_command_queue_type_list_;
   RenderPassBufferStateList render_pass_buffer_state_list_;
   unordered_map<StrId, BufferStateFlags> initial_buffer_state_list_;

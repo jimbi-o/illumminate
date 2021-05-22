@@ -1,7 +1,7 @@
 #include "illuminate/illuminate.h"
 #ifdef ENABLE_STRID_DEBUG_STR
 namespace illuminate::core {
-std::array<char, StrId::debug_buffer_len> StrId::debug_buffer{};
+char StrId::debug_buffer[debug_buffer_len]{}; // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays) // could not build for MSVC with std::array
 uint32_t StrId::debug_buffer_index{};
 } // namespace illuminate::core
 #endif

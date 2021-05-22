@@ -46,7 +46,7 @@ class StrId final {
   }
 #ifdef ENABLE_STRID_DEBUG_STR
   static const uint32_t debug_buffer_len = 1024;
-  static std::array<char, debug_buffer_len> debug_buffer;
+  static char debug_buffer[debug_buffer_len];
   static uint32_t debug_buffer_index;
 #endif
   StrHash hash_;
