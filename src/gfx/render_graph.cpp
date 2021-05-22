@@ -22,6 +22,15 @@ static auto MergeReadWriteFlag(const BufferStateFlags& state, const ReadWriteFla
   if ((rw_flag & kWriteFlag) != 0) { ret = static_cast<BufferStateFlags>(ret | kBufferStateWriteFlag); }
   return ret;
 }
+constexpr auto IsReadOnlyBuffer(const BufferStateFlags& state, const ReadWriteFlag& read_write_flag) {
+  if ((read_write_flag & kWriteFlag) != 0) { return false; }
+  if ((state & kBufferStateFlagCbvUpload) == 0) { return true; }
+  if ((state & kBufferStateFlagSrvPsOnly) == 0) { return true; }
+  if ((state & kBufferStateFlagSrvNonPs) == 0) { return true; }
+  if ((state & kBufferStateFlagCopySrc) == 0) { return true; }
+  if ((state & kBufferStateFlagPresent) == 0) { return true; }
+  return false;
+}
 static auto InitBufferIdList(const uint32_t pass_num, const RenderPassBufferStateList& render_pass_buffer_state_list, std::pmr::memory_resource* memory_resource) {
   vector<BufferId> buffer_id_list{memory_resource};
   vector<vector<BufferId>> render_pass_buffer_id_list{memory_resource};
@@ -38,6 +47,9 @@ static auto InitBufferIdList(const uint32_t pass_num, const RenderPassBufferStat
     render_pass_buffer_state_flag_list.back().reserve(buffer_state_list.size());
     for (const auto& buffer_state : buffer_state_list) {
       if (!used_buffer_name.contains(buffer_state.buffer_name) || (buffer_state.read_write_flag & kReadFlag) == 0) {
+        if (IsReadOnlyBuffer(buffer_state.state, buffer_state.read_write_flag)) {
+          logwarn("InitBufferIdList IsReadOnlyBuffer {} {} {} {}", pass_index, buffer_state.buffer_name, next_buffer_id, buffer_state.state, buffer_state.read_write_flag);
+        }
         used_buffer_name.insert_or_assign(buffer_state.buffer_name, next_buffer_id);
         buffer_id_list.push_back(next_buffer_id);
         next_buffer_id++;
@@ -206,13 +218,13 @@ static auto ConfigureInterQueuePassDependency(const unordered_map<BufferId, vect
       src_pass_index_map.clear();
       dst_pass_index_map.clear();
       const auto& src_user_pass_list = buffer_user_list[user_pass_list_index];
-      for (uint32_t src_pass_index : src_user_pass_list) {
+      for (const auto& src_pass_index : src_user_pass_list) {
         const auto& src_command_queue_type = render_pass_command_queue_type_list[src_pass_index];
         if (src_pass_index_map.contains(src_command_queue_type) && src_pass_index_map.at(src_command_queue_type) > src_pass_index) { continue; }
         src_pass_index_map.insert_or_assign(src_command_queue_type, src_pass_index);
       }
       const auto& dst_user_pass_list = buffer_user_list[user_pass_list_index + 1];
-      for (uint32_t dst_pass_index : dst_user_pass_list) {
+      for (const auto& dst_pass_index : dst_user_pass_list) {
         const auto& dst_command_queue_type = render_pass_command_queue_type_list[dst_pass_index];
         if (dst_pass_index_map.contains(dst_command_queue_type) && dst_pass_index_map.at(dst_command_queue_type) < dst_pass_index) { continue; }
         dst_pass_index_map.insert_or_assign(dst_command_queue_type, dst_pass_index);
