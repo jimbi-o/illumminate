@@ -1,40 +1,39 @@
 #include "illuminate/illuminate.h"
 #ifdef ENABLE_STRID_DEBUG_STR
 namespace illuminate::core {
-char StrId::debug_buffer[1024]{};
+std::array<char, StrId::debug_buffer_len> StrId::debug_buffer{};
 uint32_t StrId::debug_buffer_index{};
-}
+} // namespace illuminate::core
 #endif
+#include "doctest/doctest.h"
 #include <unordered_map>
 #include <unordered_set>
-#include "doctest/doctest.h"
-TEST_CASE("strid") {
-  using namespace illuminate;
-  using namespace illuminate::core;
+TEST_CASE("strid") { // NOLINT
+  using illuminate::core::StrId;
   StrId sid("a");
-  CHECK(sid == StrId("a"));
-  CHECK(sid != StrId("b"));
+  CHECK(sid == StrId("a")); // NOLINT
+  CHECK(sid != StrId("b")); // NOLINT
   StrId sid_b("b");
-  CHECK(sid_b != StrId("a"));
-  CHECK(sid_b == StrId("b"));
+  CHECK(sid_b != StrId("a")); // NOLINT
+  CHECK(sid_b == StrId("b")); // NOLINT
   switch (sid) {
-    case SID("a"): {
-      CHECK(true);
+    case SID("a"): { // NOLINT(fuchsia-default-arguments-calls)
+      CHECK(true); // NOLINT
       break;
     }
-    case SID("b"): {
-      CHECK(false);
+    case SID("b"): { // NOLINT(fuchsia-default-arguments-calls)
+      CHECK(false); // NOLINT
       break;
     }
   }
   std::unordered_map<StrId, uint32_t> map;
-  map[StrId("c")] = 255;
-  CHECK(map[StrId("c")] == 255);
-  CHECK(!map.contains(StrId("d")));
+  map[StrId("c")] = 255; // NOLINT
+  CHECK(map[StrId("c")] == 255); // NOLINT
+  CHECK(!map.contains(StrId("d"))); // NOLINT
   std::unordered_set<StrId> set;
   set.insert(StrId("d"));
-  CHECK(set.contains(StrId("d")));
-  CHECK(!set.contains(StrId("d ")));
+  CHECK(set.contains(StrId("d"))); // NOLINT
+  CHECK(!set.contains(StrId("d "))); // NOLINT
   auto sid_auto = StrId("b");
-  CHECK(sid_auto);
+  CHECK(sid_auto); // NOLINT
 }

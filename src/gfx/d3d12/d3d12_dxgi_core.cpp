@@ -48,10 +48,10 @@ bool DxgiCore::IsTearingAllowed() {
 }
 }
 #include "doctest/doctest.h"
-TEST_CASE("dxgi core") {
-  using namespace illuminate::gfx::d3d12;
+TEST_CASE("dxgi core") { // NOLINT
+  using namespace illuminate::gfx::d3d12; // NOLINT
   DxgiCore core;
-  CHECK(core.Init());
-  CHECK(core.IsTearingAllowed());
+  CHECK(core.Init()); // NOLINT
+  CHECK(core.IsTearingAllowed()); // NOLINT
   core.Term();
 }

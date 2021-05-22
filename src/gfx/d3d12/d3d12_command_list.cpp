@@ -57,27 +57,27 @@ void CommandList::ReturnCommandList(D3d12CommandList** const list) {
 #include "d3d12_dxgi_core.h"
 #include "d3d12_device.h"
 #include "d3d12_command_allocator.h"
-TEST_CASE("command list") {
-  using namespace illuminate::gfx::d3d12;
+TEST_CASE("command list") { // NOLINT
+  using namespace illuminate::gfx::d3d12; // NOLINT
   DxgiCore dxgi_core;
-  CHECK(dxgi_core.Init());
+  CHECK(dxgi_core.Init()); // NOLINT
   Device device;
-  CHECK(device.Init(dxgi_core.GetAdapter()));
+  CHECK(device.Init(dxgi_core.GetAdapter())); // NOLINT
   CommandAllocator command_allocator;
-  CHECK(command_allocator.Init(device.Get()));
+  CHECK(command_allocator.Init(device.Get())); // NOLINT
   CommandList command_list;
-  CHECK(command_list.Init(device.Get()));
+  CHECK(command_list.Init(device.Get())); // NOLINT
   auto command_allocators = command_allocator.RetainCommandAllocator(CommandQueueType::kGraphics, 3);
   auto command_lists = command_list.RetainCommandList(CommandQueueType::kGraphics, 3, command_allocators);
-  CHECK(command_lists[0]);
-  CHECK(command_lists[1]);
-  CHECK(command_lists[2]);
+  CHECK(command_lists[0]); // NOLINT
+  CHECK(command_lists[1]); // NOLINT
+  CHECK(command_lists[2]); // NOLINT
   command_list.ReturnCommandList(command_lists);
   auto command_allocators_c = command_allocator.RetainCommandAllocator(CommandQueueType::kCompute, 4);
   command_lists = command_list.RetainCommandList(CommandQueueType::kCompute, 4, command_allocators_c);
-  CHECK(command_lists[0]);
-  CHECK(command_lists[1]);
-  CHECK(command_lists[2]);
+  CHECK(command_lists[0]); // NOLINT
+  CHECK(command_lists[1]); // NOLINT
+  CHECK(command_lists[2]); // NOLINT
   command_list.ReturnCommandList(command_lists);
   command_allocator.ReturnCommandAllocator(command_allocators);
   command_allocator.ReturnCommandAllocator(command_allocators_c);

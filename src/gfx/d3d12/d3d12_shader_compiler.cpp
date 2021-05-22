@@ -106,32 +106,32 @@ IDxcResult* ShaderCompiler::Compile(const LPCWSTR filename, const ShaderType tar
 }
 #include "doctest/doctest.h"
 #include "d3dx12.h"
-TEST_CASE("compile shader using dxc") {
-  using namespace illuminate;
-  using namespace illuminate::gfx;
-  using namespace illuminate::gfx::d3d12;
+TEST_CASE("compile shader using dxc") { // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
+  using namespace illuminate::gfx::d3d12; // NOLINT
   auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
   auto utils = CreateDxcUtils();
-  CHECK(utils);
+  CHECK(utils); // NOLINT
   auto include_handler = CreateDxcIncludeHandler(utils);
-  CHECK(include_handler);
+  CHECK(include_handler); // NOLINT
   auto compiler = CreateDxcShaderCompiler();
-  CHECK(compiler);
+  CHECK(compiler); // NOLINT
   auto shader_result = CreateShaderResource(utils, include_handler, compiler, L"shader/test/test.vs.hlsl", L"vs_6_5", memory_resource.get());
-  CHECK(shader_result);
+  CHECK(shader_result); // NOLINT
   DxgiCore dxgi_core;
-  CHECK(dxgi_core.Init());
+  CHECK(dxgi_core.Init()); // NOLINT
   Device device;
-  CHECK(device.Init(dxgi_core.GetAdapter()));
+  CHECK(device.Init(dxgi_core.GetAdapter())); // NOLINT
   {
     auto root_signature_blob = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result, DXC_OUT_ROOT_SIGNATURE);
-    CHECK(root_signature_blob);
+    CHECK(root_signature_blob); // NOLINT
     ID3D12RootSignature* root_signature = nullptr;
     auto hr = device.Get()->CreateRootSignature(0, root_signature_blob->GetBufferPointer(), root_signature_blob->GetBufferSize(), IID_PPV_ARGS(&root_signature));
-    CHECK(SUCCEEDED(hr));
-    CHECK(root_signature);
+    CHECK(SUCCEEDED(hr)); // NOLINT
+    CHECK(root_signature); // NOLINT
     auto shader_object = ShaderCompiler::GetResultOutput<IDxcBlob>(shader_result, DXC_OUT_OBJECT);
-    CHECK(shader_object);
+    CHECK(shader_object); // NOLINT
     struct {
       CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE root_signature;
       CD3DX12_PIPELINE_STATE_STREAM_VS vs;
@@ -143,8 +143,8 @@ TEST_CASE("compile shader using dxc") {
     ID3D12PipelineState* pso = nullptr;
     hr = device.Get()->CreatePipelineState(&desc, IID_PPV_ARGS(&pso));
     // if crash, enable dev mode + ExperimentalShaderModels (https://github.com/microsoft/DirectXShaderCompiler/issues/2550)
-    CHECK(SUCCEEDED(hr));
-    CHECK(pso);
+    CHECK(SUCCEEDED(hr)); // NOLINT
+    CHECK(pso); // NOLINT
     pso->Release();
     shader_object->Release();
     root_signature->Release();
@@ -156,21 +156,21 @@ TEST_CASE("compile shader using dxc") {
   compiler->Release();
   utils->Release();
 }
-TEST_CASE("ShaderCompiler class") {
-  using namespace illuminate;
-  using namespace illuminate::gfx;
-  using namespace illuminate::gfx::d3d12;
+TEST_CASE("ShaderCompiler class") { // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
+  using namespace illuminate::gfx::d3d12; // NOLINT
   auto memory_resource = std::make_shared<PmrLinearAllocator>(buffer, buffer_size_in_bytes);
   DxgiCore dxgi_core;
-  CHECK(dxgi_core.Init());
+  CHECK(dxgi_core.Init()); // NOLINT
   Device device;
-  CHECK(device.Init(dxgi_core.GetAdapter()));
+  CHECK(device.Init(dxgi_core.GetAdapter())); // NOLINT
   ShaderCompiler shader_compiler;
-  CHECK(shader_compiler.Init(device.Get()));
+  CHECK(shader_compiler.Init(device.Get())); // NOLINT
   auto result = shader_compiler.Compile(L"shader/test/test.vs.hlsl", ShaderType::kVs, memory_resource.get());
-  CHECK(result);
+  CHECK(result); // NOLINT
   result = shader_compiler.Compile(L"shader/test/test.vs.hlsl", ShaderType::kVs, memory_resource.get());
-  CHECK(result);
+  CHECK(result); // NOLINT
   shader_compiler.Term();
   device.Term();
   dxgi_core.Term();

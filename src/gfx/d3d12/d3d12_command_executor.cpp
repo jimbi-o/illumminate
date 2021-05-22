@@ -53,25 +53,25 @@ using CreateRenderGraphFunc = std::function<RenderGraphConfigD3d12()>;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmissing-field-initializers"
 #endif
-TEST_CASE("execute command list") {
+TEST_CASE("execute command list") { // NOLINT
   const uint32_t buffer_num = 2;
   const uint32_t swapchain_buffer_num = buffer_num + 1;
-  using namespace illuminate::gfx;
-  using namespace illuminate::gfx::d3d12;
+  using namespace illuminate::gfx; // NOLINT
+  using namespace illuminate::gfx::d3d12; // NOLINT
   DxgiCore dxgi_core;
-  CHECK(dxgi_core.Init());
+  CHECK(dxgi_core.Init()); // NOLINT
   Device device;
-  CHECK(device.Init(dxgi_core.GetAdapter()));
+  CHECK(device.Init(dxgi_core.GetAdapter())); // NOLINT
   CommandQueue command_queue;
-  CHECK(command_queue.Init(device.Get()));
+  CHECK(command_queue.Init(device.Get())); // NOLINT
   illuminate::gfx::win32::Window window;
-  CHECK(window.Init("swapchain test", 160, 90));
+  CHECK(window.Init("swapchain test", 160, 90)); // NOLINT
   Swapchain swapchain;
-  CHECK(swapchain.Init(dxgi_core.GetFactory(), command_queue.Get(CommandQueueType::kGraphics), device.Get(), window.GetHwnd(), swapchain_buffer_num, buffer_num));
+  CHECK(swapchain.Init(dxgi_core.GetFactory(), command_queue.Get(CommandQueueType::kGraphics), device.Get(), window.GetHwnd(), swapchain_buffer_num, buffer_num)); // NOLINT
   CommandAllocator command_allocator;
-  CHECK(command_allocator.Init(device.Get()));
+  CHECK(command_allocator.Init(device.Get())); // NOLINT
   CommandList command_list;
-  CHECK(command_list.Init(device.Get()));
+  CHECK(command_list.Init(device.Get())); // NOLINT
   std::vector<std::vector<ID3D12CommandAllocator**>> allocators(buffer_num);
   std::vector<std::tuple<CommandQueueType, uint64_t>> queue_signal_val(buffer_num);
   std::unordered_map<CommandQueueType, uint64_t> used_signal_val;
@@ -140,7 +140,7 @@ TEST_CASE("execute command list") {
       auto queue_type = parsed_render_graph.frame_end_signal_queue;
       queue_signal_val[i % buffer_num] = {queue_type, used_signal_val.at(queue_type)};
     }
-    CHECK(swapchain.Present());
+    CHECK(swapchain.Present()); // NOLINT
   }
   while (!allocators.empty()) {
     for (auto a : allocators.back()) {

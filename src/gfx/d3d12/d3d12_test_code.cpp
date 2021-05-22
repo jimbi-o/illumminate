@@ -729,51 +729,51 @@ const uint32_t kTestFrameNum = 10;
 }
 #endif
 #include "doctest/doctest.h"
-TEST_CASE("create pso") {
-  using namespace illuminate;
-  using namespace illuminate::gfx;
-  using namespace illuminate::gfx::d3d12;
+TEST_CASE("create pso") { // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
+  using namespace illuminate::gfx::d3d12; // NOLINT
   const BufferSize2d swapchain_size{1600, 900};
   const uint32_t frame_buffer_num = 2;
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
-  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
+  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num)); // NOLINT
   PmrLinearAllocator memory_resource_persistent(&buffer[buffer_offset_in_bytes_persistent], buffer_size_in_bytes_persistent);
   ShaderResourceSet shader_resource_set(&memory_resource_persistent);
-  CHECK(shader_resource_set.Init(devices.GetDevice()));
+  CHECK(shader_resource_set.Init(devices.GetDevice())); // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   D3D12_RT_FORMAT_ARRAY array{{devices.swapchain.GetDxgiFormat()}, 1};
   auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("pso_id"), devices.GetDevice(), StrId("rootsig_tmp"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/copysrv.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
-  CHECK(rootsig);
-  CHECK(pso);
+  CHECK(rootsig); // NOLINT
+  CHECK(pso); // NOLINT
   memory_resource_work.Reset();
-  CHECK(shader_resource_set.GetRootSignature(StrId("rootsig_tmp")) == rootsig);
-  CHECK(shader_resource_set.GetPipelineStateObject(StrId("pso_id")) == pso);
+  CHECK(shader_resource_set.GetRootSignature(StrId("rootsig_tmp")) == rootsig); // NOLINT
+  CHECK(shader_resource_set.GetPipelineStateObject(StrId("pso_id")) == pso); // NOLINT
   std::tie(rootsig, pso) = shader_resource_set.CreateCsPipelineStateObject(StrId("pso_id_cs"), devices.GetDevice(), StrId("rootsig_cs_tmp"), L"shader/test/fill-screen.cs.hlsl", &memory_resource_work);
-  CHECK(rootsig);
-  CHECK(pso);
-  CHECK(shader_resource_set.GetRootSignature(StrId("rootsig_cs_tmp")) == rootsig);
-  CHECK(shader_resource_set.GetPipelineStateObject(StrId("pso_id_cs")) == pso);
+  CHECK(rootsig); // NOLINT
+  CHECK(pso); // NOLINT
+  CHECK(shader_resource_set.GetRootSignature(StrId("rootsig_cs_tmp")) == rootsig); // NOLINT
+  CHECK(shader_resource_set.GetPipelineStateObject(StrId("pso_id_cs")) == pso); // NOLINT
   shader_resource_set.Term();
   devices.Term();
 }
-TEST_CASE("clear swapchain buffer") {
-  using namespace illuminate;
-  using namespace illuminate::gfx;
-  using namespace illuminate::gfx::d3d12;
+TEST_CASE("clear swapchain buffer") { // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
+  using namespace illuminate::gfx::d3d12; // NOLINT
   const BufferSize2d swapchain_size{1600, 900};
   const uint32_t frame_buffer_num = 2;
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
-  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
+  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num)); // NOLINT
   PmrLinearAllocator memory_resource_persistent(&buffer[buffer_offset_in_bytes_persistent], buffer_size_in_bytes_persistent);
   CommandListSet command_list_set(&memory_resource_persistent);
-  CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num));
+  CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num)); // NOLINT
   SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
-  CHECK(signal_values.used_signal_val.empty());
-  CHECK(signal_values.frame_wait_signal.size() == frame_buffer_num);
+  CHECK(signal_values.used_signal_val.empty()); // NOLINT
+  CHECK(signal_values.frame_wait_signal.size() == frame_buffer_num); // NOLINT
   for (auto& map : signal_values.frame_wait_signal) {
-    CHECK(map.empty());
+    CHECK(map.empty()); // NOLINT
   }
   for (uint32_t frame_no = 0; frame_no < kTestFrameNum; frame_no++) {
     auto frame_index = frame_no % frame_buffer_num;
@@ -810,25 +810,25 @@ TEST_CASE("clear swapchain buffer") {
   command_list_set.Term();
   devices.Term();
 }
-TEST_CASE("draw to swapchain buffer") {
-  using namespace illuminate;
-  using namespace illuminate::gfx;
-  using namespace illuminate::gfx::d3d12;
+TEST_CASE("draw to swapchain buffer") { // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
+  using namespace illuminate::gfx::d3d12; // NOLINT
   const BufferSize2d swapchain_size{1600, 900};
   const uint32_t frame_buffer_num = 2;
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
-  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
+  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num)); // NOLINT
   PmrLinearAllocator memory_resource_persistent(&buffer[buffer_offset_in_bytes_persistent], buffer_size_in_bytes_persistent);
   CommandListSet command_list_set(&memory_resource_persistent);
-  CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num));
+  CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num)); // NOLINT
   ShaderResourceSet shader_resource_set(&memory_resource_persistent);
   shader_resource_set.Init(devices.GetDevice());
   SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
-  CHECK(signal_values.used_signal_val.empty());
-  CHECK(signal_values.frame_wait_signal.size() == frame_buffer_num);
+  CHECK(signal_values.used_signal_val.empty()); // NOLINT
+  CHECK(signal_values.frame_wait_signal.size() == frame_buffer_num); // NOLINT
   for (auto& map : signal_values.frame_wait_signal) {
-    CHECK(map.empty());
+    CHECK(map.empty()); // NOLINT
   }
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("pso"), devices.GetDevice(), StrId("rootsig_tmp"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
@@ -878,18 +878,18 @@ TEST_CASE("draw to swapchain buffer") {
   command_list_set.Term();
   devices.Term();
 }
-TEST_CASE("create buffer") {
-  using namespace illuminate;
-  using namespace illuminate::gfx;
-  using namespace illuminate::gfx::d3d12;
+TEST_CASE("create buffer") { // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
+  using namespace illuminate::gfx::d3d12; // NOLINT
   const BufferSize2d swapchain_size{1600, 900};
   const uint32_t frame_buffer_num = 2;
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
-  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
+  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num)); // NOLINT
   PmrLinearAllocator memory_resource_persistent(&buffer[buffer_offset_in_bytes_persistent], buffer_size_in_bytes_persistent);
   PhysicalBufferSet physical_buffers(&memory_resource_persistent);
-  CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter()));
+  CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter())); // NOLINT
   D3D12_RESOURCE_DESC resource_desc{};
   {
     resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -905,47 +905,47 @@ TEST_CASE("create buffer") {
   }
   D3D12_CLEAR_VALUE clear_value{.Format = resource_desc.Format, .Color = {1.0f,1.0f,1.0f,1.0f,}};
   auto buffer_id = physical_buffers.CreatePhysicalBuffer(D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, resource_desc, &clear_value);
-  CHECK(buffer_id);
-  CHECK(physical_buffers.GetPhysicalBuffer(buffer_id));
+  CHECK(buffer_id); // NOLINT
+  CHECK(physical_buffers.GetPhysicalBuffer(buffer_id)); // NOLINT
   physical_buffers.Term();
   devices.Term();
 }
-TEST_CASE("create cpu handle") {
-  using namespace illuminate;
-  using namespace illuminate::gfx;
-  using namespace illuminate::gfx::d3d12;
+TEST_CASE("create cpu handle") { // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
+  using namespace illuminate::gfx::d3d12; // NOLINT
   const BufferSize2d swapchain_size{1600, 900};
   const uint32_t frame_buffer_num = 2;
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
-  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
+  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num)); // NOLINT
   PmrLinearAllocator memory_resource_persistent(&buffer[buffer_offset_in_bytes_persistent], buffer_size_in_bytes_persistent);
   DescriptorHeapSet descriptor_heaps{&memory_resource_persistent};
-  CHECK(descriptor_heaps.Init(devices.GetDevice()));
+  CHECK(descriptor_heaps.Init(devices.GetDevice())); // NOLINT
   auto handle = descriptor_heaps.RetainHandle(1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-  CHECK(handle.ptr);
-  CHECK(descriptor_heaps.RetainHandle(1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV).ptr == handle.ptr);
-  CHECK(descriptor_heaps.RetainHandle(1, D3D12_DESCRIPTOR_HEAP_TYPE_RTV).ptr);
-  CHECK(descriptor_heaps.RetainHandle(1, D3D12_DESCRIPTOR_HEAP_TYPE_RTV).ptr != handle.ptr);
+  CHECK(handle.ptr); // NOLINT
+  CHECK(descriptor_heaps.RetainHandle(1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV).ptr == handle.ptr); // NOLINT
+  CHECK(descriptor_heaps.RetainHandle(1, D3D12_DESCRIPTOR_HEAP_TYPE_RTV).ptr); // NOLINT
+  CHECK(descriptor_heaps.RetainHandle(1, D3D12_DESCRIPTOR_HEAP_TYPE_RTV).ptr != handle.ptr); // NOLINT
   descriptor_heaps.Term();
   devices.Term();
 }
-TEST_CASE("draw to a created buffer") {
-  using namespace illuminate;
-  using namespace illuminate::gfx;
-  using namespace illuminate::gfx::d3d12;
+TEST_CASE("draw to a created buffer") { // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
+  using namespace illuminate::gfx::d3d12; // NOLINT
   const BufferSize2d swapchain_size{1600, 900};
   const uint32_t frame_buffer_num = 2;
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
-  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
+  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num)); // NOLINT
   PmrLinearAllocator memory_resource_persistent(&buffer[buffer_offset_in_bytes_persistent], buffer_size_in_bytes_persistent);
   CommandListSet command_list_set(&memory_resource_persistent);
-  CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num));
+  CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num)); // NOLINT
   ShaderResourceSet shader_resource_set(&memory_resource_persistent);
   shader_resource_set.Init(devices.GetDevice());
   PhysicalBufferSet physical_buffers(&memory_resource_persistent);
-  CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter()));
+  CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter())); // NOLINT
   BufferConfig buffer_config{
     .width = swapchain_size.width,
     .height = swapchain_size.height,
@@ -958,7 +958,7 @@ TEST_CASE("draw to a created buffer") {
   auto clear_value = GetD3d12ClearValue(buffer_config);
   auto buffer_id = physical_buffers.CreatePhysicalBuffer(D3D12_HEAP_TYPE_DEFAULT, GetInitialD3d12ResourceStateFlag(buffer_config), ConvertToD3d12ResourceDesc(buffer_config), IsClearValueValid(buffer_config) ? &clear_value : nullptr);
   DescriptorHeapSet descriptor_heaps{&memory_resource_persistent};
-  CHECK(descriptor_heaps.Init(devices.GetDevice()));
+  CHECK(descriptor_heaps.Init(devices.GetDevice())); // NOLINT
   {
     auto resource = physical_buffers.GetPhysicalBuffer(buffer_id);
     auto rtv_desc = ConvertToD3d12RtvDesc(buffer_config);
@@ -966,7 +966,7 @@ TEST_CASE("draw to a created buffer") {
     devices.GetDevice()->CreateRenderTargetView(resource, &rtv_desc, handle);
   }
   SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
-  CHECK(signal_values.used_signal_val.empty());
+  CHECK(signal_values.used_signal_val.empty()); // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   StrId pso_id("pso_tmp");
   StrId rootsig_id("rootsig_tmp");
@@ -1004,20 +1004,20 @@ TEST_CASE("draw to a created buffer") {
   command_list_set.Term();
   devices.Term();
 }
-TEST_CASE("cbv frame buffering") {
-  using namespace illuminate;
-  using namespace illuminate::gfx;
-  using namespace illuminate::gfx::d3d12;
+TEST_CASE("cbv frame buffering") { // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
+  using namespace illuminate::gfx::d3d12; // NOLINT
   const BufferSize2d swapchain_size{1600, 900};
   const uint32_t frame_buffer_num = 2;
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
-  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
+  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num)); // NOLINT
   PmrLinearAllocator memory_resource_persistent(&buffer[buffer_offset_in_bytes_persistent], buffer_size_in_bytes_persistent);
   PhysicalBufferSet physical_buffers(&memory_resource_persistent);
-  CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter()));
+  CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter())); // NOLINT
   DescriptorHeapSet descriptor_heaps{&memory_resource_persistent};
-  CHECK(descriptor_heaps.Init(devices.GetDevice()));
+  CHECK(descriptor_heaps.Init(devices.GetDevice())); // NOLINT
   FrameBufferedBufferSet frame_buffered_buffers(&memory_resource_persistent);
   {
     PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
@@ -1032,9 +1032,9 @@ TEST_CASE("cbv frame buffering") {
     for (uint32_t i = 0; i < frame_buffer_num; i++) {
       CAPTURE(i);
       auto buffer_id = physical_buffers.CreatePhysicalBuffer(D3D12_HEAP_TYPE_UPLOAD, initial_flag, d3d12_resource_desc, nullptr);
-      CHECK(buffer_id);
+      CHECK(buffer_id); // NOLINT
       resource_list[i] = physical_buffers.GetPhysicalBuffer(buffer_id);
-      CHECK(resource_list[i]);
+      CHECK(resource_list[i]); // NOLINT
       auto cpu_handle = descriptor_heaps.RetainHandle(buffer_id, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
       cpu_handles[i] = cpu_handle;
     }
@@ -1043,8 +1043,8 @@ TEST_CASE("cbv frame buffering") {
     for (uint32_t i = 0; i < frame_buffer_num; i++) {
       CAPTURE(i);
       auto ptr = frame_buffered_buffers.GetFrameBufferedBuffer(frame_buffered_buffer_id, i);
-      CHECK(ptr);
-      CHECK(ptr != prev_ptr);
+      CHECK(ptr); // NOLINT
+      CHECK(ptr != prev_ptr); // NOLINT
       memcpy(ptr, &i, sizeof(i));
       prev_ptr = ptr;
     }
@@ -1053,32 +1053,32 @@ TEST_CASE("cbv frame buffering") {
   physical_buffers.Term();
   devices.Term();
 }
-TEST_CASE("use cbv (change buffer color dynamically)") {
-  using namespace illuminate;
-  using namespace illuminate::gfx;
-  using namespace illuminate::gfx::d3d12;
+TEST_CASE("use cbv (change buffer color dynamically)") { // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
+  using namespace illuminate::gfx::d3d12; // NOLINT
   const BufferSize2d swapchain_size{1600, 900};
   const uint32_t frame_buffer_num = 2;
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
-  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
+  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num)); // NOLINT
   PmrLinearAllocator memory_resource_persistent(&buffer[buffer_offset_in_bytes_persistent], buffer_size_in_bytes_persistent);
   CommandListSet command_list_set(&memory_resource_persistent);
-  CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num));
+  CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num)); // NOLINT
   ShaderResourceSet shader_resource_set(&memory_resource_persistent);
   shader_resource_set.Init(devices.GetDevice());
   PhysicalBufferSet physical_buffers(&memory_resource_persistent);
-  CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter()));
+  CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter())); // NOLINT
   DescriptorHeapSet descriptor_heaps{&memory_resource_persistent};
-  CHECK(descriptor_heaps.Init(devices.GetDevice()));
+  CHECK(descriptor_heaps.Init(devices.GetDevice())); // NOLINT
   ShaderVisibleDescriptorHeap shader_visible_descriptor_heap;
-  CHECK(shader_visible_descriptor_heap.Init(devices.GetDevice()));
+  CHECK(shader_visible_descriptor_heap.Init(devices.GetDevice())); // NOLINT
   FrameBufferedBufferSet frame_buffered_buffers(&memory_resource_persistent);
   SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   auto [rootsig, pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("pso"), devices.GetDevice(), StrId("rootsig_tmp"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test-cbv.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
   auto cbv_id = CreateFrameBufferedConstantBuffers(devices.GetDevice(), sizeof(float) * 4, frame_buffer_num, &physical_buffers, &descriptor_heaps, &frame_buffered_buffers, &memory_resource_work);
-  CHECK(cbv_id);
+  CHECK(cbv_id); // NOLINT
   for (uint32_t frame_no = 0; frame_no < kTestFrameNum; frame_no++) {
     CAPTURE(frame_no);
     auto frame_index = frame_no % frame_buffer_num;
@@ -1088,7 +1088,7 @@ TEST_CASE("use cbv (change buffer color dynamically)") {
       float color_val_per_channel = 0.1f * static_cast<float>(frame_no);
       float color_diff[4] = {color_val_per_channel, color_val_per_channel, color_val_per_channel, 0.0f};
       auto cbv_ptr = frame_buffered_buffers.GetFrameBufferedBuffer(cbv_id, frame_index);
-      CHECK(cbv_ptr);
+      CHECK(cbv_ptr); // NOLINT
       memcpy(cbv_ptr, color_diff, sizeof(float) * 4);
     }
     D3D12_GPU_DESCRIPTOR_HANDLE cbv_gpu_handle{};
@@ -1145,34 +1145,34 @@ TEST_CASE("use cbv (change buffer color dynamically)") {
   command_list_set.Term();
   devices.Term();
 }
-TEST_CASE("load from srv") {
-  using namespace illuminate;
-  using namespace illuminate::gfx;
-  using namespace illuminate::gfx::d3d12;
+TEST_CASE("load from srv") { // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
+  using namespace illuminate::gfx::d3d12; // NOLINT
   const BufferSize2d swapchain_size{1600, 900};
   const uint32_t frame_buffer_num = 2;
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
-  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
+  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num)); // NOLINT
   PmrLinearAllocator memory_resource_persistent(&buffer[buffer_offset_in_bytes_persistent], buffer_size_in_bytes_persistent);
   CommandListSet command_list_set(&memory_resource_persistent);
-  CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num));
+  CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num)); // NOLINT
   ShaderResourceSet shader_resource_set(&memory_resource_persistent);
   shader_resource_set.Init(devices.GetDevice());
   PhysicalBufferSet physical_buffers(&memory_resource_persistent);
-  CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter()));
+  CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter())); // NOLINT
   DescriptorHeapSet descriptor_heaps(&memory_resource_persistent);
-  CHECK(descriptor_heaps.Init(devices.GetDevice()));
+  CHECK(descriptor_heaps.Init(devices.GetDevice())); // NOLINT
   DescriptorHandleSet descriptor_handles(&memory_resource_persistent);
   ShaderVisibleDescriptorHeap shader_visible_descriptor_heap;
-  CHECK(shader_visible_descriptor_heap.Init(devices.GetDevice()));
+  CHECK(shader_visible_descriptor_heap.Init(devices.GetDevice())); // NOLINT
   FrameBufferedBufferSet frame_buffered_buffers(&memory_resource_persistent);
   SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   auto [draw_rootsig, draw_pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("draw_pso"), devices.GetDevice(), StrId("draw_rootsig"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/test-cbv.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
   auto [copy_rootsig, copy_pso] = shader_resource_set.CreateVsPsPipelineStateObject(StrId("copy_pso"), devices.GetDevice(), StrId("copy_rootsig"), L"shader/test/fullscreen-triangle.vs.hlsl", L"shader/test/copysrv.ps.hlsl", {{devices.swapchain.GetDxgiFormat()}, 1}, ShaderResourceSet::DepthStencilEnableFlag::kDisabled, &memory_resource_work);
   auto cbv_id = CreateFrameBufferedConstantBuffers(devices.GetDevice(), sizeof(float) * 4, frame_buffer_num, &physical_buffers, &descriptor_heaps, &frame_buffered_buffers, &memory_resource_work);
-  CHECK(cbv_id);
+  CHECK(cbv_id); // NOLINT
   auto rtv_id = CreatePhysicalBuffer({
       .width = swapchain_size.width,
       .height = swapchain_size.height,
@@ -1192,7 +1192,7 @@ TEST_CASE("load from srv") {
       float color_val_per_channel = 0.1f * static_cast<float>(frame_no);
       float color_diff[4] = {color_val_per_channel, color_val_per_channel, color_val_per_channel, 0.0f};
       auto cbv_ptr = frame_buffered_buffers.GetFrameBufferedBuffer(cbv_id, frame_index);
-      CHECK(cbv_ptr);
+      CHECK(cbv_ptr); // NOLINT
       memcpy(cbv_ptr, color_diff, sizeof(float) * 4);
     }
     // copy descriptor handles to gpu side
@@ -1313,29 +1313,29 @@ TEST_CASE("load from srv") {
   command_list_set.Term();
   devices.Term();
 }
-TEST_CASE("render graph") {
-  using namespace illuminate;
-  using namespace illuminate::gfx;
-  using namespace illuminate::gfx::d3d12;
+TEST_CASE("render graph") { // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
+  using namespace illuminate::gfx::d3d12; // NOLINT
   const BufferSize2d swapchain_size{1920, 1080};
   const uint32_t frame_buffer_num = 2;
   const uint32_t swapchain_buffer_num = frame_buffer_num + 1;
   DeviceSet devices;
-  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num));
+  CHECK(devices.Init(frame_buffer_num, swapchain_size, swapchain_buffer_num)); // NOLINT
   PmrLinearAllocator memory_resource_persistent(&buffer[buffer_offset_in_bytes_persistent], buffer_size_in_bytes_persistent);
   PmrLinearAllocator memory_resource_scene(&buffer[buffer_offset_in_bytes_scene], buffer_size_in_bytes_scene);
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   CommandListSet command_list_set(&memory_resource_persistent);
-  CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num));
+  CHECK(command_list_set.Init(devices.GetDevice(), frame_buffer_num)); // NOLINT
   ShaderResourceSet shader_resource_set(&memory_resource_persistent);
   shader_resource_set.Init(devices.GetDevice());
   PhysicalBufferSet physical_buffers(&memory_resource_persistent);
-  CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter()));
+  CHECK(physical_buffers.Init(devices.GetDevice(), devices.dxgi_core.GetAdapter())); // NOLINT
   DescriptorHeapSet descriptor_heaps(&memory_resource_persistent);
-  CHECK(descriptor_heaps.Init(devices.GetDevice()));
+  CHECK(descriptor_heaps.Init(devices.GetDevice())); // NOLINT
   DescriptorHandleSet descriptor_handles(&memory_resource_persistent);
   ShaderVisibleDescriptorHeap shader_visible_descriptor_heap;
-  CHECK(shader_visible_descriptor_heap.Init(devices.GetDevice()));
+  CHECK(shader_visible_descriptor_heap.Init(devices.GetDevice())); // NOLINT
   FrameBufferedBufferSet frame_buffered_buffers(&memory_resource_persistent);
   SignalValues signal_values(&memory_resource_persistent, frame_buffer_num);
   using RenderPassFunction = std::function<void(D3d12CommandList*, const BufferId*, const unordered_map<BufferId, BufferConfig>&, ID3D12Resource**, D3D12_CPU_DESCRIPTOR_HANDLE*, D3D12_GPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE)>;
@@ -1494,5 +1494,5 @@ TEST_CASE("render graph") {
  * multi threaded
  * remove #if 0
  */
-TEST_CASE("memory aliasing") {
+TEST_CASE("memory aliasing") { // NOLINT
 }

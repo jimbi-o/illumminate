@@ -16,8 +16,8 @@ bool CloseHandle(HANDLE handle) {
 }
 }
 #include "doctest/doctest.h"
-TEST_CASE("win32 event handle test") {
+TEST_CASE("win32 event handle test") { // NOLINT
   auto handle = illuminate::gfx::win32::CreateEventHandle();
-  CHECK(handle != nullptr);
-  CHECK(illuminate::gfx::win32::CloseHandle(handle) == true);
+  CHECK(handle != nullptr); // NOLINT
+  CHECK(illuminate::gfx::win32::CloseHandle(handle) == true); // NOLINT
 }

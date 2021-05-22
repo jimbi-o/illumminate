@@ -79,13 +79,13 @@ void Device::Term() {
 }
 #include "doctest/doctest.h"
 #include "d3d12_dxgi_core.h"
-TEST_CASE("device") {
-  using namespace illuminate::gfx::d3d12;
+TEST_CASE("device") { // NOLINT
+  using namespace illuminate::gfx::d3d12; // NOLINT
   DxgiCore dxgi_core;
-  CHECK(dxgi_core.Init());
+  CHECK(dxgi_core.Init()); // NOLINT
   Device device;
-  CHECK(device.Init(dxgi_core.GetAdapter()));
-  CHECK(device.Get());
+  CHECK(device.Init(dxgi_core.GetAdapter())); // NOLINT
+  CHECK(device.Get()); // NOLINT
   device.Term();
   dxgi_core.Term();
 }

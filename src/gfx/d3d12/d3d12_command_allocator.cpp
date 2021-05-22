@@ -54,30 +54,30 @@ void CommandAllocator::ReturnCommandAllocator(ID3D12CommandAllocator** const all
 #include "doctest/doctest.h"
 #include "d3d12_dxgi_core.h"
 #include "d3d12_device.h"
-TEST_CASE("command allocator") {
-  using namespace illuminate::gfx::d3d12;
+TEST_CASE("command allocator") { // NOLINT
+  using namespace illuminate::gfx::d3d12; // NOLINT
   DxgiCore dxgi_core;
-  CHECK(dxgi_core.Init());
+  CHECK(dxgi_core.Init()); // NOLINT
   Device device;
-  CHECK(device.Init(dxgi_core.GetAdapter()));
+  CHECK(device.Init(dxgi_core.GetAdapter())); // NOLINT
   CommandAllocator command_allocator;
-  CHECK(command_allocator.Init(device.Get()));
+  CHECK(command_allocator.Init(device.Get())); // NOLINT
   auto command_allocators = command_allocator.RetainCommandAllocator(CommandQueueType::kGraphics, 3);
-  CHECK(command_allocators[0]);
-  CHECK(command_allocators[1]);
-  CHECK(command_allocators[2]);
+  CHECK(command_allocators[0]); // NOLINT
+  CHECK(command_allocators[1]); // NOLINT
+  CHECK(command_allocators[2]); // NOLINT
   command_allocator.ReturnCommandAllocator(command_allocators);
   command_allocators = command_allocator.RetainCommandAllocator(CommandQueueType::kGraphics, 3);
-  CHECK(command_allocators[0]);
-  CHECK(command_allocators[1]);
-  CHECK(command_allocators[2]);
+  CHECK(command_allocators[0]); // NOLINT
+  CHECK(command_allocators[1]); // NOLINT
+  CHECK(command_allocators[2]); // NOLINT
   command_allocator.ReturnCommandAllocator(command_allocators);
   command_allocators = command_allocator.RetainCommandAllocator(CommandQueueType::kCompute, 5);
-  CHECK(command_allocators[0]);
-  CHECK(command_allocators[1]);
-  CHECK(command_allocators[2]);
-  CHECK(command_allocators[3]);
-  CHECK(command_allocators[4]);
+  CHECK(command_allocators[0]); // NOLINT
+  CHECK(command_allocators[1]); // NOLINT
+  CHECK(command_allocators[2]); // NOLINT
+  CHECK(command_allocators[3]); // NOLINT
+  CHECK(command_allocators[4]); // NOLINT
   command_allocator.Term();
   device.Term();
   dxgi_core.Term();

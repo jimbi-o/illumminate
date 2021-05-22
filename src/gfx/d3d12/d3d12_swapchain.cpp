@@ -125,22 +125,22 @@ bool Swapchain::Present() {
 #include "d3d12_device.h"
 #include "d3d12_command_queue.h"
 #include "illuminate/gfx/win32/win32_window.h"
-TEST_CASE("swapchain") {
+TEST_CASE("swapchain") { // NOLINT
   const uint32_t swapchain_buffer_num = 3;
-  using namespace illuminate::gfx::d3d12;
+  using namespace illuminate::gfx::d3d12; // NOLINT
   DxgiCore dxgi_core;
-  CHECK(dxgi_core.Init());
+  CHECK(dxgi_core.Init()); // NOLINT
   Device device;
-  CHECK(device.Init(dxgi_core.GetAdapter()));
+  CHECK(device.Init(dxgi_core.GetAdapter())); // NOLINT
   CommandQueue command_queue;
-  CHECK(command_queue.Init(device.Get()));
+  CHECK(command_queue.Init(device.Get())); // NOLINT
   illuminate::gfx::win32::Window window;
-  CHECK(window.Init("swapchain test", 160, 90));
+  CHECK(window.Init("swapchain test", 160, 90)); // NOLINT
   Swapchain swapchain;
-  CHECK(swapchain.Init(dxgi_core.GetFactory(), command_queue.Get(CommandQueueType::kGraphics), device.Get(), window.GetHwnd(), swapchain_buffer_num, swapchain_buffer_num - 1));
+  CHECK(swapchain.Init(dxgi_core.GetFactory(), command_queue.Get(CommandQueueType::kGraphics), device.Get(), window.GetHwnd(), swapchain_buffer_num, swapchain_buffer_num - 1)); // NOLINT
   for (uint32_t i = 0; i < swapchain_buffer_num + 1; i++) {
     swapchain.UpdateBackBufferIndex();
-    CHECK(swapchain.Present());
+    CHECK(swapchain.Present()); // NOLINT
   }
   command_queue.WaitAll();
   swapchain.Term();

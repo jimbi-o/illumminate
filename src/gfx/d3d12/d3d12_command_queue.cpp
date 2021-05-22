@@ -90,12 +90,12 @@ void CommandQueue::WaitAll() {
 #include "doctest/doctest.h"
 #include "d3d12_dxgi_core.h"
 #include "d3d12_device.h"
-TEST_CASE("command queue") {
-  using namespace illuminate::gfx::d3d12;
+TEST_CASE("command queue") { // NOLINT
+  using namespace illuminate::gfx::d3d12; // NOLINT
   DxgiCore dxgi_core;
-  CHECK(dxgi_core.Init());
+  CHECK(dxgi_core.Init()); // NOLINT
   Device device;
-  CHECK(device.Init(dxgi_core.GetAdapter()));
+  CHECK(device.Init(dxgi_core.GetAdapter())); // NOLINT
   CommandQueue command_queue;
   command_queue.Init(device.Get());
   SUBCASE("cpu bound (frame bufferred)") {

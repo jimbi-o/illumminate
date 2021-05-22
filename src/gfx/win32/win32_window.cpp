@@ -132,17 +132,17 @@ void Window::ProcessMessage() {
 }
 }
 #include "doctest/doctest.h"
-TEST_CASE("win32 windows func test") {
+TEST_CASE("win32 windows func test") { // NOLINT
   auto hwnd = illuminate::gfx::win32::InitWindow("test window", 200, 100, nullptr);
-  CHECK(hwnd != nullptr);
+  CHECK(hwnd != nullptr); // NOLINT
   auto windowRect = illuminate::gfx::win32::GetCurrentWindowRectInfo(hwnd);
-  CHECK(windowRect.right - windowRect.left == 200);
-  CHECK(windowRect.bottom - windowRect.top == 100);
-  CHECK(illuminate::gfx::win32::SetFullscreenMode(hwnd) == true);
-  CHECK(illuminate::gfx::win32::SetBackToWindowMode(hwnd, windowRect) == true);
-  CHECK(illuminate::gfx::win32::CloseWindow(hwnd, "test window") == true);
+  CHECK(windowRect.right - windowRect.left == 200); // NOLINT
+  CHECK(windowRect.bottom - windowRect.top == 100); // NOLINT
+  CHECK(illuminate::gfx::win32::SetFullscreenMode(hwnd) == true); // NOLINT
+  CHECK(illuminate::gfx::win32::SetBackToWindowMode(hwnd, windowRect) == true); // NOLINT
+  CHECK(illuminate::gfx::win32::CloseWindow(hwnd, "test window") == true); // NOLINT
 }
-TEST_CASE("win32 window class") {
+TEST_CASE("win32 window class") { // NOLINT
   illuminate::gfx::win32::Window window;
   REQUIRE(window.Init("hello", 100, 200));
   window.AddCallback([&]([[maybe_unused]]HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) { loginfo("hello from callback msg:{0:x} wParam:{0:x} lParam:{0:x}", msg, wParam, lParam); return false; });
