@@ -903,6 +903,18 @@ static auto MergeRenamedBufferDuplicativeBufferIds(const vector<BufferId>& buffe
   }
   return std::move(renamed_buffers);
 }
+static auto CalculateNewPassIndexAfterUnusedPassRemoval(const uint32_t pass_num, const unordered_set<uint32_t>& used_render_pass_list, std::pmr::memory_resource* memory_resource) {
+  unordered_map<uint32_t, uint32_t> new_render_pass_index_list{memory_resource};
+  uint32_t new_pass_index = 0;
+  for (uint32_t original_pass_index = 0; original_pass_index < pass_num; original_pass_index++) {
+    if (!used_render_pass_list.contains(original_pass_index)) continue;
+    if (original_pass_index != new_pass_index) {
+      new_render_pass_index_list.insert_or_assign(original_pass_index, new_pass_index);
+    }
+    new_pass_index++;
+  }
+  return new_render_pass_index_list;
+}
 void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resource* memory_resource_work) {
   render_pass_num_ = config.GetRenderPassNum();
   std::tie(buffer_id_list_, render_pass_buffer_id_list_, render_pass_buffer_state_flag_list_) = InitBufferIdList(render_pass_num_, config.GetRenderPassBufferStateList(), memory_resource_);
@@ -1004,8 +1016,8 @@ std::array<std::byte, buffer_offset_in_bytes_work + buffer_size_in_bytes_work> b
 #endif
 #include "doctest/doctest.h"
 TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - single pass") { // NOLINT
-  using namespace illuminate; // NOLINT // NOLINT
-  using namespace illuminate::gfx; // NOLINT // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
@@ -1017,8 +1029,8 @@ TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - single pass") { // NOLI
   CHECK(node_distance_map.at(0).at(0) == 0); // NOLINT
 }
 TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - two pass (graphics only)") { // NOLINT
-  using namespace illuminate; // NOLINT // NOLINT
-  using namespace illuminate::gfx; // NOLINT // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
@@ -1051,8 +1063,8 @@ TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - two pass (graphics only
   CHECK(node_distance_map.at(1).at(1) == 0); // NOLINT
 }
 TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - two independent pass (graphics+compute)") { // NOLINT
-  using namespace illuminate; // NOLINT // NOLINT
-  using namespace illuminate::gfx; // NOLINT // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
@@ -1069,8 +1081,8 @@ TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - two independent pass (g
   CHECK(node_distance_map.at(1).at(1) == 0); // NOLINT
 }
 TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphics->compute)") { // NOLINT
-  using namespace illuminate; // NOLINT // NOLINT
-  using namespace illuminate::gfx; // NOLINT // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
@@ -1097,8 +1109,8 @@ TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphic
   CHECK(node_distance_map.at(1).at(1) == 0); // NOLINT
 }
 TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphics->compute(+graphics))") { // NOLINT
-  using namespace illuminate; // NOLINT // NOLINT
-  using namespace illuminate::gfx; // NOLINT // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
@@ -1134,8 +1146,8 @@ TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphic
   CHECK(node_distance_map.at(2).at(2) == 0); // NOLINT
 }
 TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphics+compute->graphics)") { // NOLINT
-  using namespace illuminate; // NOLINT // NOLINT
-  using namespace illuminate::gfx; // NOLINT // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
@@ -1171,8 +1183,8 @@ TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphic
   CHECK(node_distance_map.at(2).at(2) == 0); // NOLINT
 }
 TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphics+compute->graphics+compute)") { // NOLINT
-  using namespace illuminate; // NOLINT // NOLINT
-  using namespace illuminate::gfx; // NOLINT // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
@@ -1240,8 +1252,8 @@ TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - dependent pass (graphic
   CHECK(node_distance_map.at(4).at(4) == 0); // NOLINT
 }
 TEST_CASE("ConfigureInterPassDependency") { // NOLINT
-  using namespace illuminate; // NOLINT // NOLINT
-  using namespace illuminate::gfx; // NOLINT // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
@@ -1261,8 +1273,8 @@ TEST_CASE("ConfigureInterPassDependency") { // NOLINT
   CHECK(inter_queue_pass_dependency.at(1).contains(0)); // NOLINT
 }
 TEST_CASE("ConfigureInterPassDependency - multiple buffers") { // NOLINT
-  using namespace illuminate; // NOLINT // NOLINT
-  using namespace illuminate::gfx; // NOLINT // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
@@ -1289,8 +1301,8 @@ TEST_CASE("ConfigureInterPassDependency - multiple buffers") { // NOLINT
   CHECK(inter_queue_pass_dependency.at(2).contains(0)); // NOLINT
 }
 TEST_CASE("ConfigureInterPassDependency - remove processed dependency from ancestor pass") { // NOLINT
-  using namespace illuminate; // NOLINT // NOLINT
-  using namespace illuminate::gfx; // NOLINT // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
@@ -1310,8 +1322,8 @@ TEST_CASE("ConfigureInterPassDependency - remove processed dependency from ances
   CHECK(inter_queue_pass_dependency.at(1).contains(0)); // NOLINT
 }
 TEST_CASE("ConfigureInterPassDependency - remove processed dependency from ancestor pass with multiple buffers") { // NOLINT
-  using namespace illuminate; // NOLINT // NOLINT
-  using namespace illuminate::gfx; // NOLINT // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
@@ -1337,8 +1349,8 @@ TEST_CASE("ConfigureInterPassDependency - remove processed dependency from ances
   CHECK(!inter_queue_pass_dependency.contains(2)); // NOLINT
 }
 TEST_CASE("ConfigureInterPassDependency - remove processed dependency from ancestor pass with different queue type") { // NOLINT
-  using namespace illuminate; // NOLINT // NOLINT
-  using namespace illuminate::gfx; // NOLINT // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
@@ -1378,8 +1390,8 @@ TEST_CASE("ConfigureInterPassDependency - remove processed dependency from ances
   CHECK(!inter_queue_pass_dependency.contains(4)); // NOLINT
 }
 TEST_CASE("ConfigureInterPassDependency - 3 queue test") { // NOLINT
-  using namespace illuminate; // NOLINT // NOLINT
-  using namespace illuminate::gfx; // NOLINT // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
@@ -1406,8 +1418,8 @@ TEST_CASE("ConfigureInterPassDependency - 3 queue test") { // NOLINT
   CHECK(inter_queue_pass_dependency.at(2).contains(0)); // NOLINT
 }
 TEST_CASE("ConfigureInterPassDependency - dependent on multiple queue") { // NOLINT
-  using namespace illuminate; // NOLINT // NOLINT
-  using namespace illuminate::gfx; // NOLINT // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
@@ -1432,8 +1444,8 @@ TEST_CASE("ConfigureInterPassDependency - dependent on multiple queue") { // NOL
   CHECK(inter_queue_pass_dependency.at(2).contains(1)); // NOLINT
 }
 TEST_CASE("ConfigureInterPassDependency - dependent on single queue") { // NOLINT
-  using namespace illuminate; // NOLINT // NOLINT
-  using namespace illuminate::gfx; // NOLINT // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
@@ -1460,8 +1472,8 @@ TEST_CASE("ConfigureInterPassDependency - dependent on single queue") { // NOLIN
   CHECK(inter_queue_pass_dependency.at(2).contains(1)); // NOLINT
 }
 TEST_CASE("ConfigureInterPassDependency - remove same queue dependency") { // NOLINT
-  using namespace illuminate; // NOLINT // NOLINT
-  using namespace illuminate::gfx; // NOLINT // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
@@ -1478,8 +1490,8 @@ TEST_CASE("ConfigureInterPassDependency - remove same queue dependency") { // NO
   CHECK(inter_queue_pass_dependency.empty()); // NOLINT
 }
 TEST_CASE("barrier for load from srv") { // NOLINT
-  using namespace illuminate; // NOLINT // NOLINT
-  using namespace illuminate::gfx; // NOLINT // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_scene(&buffer[buffer_offset_in_bytes_scene], buffer_size_in_bytes_scene);
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   RenderGraphConfig render_graph_config(&memory_resource_scene);
@@ -1590,8 +1602,8 @@ TEST_CASE("barrier for load from srv") { // NOLINT
   CHECK(std::get<BarrierTransition>(barriers_postpass[1][1].params).state_after  == kBufferStateFlagPresent); // NOLINT
 }
 TEST_CASE("barrier for use compute queue") { // NOLINT
-  using namespace illuminate; // NOLINT // NOLINT
-  using namespace illuminate::gfx; // NOLINT // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_scene(&buffer[buffer_offset_in_bytes_scene], buffer_size_in_bytes_scene);
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   RenderGraphConfig render_graph_config(&memory_resource_scene);
@@ -1643,9 +1655,9 @@ TEST_CASE("barrier for use compute queue") { // NOLINT
   CHECK(queue_signals.at(1).contains(0)); // NOLINT
 }
 TEST_CASE("buffer reuse") { // NOLINT
-  using namespace illuminate; // NOLINT // NOLINT
+  using namespace illuminate; // NOLINT
   using namespace illuminate::core; // NOLINT
-  using namespace illuminate::gfx; // NOLINT // NOLINT
+  using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_scene(&buffer[buffer_offset_in_bytes_scene], buffer_size_in_bytes_scene);
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   RenderGraphConfig render_graph_config(&memory_resource_scene);
@@ -1849,9 +1861,9 @@ TEST_CASE("buffer reuse") { // NOLINT
   CHECK(std::get<BarrierTransition>(barriers_postpass[3][2].params).state_after  == kBufferStateFlagPresent); // NOLINT
 }
 TEST_CASE("memory aliasing") { // NOLINT
-  using namespace illuminate; // NOLINT // NOLINT
+  using namespace illuminate; // NOLINT
   using namespace illuminate::core; // NOLINT
-  using namespace illuminate::gfx; // NOLINT // NOLINT
+  using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<vector<BufferId>> render_pass_buffer_id_list{&memory_resource_work};
   render_pass_buffer_id_list.push_back(vector<BufferId>{&memory_resource_work});
@@ -1983,9 +1995,9 @@ TEST_CASE("memory aliasing") { // NOLINT
   CHECK(render_pass_after_memory_aliasing_list.at(4)[0] == 4); // NOLINT
 }
 TEST_CASE("ConfigureBufferValidPassList w/async compute") { // NOLINT
-  using namespace illuminate; // NOLINT // NOLINT
+  using namespace illuminate; // NOLINT
   using namespace illuminate::core; // NOLINT
-  using namespace illuminate::gfx; // NOLINT // NOLINT
+  using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<vector<BufferId>> render_pass_buffer_id_list{&memory_resource_work};
   render_pass_buffer_id_list.push_back(vector<BufferId>{&memory_resource_work});
@@ -2483,9 +2495,9 @@ TEST_CASE("ConfigureBufferValidPassList w/async compute") { // NOLINT
   }
 }
 TEST_CASE("buffer allocation address calc") { // NOLINT
-  using namespace illuminate; // NOLINT // NOLINT
+  using namespace illuminate; // NOLINT
   using namespace illuminate::core; // NOLINT
-  using namespace illuminate::gfx; // NOLINT // NOLINT
+  using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   vector<uint32_t> used_range_start{&memory_resource_work};
   vector<uint32_t> used_range_end{&memory_resource_work};
@@ -2561,9 +2573,116 @@ TEST_CASE("buffer allocation address calc") { // NOLINT
   CHECK(used_range_end[1] == 12); // NOLINT
   CHECK(used_range_end[2] == 17); // NOLINT
 }
+#if 0
+TEST_CASE("pass culling") { // NOLINT
+  // TODO
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::core; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
+  unordered_set<StrId> required_buffers{&memory_resource_work};
+  required_buffers.insert(StrId("swapchain"));
+  auto unused_render_pass_list = CullUnusedRenderPass();
+  required_buffers.clear();
+  required_buffers.insert(StrId("debug"));
+  CullRequiredRenderPass();
+  required_buffers.clear();
+  required_buffers.insert(StrId("swapchain"));
+  required_buffers.insert(StrId("debug"));
+  CullRequiredRenderPass();
+}
+#endif
+TEST_CASE("CalculateNewPassIndexAfterUnusedPassRemoval") { // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::core; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
+  uint32_t render_pass_num = 5;
+  unordered_set<uint32_t> used_render_pass_list{&memory_resource_work};
+  used_render_pass_list.insert(0);
+  used_render_pass_list.insert(2);
+  used_render_pass_list.insert(3);
+  used_render_pass_list.insert(4);
+  auto new_render_pass_index_list = CalculateNewPassIndexAfterUnusedPassRemoval(render_pass_num, used_render_pass_list, &memory_resource_work);
+  CHECK(new_render_pass_index_list.size() == 3); // NOLINT
+  CHECK(!new_render_pass_index_list.contains(0)); // NOLINT
+  CHECK(!new_render_pass_index_list.contains(1)); // NOLINT
+  CHECK(new_render_pass_index_list.at(2) == 1); // NOLINT
+  CHECK(new_render_pass_index_list.at(3) == 2); // NOLINT
+  CHECK(new_render_pass_index_list.at(4) == 3); // NOLINT
+  used_render_pass_list.clear();
+  used_render_pass_list.insert(1);
+  used_render_pass_list.insert(2);
+  used_render_pass_list.insert(3);
+  used_render_pass_list.insert(4);
+  new_render_pass_index_list = CalculateNewPassIndexAfterUnusedPassRemoval(render_pass_num, used_render_pass_list, &memory_resource_work);
+  CHECK(new_render_pass_index_list.size() == 4); // NOLINT
+  CHECK(!new_render_pass_index_list.contains(0)); // NOLINT
+  CHECK(new_render_pass_index_list.at(1) == 0); // NOLINT
+  CHECK(new_render_pass_index_list.at(2) == 1); // NOLINT
+  CHECK(new_render_pass_index_list.at(3) == 2); // NOLINT
+  CHECK(new_render_pass_index_list.at(4) == 3); // NOLINT
+  used_render_pass_list.clear();
+  used_render_pass_list.insert(0);
+  used_render_pass_list.insert(1);
+  used_render_pass_list.insert(2);
+  used_render_pass_list.insert(3);
+  new_render_pass_index_list = CalculateNewPassIndexAfterUnusedPassRemoval(render_pass_num, used_render_pass_list, &memory_resource_work);
+  CHECK(new_render_pass_index_list.empty()); // NOLINT
+  used_render_pass_list.clear();
+  used_render_pass_list.insert(2);
+  used_render_pass_list.insert(3);
+  used_render_pass_list.insert(4);
+  new_render_pass_index_list = CalculateNewPassIndexAfterUnusedPassRemoval(render_pass_num, used_render_pass_list, &memory_resource_work);
+  CHECK(new_render_pass_index_list.size() == 3); // NOLINT
+  CHECK(!new_render_pass_index_list.contains(0)); // NOLINT
+  CHECK(!new_render_pass_index_list.contains(1)); // NOLINT
+  CHECK(new_render_pass_index_list.at(2) == 0); // NOLINT
+  CHECK(new_render_pass_index_list.at(3) == 1); // NOLINT
+  CHECK(new_render_pass_index_list.at(4) == 2); // NOLINT
+  used_render_pass_list.clear();
+  used_render_pass_list.insert(1);
+  used_render_pass_list.insert(2);
+  used_render_pass_list.insert(4);
+  new_render_pass_index_list = CalculateNewPassIndexAfterUnusedPassRemoval(render_pass_num, used_render_pass_list, &memory_resource_work);
+  CHECK(new_render_pass_index_list.size() == 3); // NOLINT
+  CHECK(!new_render_pass_index_list.contains(0)); // NOLINT
+  CHECK(new_render_pass_index_list.at(1) == 0); // NOLINT
+  CHECK(new_render_pass_index_list.at(2) == 1); // NOLINT
+  CHECK(!new_render_pass_index_list.contains(3)); // NOLINT
+  CHECK(new_render_pass_index_list.at(4) == 2); // NOLINT
+  used_render_pass_list.clear();
+  used_render_pass_list.insert(1);
+  used_render_pass_list.insert(2);
+  used_render_pass_list.insert(3);
+  new_render_pass_index_list = CalculateNewPassIndexAfterUnusedPassRemoval(render_pass_num, used_render_pass_list, &memory_resource_work);
+  CHECK(new_render_pass_index_list.size() == 3); // NOLINT
+  CHECK(!new_render_pass_index_list.contains(0)); // NOLINT
+  CHECK(new_render_pass_index_list.at(1) == 0); // NOLINT
+  CHECK(new_render_pass_index_list.at(2) == 1); // NOLINT
+  CHECK(new_render_pass_index_list.at(3) == 2); // NOLINT
+  CHECK(!new_render_pass_index_list.contains(4)); // NOLINT
+  used_render_pass_list.clear();
+  used_render_pass_list.insert(0);
+  used_render_pass_list.insert(2);
+  used_render_pass_list.insert(4);
+  new_render_pass_index_list = CalculateNewPassIndexAfterUnusedPassRemoval(render_pass_num, used_render_pass_list, &memory_resource_work);
+  CHECK(new_render_pass_index_list.size() == 2); // NOLINT
+  CHECK(!new_render_pass_index_list.contains(0)); // NOLINT
+  CHECK(!new_render_pass_index_list.contains(1)); // NOLINT
+  CHECK(new_render_pass_index_list.at(2) == 1); // NOLINT
+  CHECK(!new_render_pass_index_list.contains(3)); // NOLINT
+  CHECK(new_render_pass_index_list.at(4) == 2); // NOLINT
+  used_render_pass_list.clear();
+  used_render_pass_list.insert(0);
+  used_render_pass_list.insert(1);
+  used_render_pass_list.insert(2);
+  used_render_pass_list.insert(3);
+  used_render_pass_list.insert(4);
+  new_render_pass_index_list = CalculateNewPassIndexAfterUnusedPassRemoval(render_pass_num, used_render_pass_list, &memory_resource_work);
+  CHECK(new_render_pass_index_list.empty()); // NOLINT
+}
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
 #endif
-// TODO(jimbi): pass culling
-// TODO(jimbi): implement function to flatten buffer_user_pass_list
