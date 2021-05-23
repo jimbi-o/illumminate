@@ -31,6 +31,20 @@ constexpr auto IsReadOnlyBuffer(const BufferStateFlags& state, const ReadWriteFl
   if ((state & kBufferStateFlagPresent) == 0) { return true; }
   return false;
 }
+constexpr auto IsBufferInWritableState(const BufferStateFlags& state) {
+  if ((state & kBufferStateWriteFlag) != 0) { return true; }
+  if ((state & kBufferStateFlagRtv) != 0) { return true; }
+  if ((state & kBufferStateFlagCopyDst) != 0) { return true; }
+  return false;
+}
+constexpr auto IsBufferInReadableState(const BufferStateFlags& state) {
+  if ((state & kBufferStateReadFlag) != 0) { return true; }
+  if ((state & kBufferStateFlagCbvUpload) != 0) { return true; }
+  if ((state & kBufferStateFlagSrvPsOnly) != 0) { return true; }
+  if ((state & kBufferStateFlagSrvNonPs) != 0) { return true; }
+  if ((state & kBufferStateFlagCopySrc) != 0) { return true; }
+  return false;
+}
 static auto InitBufferIdList(const uint32_t pass_num, const RenderPassBufferStateList& render_pass_buffer_state_list, std::pmr::memory_resource* memory_resource) {
   vector<BufferId> buffer_id_list{memory_resource};
   vector<vector<BufferId>> render_pass_buffer_id_list{memory_resource};
@@ -907,13 +921,47 @@ static auto CalculateNewPassIndexAfterUnusedPassRemoval(const uint32_t pass_num,
   unordered_map<uint32_t, uint32_t> new_render_pass_index_list{memory_resource};
   uint32_t new_pass_index = 0;
   for (uint32_t original_pass_index = 0; original_pass_index < pass_num; original_pass_index++) {
-    if (!used_render_pass_list.contains(original_pass_index)) continue;
+    if (!used_render_pass_list.contains(original_pass_index)) { continue; }
     if (original_pass_index != new_pass_index) {
       new_render_pass_index_list.insert_or_assign(original_pass_index, new_pass_index);
     }
     new_pass_index++;
   }
   return new_render_pass_index_list;
+}
+static auto CullUsedRenderPass(const unordered_map<BufferId, vector<BufferStateFlags>>& buffer_state_list, const unordered_map<BufferId, vector<vector<uint32_t>>>& buffer_user_pass_list, const vector<vector<BufferId>>& render_pass_buffer_id_list, const vector<vector<BufferStateFlags>>& render_pass_buffer_state_flag_list, unordered_set<BufferId>&& required_buffers, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
+  unordered_set<uint32_t> used_pass_list{memory_resource};
+  unordered_set<BufferId> used_buffer_list{memory_resource};
+  unordered_set<uint32_t> required_pass_list{memory_resource_work};
+  while (!required_buffers.empty()) {
+    const auto required_buffer = *required_buffers.begin();
+    required_buffers.erase(required_buffer);
+    used_buffer_list.insert(required_buffer);
+    const auto& required_buffer_state_list = buffer_state_list.at(required_buffer);
+    const auto& producer_pass_cands = buffer_user_pass_list.at(required_buffer);
+    const auto state_num = static_cast<uint32_t>(required_buffer_state_list.size());
+    for (uint32_t state_index = 0; state_index < state_num; state_index++) {
+      if (IsBufferInWritableState(required_buffer_state_list[state_index])) {
+        for (const auto& producer_cand : producer_pass_cands[state_index]) {
+          required_pass_list.insert(producer_cand);
+        }
+      }
+    }
+    while (!required_pass_list.empty()) {
+      const auto required_pass = *required_pass_list.begin();
+      required_pass_list.erase(required_pass);
+      used_pass_list.insert(required_pass);
+      const auto& consumed_buffer_state_list = render_pass_buffer_state_flag_list[required_pass];
+      const auto& consumed_buffer_cands = render_pass_buffer_id_list[required_pass];
+      const auto buffer_num = static_cast<uint32_t>(consumed_buffer_cands.size());
+      for (uint32_t buffer_index = 0; buffer_index < buffer_num; buffer_index++) {
+        if (IsBufferInReadableState(consumed_buffer_state_list[buffer_index])) {
+          required_buffers.insert(consumed_buffer_cands[buffer_index]);
+        }
+      }
+    }
+  }
+  return std::make_tuple(used_pass_list, used_buffer_list);
 }
 void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resource* memory_resource_work) {
   render_pass_num_ = config.GetRenderPassNum();
@@ -995,6 +1043,25 @@ static auto CreateBufferStateListBasedOnBufferUserListForTest(const unordered_ma
 }
 static auto GetBufferSizeAndAlignmentImpl([[maybe_unused]]const illuminate::gfx::BufferConfig& config) {
   return std::make_tuple(16U, 8U); // NOLINT(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
+}
+static auto CreateRenderPassBufferInfoForTest(const unordered_map<BufferId, vector<BufferStateFlags>>& buffer_state_list, const unordered_map<BufferId, vector<vector<uint32_t>>>& buffer_user_pass_list, std::pmr::memory_resource* memory_resource) {
+  vector<vector<BufferId>> render_pass_buffer_id_list{memory_resource};
+  vector<vector<BufferStateFlags>> render_pass_buffer_state_flag_list{memory_resource};
+  for (const auto& [buffer_id, buffer_states] : buffer_state_list) {
+    const auto& user_pass_list = buffer_user_pass_list.at(buffer_id);
+    const auto buffer_num = static_cast<uint32_t>(user_pass_list.size());
+    for (uint32_t buffer_index = 0; buffer_index < buffer_num; buffer_index++) {
+      for (const auto& pass_index : user_pass_list[buffer_index]) {
+        while (render_pass_buffer_id_list.size() <= pass_index) {
+          render_pass_buffer_id_list.push_back(vector<BufferId>{memory_resource});
+          render_pass_buffer_state_flag_list.push_back(vector<BufferStateFlags>{memory_resource});
+        }
+        render_pass_buffer_id_list[pass_index].push_back(buffer_id);
+        render_pass_buffer_state_flag_list[pass_index].push_back(buffer_states[buffer_index]);
+      }
+    }
+  }
+  return std::make_tuple(render_pass_buffer_id_list, render_pass_buffer_state_flag_list);
 }
 #endif
 } // namespace illuminate::gfx
@@ -2573,25 +2640,154 @@ TEST_CASE("buffer allocation address calc") { // NOLINT
   CHECK(used_range_end[1] == 12); // NOLINT
   CHECK(used_range_end[2] == 17); // NOLINT
 }
-#if 0
 TEST_CASE("pass culling") { // NOLINT
-  // TODO
   using namespace illuminate; // NOLINT
   using namespace illuminate::core; // NOLINT
   using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
-  unordered_set<StrId> required_buffers{&memory_resource_work};
-  required_buffers.insert(StrId("swapchain"));
-  auto unused_render_pass_list = CullUnusedRenderPass();
+  unordered_map<BufferId, vector<BufferStateFlags>> buffer_state_list{&memory_resource_work};
+  unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
+  unordered_set<BufferId> required_buffers{&memory_resource_work};
+  BufferId buffer_id = 0;
+  buffer_state_list.insert_or_assign(buffer_id, vector<BufferStateFlags>{&memory_resource_work});
+  buffer_user_pass_list.insert_or_assign(buffer_id, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_state_list.at(buffer_id).push_back(kBufferStateFlagRtv);
+  buffer_user_pass_list.at(buffer_id).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(buffer_id).back().push_back(0);
+  buffer_state_list.at(buffer_id).push_back(kBufferStateFlagSrvPsOnly);
+  buffer_user_pass_list.at(buffer_id).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(buffer_id).back().push_back(2);
+  buffer_id = 1;
+  buffer_state_list.insert_or_assign(buffer_id, vector<BufferStateFlags>{&memory_resource_work});
+  buffer_user_pass_list.insert_or_assign(buffer_id, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_state_list.at(buffer_id).push_back(kBufferStateFlagRtv);
+  buffer_user_pass_list.at(buffer_id).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(buffer_id).back().push_back(1);
+  buffer_state_list.at(buffer_id).push_back(kBufferStateFlagSrvPsOnly);
+  buffer_user_pass_list.at(buffer_id).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(buffer_id).back().push_back(2);
+  buffer_id = 2;
+  buffer_state_list.insert_or_assign(buffer_id, vector<BufferStateFlags>{&memory_resource_work});
+  buffer_user_pass_list.insert_or_assign(buffer_id, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_state_list.at(buffer_id).push_back(kBufferStateFlagRtv);
+  buffer_user_pass_list.at(buffer_id).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(buffer_id).back().push_back(2);
+  auto [render_pass_buffer_id_list, render_pass_buffer_state_flag_list] = CreateRenderPassBufferInfoForTest(buffer_state_list, buffer_user_pass_list, &memory_resource_work);
+  required_buffers.insert(0);
+  auto [used_pass_list, used_buffer_list] = CullUsedRenderPass(buffer_state_list, buffer_user_pass_list, render_pass_buffer_id_list, render_pass_buffer_state_flag_list, std::move(required_buffers), &memory_resource_work, &memory_resource_work);
+  CHECK(used_pass_list.size() == 1); // NOLINT
+  CHECK(used_pass_list.contains(0)); // NOLINT
+  CHECK(!used_pass_list.contains(1)); // NOLINT
+  CHECK(!used_pass_list.contains(2)); // NOLINT
+  CHECK(used_buffer_list.size() == 1); // NOLINT
+  CHECK(used_buffer_list.contains(0)); // NOLINT
+  CHECK(!used_buffer_list.contains(1)); // NOLINT
+  CHECK(!used_buffer_list.contains(2)); // NOLINT
   required_buffers.clear();
-  required_buffers.insert(StrId("debug"));
-  CullRequiredRenderPass();
+  required_buffers.insert(1);
+  std::tie(used_pass_list, used_buffer_list) = CullUsedRenderPass(buffer_state_list, buffer_user_pass_list, render_pass_buffer_id_list, render_pass_buffer_state_flag_list, std::move(required_buffers), &memory_resource_work, &memory_resource_work);
+  CHECK(used_pass_list.size() == 1); // NOLINT
+  CHECK(!used_pass_list.contains(0)); // NOLINT
+  CHECK(used_pass_list.contains(1)); // NOLINT
+  CHECK(!used_pass_list.contains(2)); // NOLINT
+  CHECK(used_buffer_list.size() == 1); // NOLINT
+  CHECK(!used_buffer_list.contains(0)); // NOLINT
+  CHECK(used_buffer_list.contains(1)); // NOLINT
+  CHECK(!used_buffer_list.contains(2)); // NOLINT
   required_buffers.clear();
-  required_buffers.insert(StrId("swapchain"));
-  required_buffers.insert(StrId("debug"));
-  CullRequiredRenderPass();
+  required_buffers.insert(2);
+  std::tie(used_pass_list, used_buffer_list) = CullUsedRenderPass(buffer_state_list, buffer_user_pass_list, render_pass_buffer_id_list, render_pass_buffer_state_flag_list, std::move(required_buffers), &memory_resource_work, &memory_resource_work);
+  CHECK(used_pass_list.size() == 3); // NOLINT
+  CHECK(used_pass_list.contains(0)); // NOLINT
+  CHECK(used_pass_list.contains(1)); // NOLINT
+  CHECK(used_pass_list.contains(2)); // NOLINT
+  CHECK(used_buffer_list.size() == 3); // NOLINT
+  CHECK(used_buffer_list.contains(0)); // NOLINT
+  CHECK(used_buffer_list.contains(1)); // NOLINT
+  CHECK(used_buffer_list.contains(2)); // NOLINT
+  buffer_id = 2;
+  buffer_state_list.at(buffer_id).push_back(kBufferStateFlagSrvPsOnly);
+  buffer_user_pass_list.at(buffer_id).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(buffer_id).back().push_back(4);
+  buffer_id = 3;
+  buffer_state_list.insert_or_assign(buffer_id, vector<BufferStateFlags>{&memory_resource_work});
+  buffer_user_pass_list.insert_or_assign(buffer_id, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_state_list.at(buffer_id).push_back(kBufferStateFlagRtv);
+  buffer_user_pass_list.at(buffer_id).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(buffer_id).back().push_back(3);
+  buffer_state_list.at(buffer_id).push_back(kBufferStateFlagSrvPsOnly);
+  buffer_user_pass_list.at(buffer_id).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(buffer_id).back().push_back(4);
+  buffer_id = 4;
+  buffer_state_list.insert_or_assign(buffer_id, vector<BufferStateFlags>{&memory_resource_work});
+  buffer_user_pass_list.insert_or_assign(buffer_id, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_state_list.at(buffer_id).push_back(kBufferStateFlagRtv);
+  buffer_user_pass_list.at(buffer_id).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(buffer_id).back().push_back(4);
+  required_buffers.clear();
+  required_buffers.insert(4);
+  std::tie(render_pass_buffer_id_list, render_pass_buffer_state_flag_list) = CreateRenderPassBufferInfoForTest(buffer_state_list, buffer_user_pass_list, &memory_resource_work);
+  std::tie(used_pass_list, used_buffer_list) = CullUsedRenderPass(buffer_state_list, buffer_user_pass_list, render_pass_buffer_id_list, render_pass_buffer_state_flag_list, std::move(required_buffers), &memory_resource_work, &memory_resource_work);
+  CHECK(used_pass_list.size() == 5); // NOLINT
+  CHECK(used_pass_list.contains(0)); // NOLINT
+  CHECK(used_pass_list.contains(1)); // NOLINT
+  CHECK(used_pass_list.contains(2)); // NOLINT
+  CHECK(used_pass_list.contains(3)); // NOLINT
+  CHECK(used_pass_list.contains(4)); // NOLINT
+  CHECK(used_buffer_list.size() == 5); // NOLINT
+  CHECK(used_buffer_list.contains(0)); // NOLINT
+  CHECK(used_buffer_list.contains(1)); // NOLINT
+  CHECK(used_buffer_list.contains(2)); // NOLINT
+  CHECK(used_buffer_list.contains(3)); // NOLINT
+  CHECK(used_buffer_list.contains(4)); // NOLINT
+  buffer_id = 3;
+  buffer_state_list.at(buffer_id).push_back(kBufferStateFlagSrvPsOnly);
+  buffer_user_pass_list.at(buffer_id).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(buffer_id).back().push_back(5);
+  buffer_id = 5;
+  buffer_state_list.insert_or_assign(buffer_id, vector<BufferStateFlags>{&memory_resource_work});
+  buffer_user_pass_list.insert_or_assign(buffer_id, vector<vector<uint32_t>>{&memory_resource_work});
+  buffer_state_list.at(buffer_id).push_back(kBufferStateFlagRtv);
+  buffer_user_pass_list.at(buffer_id).push_back(vector<uint32_t>{&memory_resource_work});
+  buffer_user_pass_list.at(buffer_id).back().push_back(5);
+  required_buffers.clear();
+  required_buffers.insert(2);
+  required_buffers.insert(5);
+  std::tie(render_pass_buffer_id_list, render_pass_buffer_state_flag_list) = CreateRenderPassBufferInfoForTest(buffer_state_list, buffer_user_pass_list, &memory_resource_work);
+  std::tie(used_pass_list, used_buffer_list) = CullUsedRenderPass(buffer_state_list, buffer_user_pass_list, render_pass_buffer_id_list, render_pass_buffer_state_flag_list, std::move(required_buffers), &memory_resource_work, &memory_resource_work);
+  CHECK(used_pass_list.size() == 5); // NOLINT
+  CHECK(used_pass_list.contains(0)); // NOLINT
+  CHECK(used_pass_list.contains(1)); // NOLINT
+  CHECK(used_pass_list.contains(2)); // NOLINT
+  CHECK(used_pass_list.contains(3)); // NOLINT
+  CHECK(!used_pass_list.contains(4)); // NOLINT
+  CHECK(used_pass_list.contains(5)); // NOLINT
+  CHECK(used_buffer_list.size() == 5); // NOLINT
+  CHECK(used_buffer_list.contains(0)); // NOLINT
+  CHECK(used_buffer_list.contains(1)); // NOLINT
+  CHECK(used_buffer_list.contains(2)); // NOLINT
+  CHECK(used_buffer_list.contains(3)); // NOLINT
+  CHECK(!used_buffer_list.contains(4)); // NOLINT
+  CHECK(used_buffer_list.contains(5)); // NOLINT
+  required_buffers.clear();
+  required_buffers.insert(4);
+  required_buffers.insert(5);
+  std::tie(used_pass_list, used_buffer_list) = CullUsedRenderPass(buffer_state_list, buffer_user_pass_list, render_pass_buffer_id_list, render_pass_buffer_state_flag_list, std::move(required_buffers), &memory_resource_work, &memory_resource_work);
+  CHECK(used_pass_list.size() == 6); // NOLINT
+  CHECK(used_pass_list.contains(0)); // NOLINT
+  CHECK(used_pass_list.contains(1)); // NOLINT
+  CHECK(used_pass_list.contains(2)); // NOLINT
+  CHECK(used_pass_list.contains(3)); // NOLINT
+  CHECK(used_pass_list.contains(4)); // NOLINT
+  CHECK(used_pass_list.contains(5)); // NOLINT
+  CHECK(used_buffer_list.size() == 6); // NOLINT
+  CHECK(used_buffer_list.contains(0)); // NOLINT
+  CHECK(used_buffer_list.contains(1)); // NOLINT
+  CHECK(used_buffer_list.contains(2)); // NOLINT
+  CHECK(used_buffer_list.contains(3)); // NOLINT
+  CHECK(used_buffer_list.contains(4)); // NOLINT
+  CHECK(used_buffer_list.contains(5)); // NOLINT
 }
-#endif
 TEST_CASE("CalculateNewPassIndexAfterUnusedPassRemoval") { // NOLINT
   using namespace illuminate; // NOLINT
   using namespace illuminate::core; // NOLINT
