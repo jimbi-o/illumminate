@@ -1006,12 +1006,15 @@ static auto UpdateBufferStateInfoWithNewPassIndex(const unordered_set<uint32_t>&
       }
     }
   }
-  auto it = buffer_user_pass_list.begin();
-  while (it != buffer_user_pass_list.end()) {
-    if (it->second.empty()) {
-      it = buffer_user_pass_list.erase(it);
+  auto user_it = buffer_user_pass_list.begin();
+  auto state_it = buffer_state_list.begin();
+  while (user_it != buffer_user_pass_list.end()) {
+    if (user_it->second.empty()) {
+      user_it = buffer_user_pass_list.erase(user_it);
+      state_it = buffer_state_list.erase(state_it);
     } else {
-      it++;
+      user_it++;
+      state_it++;
     }
   }
   return std::make_tuple(std::move(buffer_state_list), std::move(buffer_user_pass_list));
