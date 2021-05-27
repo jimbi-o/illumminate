@@ -961,7 +961,6 @@ static auto ConfigureBufferAddressOffset(const uint32_t pass_num, const vector<u
             memory_reusable_buffer_start_addr_list[reusable_buffer_index] = addr + buffer_size;
           } else {
             if (addr + buffer_size < expired_region_end) {
-              // TODO add test
               auto region_end = memory_reusable_buffer_end_addr_list[reusable_buffer_index];
               logtrace("mem reuse start,end end-update {} -> {}", memory_reusable_buffer_end_addr_list[reusable_buffer_index], addr);
               logtrace("mem reuse start,end region-added start:{} end{}", addr + buffer_size, region_end);
@@ -2894,6 +2893,86 @@ TEST_CASE("memory aliasing with multiple buffers") { // NOLINT
   CHECK(render_pass_after_memory_aliasing_list.at(4).size() == 1); // NOLINT
   CHECK(render_pass_after_memory_aliasing_list.at(4)[0] == 5); // NOLINT
 }
+TEST_CASE("memory aliasing in middle of proceding buffer") { // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::core; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
+  const uint32_t render_pass_num = 3;
+  vector<unordered_set<BufferId>> concurrent_buffer_list{&memory_resource_work};
+  concurrent_buffer_list.reserve(render_pass_num);
+  concurrent_buffer_list.push_back(unordered_set<BufferId>{&memory_resource_work}); // pass0
+  concurrent_buffer_list.push_back(unordered_set<BufferId>{&memory_resource_work}); // pass1
+  concurrent_buffer_list.push_back(unordered_set<BufferId>{&memory_resource_work}); // pass2
+  vector<vector<uint32_t>> render_pass_new_buffer_list{&memory_resource_work};
+  render_pass_new_buffer_list.reserve(render_pass_num);
+  render_pass_new_buffer_list.push_back(vector<uint32_t>{&memory_resource_work}); // pass0
+  render_pass_new_buffer_list.back().push_back(0);
+  render_pass_new_buffer_list.back().push_back(1);
+  render_pass_new_buffer_list.push_back(vector<uint32_t>{&memory_resource_work}); // pass1
+  render_pass_new_buffer_list.back().push_back(2);
+  render_pass_new_buffer_list.push_back(vector<uint32_t>{&memory_resource_work}); // pass2
+  render_pass_new_buffer_list.back().push_back(3);
+  render_pass_new_buffer_list.back().push_back(4);
+  vector<vector<uint32_t>> render_pass_expired_buffer_list{&memory_resource_work};
+  render_pass_expired_buffer_list.reserve(render_pass_num);
+  render_pass_expired_buffer_list.push_back(vector<uint32_t>{&memory_resource_work}); // pass0
+  render_pass_expired_buffer_list.back().push_back(1);
+  render_pass_expired_buffer_list.push_back(vector<uint32_t>{&memory_resource_work}); // pass1
+  render_pass_expired_buffer_list.push_back(vector<uint32_t>{&memory_resource_work}); // pass2
+  render_pass_expired_buffer_list.back().push_back(0);
+  render_pass_expired_buffer_list.back().push_back(2);
+  render_pass_expired_buffer_list.back().push_back(3);
+  render_pass_expired_buffer_list.back().push_back(4);
+  unordered_map<BufferId, BufferConfig> buffer_config_list{&memory_resource_work};
+  buffer_config_list.insert_or_assign(0, BufferConfig{.width=1,.height=2,.state_flags=kBufferStateFlagRtv,.initial_state_flags=kBufferStateFlagRtv,.clear_value=GetClearValueDefaultColorBuffer(),.format=BufferFormat::kR8G8B8A8Unorm,.depth_stencil_flag=DepthStencilFlag::kDefault,});
+  buffer_config_list.insert_or_assign(1, buffer_config_list.at(0)); // NOLINT
+  buffer_config_list.insert_or_assign(2, buffer_config_list.at(0)); // NOLINT
+  buffer_config_list.insert_or_assign(3, buffer_config_list.at(0)); // NOLINT
+  buffer_config_list.insert_or_assign(4, buffer_config_list.at(0)); // NOLINT
+  buffer_config_list.at(2).width = 2; // alias 1
+  buffer_config_list.at(3).width = 3; // alias 1
+  buffer_config_list.at(4).width = 3; // alias 1
+  unordered_map<BufferId, uint32_t> buffer_size_list{&memory_resource_work};
+  buffer_size_list.insert_or_assign(0, 4); // NOLINT
+  buffer_size_list.insert_or_assign(1, 10); // NOLINT
+  buffer_size_list.insert_or_assign(2, 4); // NOLINT
+  buffer_size_list.insert_or_assign(3, 4); // NOLINT
+  buffer_size_list.insert_or_assign(4, 2); // NOLINT
+  unordered_map<BufferId, uint32_t> buffer_alignment_list{&memory_resource_work};
+  buffer_alignment_list.insert_or_assign(0, 4); // NOLINT
+  buffer_alignment_list.insert_or_assign(1, 4); // NOLINT
+  buffer_alignment_list.insert_or_assign(2, 8); // NOLINT
+  buffer_alignment_list.insert_or_assign(3, 4); // NOLINT
+  buffer_alignment_list.insert_or_assign(4, 4); // NOLINT
+  auto [buffer_address_offset_list, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list] = ConfigureBufferAddressOffset(render_pass_num, concurrent_buffer_list, render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list, buffer_size_list, buffer_alignment_list, {}, &memory_resource_work, &memory_resource_work);
+  CHECK(buffer_address_offset_list.size() == 5); // NOLINT
+  CHECK(buffer_address_offset_list.at(0) == 0); // NOLINT
+  CHECK(buffer_address_offset_list.at(1) == 4); // NOLINT
+  CHECK(buffer_address_offset_list.at(2) == 8); // NOLINT
+  CHECK(buffer_address_offset_list.at(3) == 4); // NOLINT
+  CHECK(buffer_address_offset_list.at(4) == 12); // NOLINT
+  CHECK(renamed_buffers.empty());
+  CHECK(!renamed_buffers.contains(0)); // NOLINT
+  CHECK(!renamed_buffers.contains(1)); // NOLINT
+  CHECK(!renamed_buffers.contains(2)); // NOLINT
+  CHECK(!renamed_buffers.contains(3)); // NOLINT
+  CHECK(!renamed_buffers.contains(4)); // NOLINT
+  CHECK(render_pass_before_memory_aliasing_list.size() == 2); // NOLINT
+  CHECK(!render_pass_before_memory_aliasing_list.contains(0)); // NOLINT
+  CHECK(render_pass_before_memory_aliasing_list.at(1).size() == 1); // NOLINT
+  CHECK(render_pass_before_memory_aliasing_list.at(1)[0] == 1); // NOLINT
+  CHECK(render_pass_before_memory_aliasing_list.at(2).size() == 2); // NOLINT
+  CHECK(render_pass_before_memory_aliasing_list.at(2)[0] == 1); // NOLINT
+  CHECK(render_pass_before_memory_aliasing_list.at(2)[1] == 1); // NOLINT
+  CHECK(render_pass_after_memory_aliasing_list.size() == 2); // NOLINT
+  CHECK(!render_pass_after_memory_aliasing_list.contains(0)); // NOLINT
+  CHECK(render_pass_after_memory_aliasing_list.at(1).size() == 1); // NOLINT
+  CHECK(render_pass_after_memory_aliasing_list.at(1)[0] == 2); // NOLINT
+  CHECK(render_pass_after_memory_aliasing_list.at(2).size() == 2); // NOLINT
+  CHECK(render_pass_after_memory_aliasing_list.at(2)[0] == 3); // NOLINT
+  CHECK(render_pass_after_memory_aliasing_list.at(2)[1] == 4); // NOLINT
+}
 TEST_CASE("buffer allocation address calc") { // NOLINT
   using namespace illuminate; // NOLINT
   using namespace illuminate::core; // NOLINT
@@ -3218,7 +3297,6 @@ TEST_CASE("update params after pass culling") { // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
   unordered_map<BufferId, vector<BufferStateFlags>> buffer_state_list{&memory_resource_work};
   unordered_map<BufferId, vector<vector<uint32_t>>> buffer_user_pass_list{&memory_resource_work};
-  unordered_set<BufferId> required_buffers{&memory_resource_work};
   BufferId buffer_id = 0;
   buffer_state_list.insert_or_assign(buffer_id, vector<BufferStateFlags>{&memory_resource_work});
   buffer_user_pass_list.insert_or_assign(buffer_id, vector<vector<uint32_t>>{&memory_resource_work});
