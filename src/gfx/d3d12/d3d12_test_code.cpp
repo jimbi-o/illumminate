@@ -1384,6 +1384,7 @@ TEST_CASE("render graph") { // NOLINT
     render_graph_config.AddBufferInitialState(StrId("swapchain"), kBufferStateFlagPresent);
     render_graph_config.AddBufferFinalState(StrId("swapchain"), kBufferStateFlagPresent);
     render_graph_config.AddExternalBufferName(StrId("swapchain"));
+    render_graph_config.AddMandatoryBufferName(StrId("swapchain"));
     render_graph.Build(render_graph_config, &memory_resource_work);
     memory_resource_work.Reset();
     swapchain_buffer_id = render_graph.GetRenderPassBufferIdList()[pass_copy][1];
