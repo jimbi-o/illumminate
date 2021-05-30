@@ -44,11 +44,13 @@ enum ReadWriteFlag : uint8_t {
   kWriteFlag     = 0x2,
   kReadWriteFlag = (kReadFlag | kWriteFlag),
 };
+enum class BufferClearFlag : uint8_t { kNone = 0, kClear, };
 struct RenderGraphBufferStateConfig {
   StrId buffer_name;
   BufferStateFlags state;
   ReadWriteFlag read_write_flag;
-  std::byte _pad[3]{};
+  BufferClearFlag buffer_clear_flag;
+  std::byte _pad[2]{};
 };
 struct RenderPassConfig {
   StrId pass_name;
@@ -199,6 +201,7 @@ struct BarrierConfig {
   std::byte _pad[3]{};
   std::variant<BarrierTransition, BarrierUav, BarrierAliasing> params;
 };
+enum class BufferClearType : uint8_t { kDontCare, kClear, };
 class RenderGraph {
  public:
   RenderGraph(std::pmr::memory_resource* memory_resource) : memory_resource_(memory_resource) {}
@@ -215,6 +218,7 @@ class RenderGraph {
   constexpr const auto& GetBufferSizeList() const { return buffer_size_list_; }
   constexpr const auto& GetBufferAlignmentSizeList() const { return buffer_alignment_list_; }
   constexpr const auto& GetBufferAddressOffsetList() const { return buffer_address_offset_list_; }
+  constexpr const auto& GetRenderPassBufferClearInfo() const { return render_pass_buffer_clear_info_; }
  private:
   std::pmr::memory_resource* memory_resource_;
   vector<BufferId> buffer_id_list_;
@@ -228,6 +232,7 @@ class RenderGraph {
   unordered_map<BufferId, uint32_t> buffer_size_list_;
   unordered_map<BufferId, uint32_t> buffer_alignment_list_;
   unordered_map<BufferId, uint32_t> buffer_address_offset_list_;
+  vector<unordered_map<BufferId, BufferClearType>> render_pass_buffer_clear_info_;
   uint32_t render_pass_num_;
   [[maybe_unused]] std::byte _pad[4]{};
   RenderGraph() = delete;
