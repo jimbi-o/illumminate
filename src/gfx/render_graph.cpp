@@ -1143,8 +1143,12 @@ static auto AppendMemoryAliasingBarriers(const uint32_t pass_num, const unordere
   return std::move(barriers_pre_pass);
 }
 void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resource* memory_resource_work) {
-  // TODO add check if all mandatory params in config are set.
-  // TODO if not, log
+  if (config.GetMandatoryBufferNameList().empty()) {
+    logwarn("mandatory_buffer_name_list_ is empty");
+  }
+  if (!config.GetBufferSizeInfoFunction()) {
+    logwarn("buffer_size_info_function_ is empty");
+  }
   render_pass_num_ = config.GetRenderPassNum();
   std::tie(buffer_id_list_, render_pass_buffer_id_list_, render_pass_buffer_state_flag_list_) = InitBufferIdList(render_pass_num_, config.GetRenderPassBufferStateList(), memory_resource_);
   auto buffer_id_name_map = CreateBufferIdNameMap(render_pass_num_, static_cast<uint32_t>(buffer_id_list_.size()), config.GetRenderPassBufferStateList(), render_pass_buffer_id_list_, memory_resource_work);
