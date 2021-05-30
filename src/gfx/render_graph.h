@@ -188,12 +188,15 @@ struct BarrierTransition {
   BufferStateFlags state_after;
 };
 using BarrierUav = std::monostate;
+struct BarrierAliasing {
+  BufferId buffer_id_after_aliasing;
+};
 enum class BarrierSplitType : uint8_t { kNone = 0, kBegin, kEnd, };
 struct BarrierConfig {
   BufferId buffer_id;
   BarrierSplitType split_type;
   std::byte _pad[3]{};
-  std::variant<BarrierTransition, BarrierUav> params;
+  std::variant<BarrierTransition, BarrierUav, BarrierAliasing> params;
 };
 class RenderGraph {
  public:
@@ -211,8 +214,6 @@ class RenderGraph {
   constexpr const auto& GetBufferSizeList() const { return buffer_size_list_; }
   constexpr const auto& GetBufferAlignmentSizeList() const { return buffer_alignment_list_; }
   constexpr const auto& GetBufferAddressOffsetList() const { return buffer_address_offset_list_; }
-  constexpr const auto& GetRenderPassBuffersBeforeMemoryAliasingList() const { return render_pass_before_memory_aliasing_list_; }
-  constexpr const auto& GetRenderPassBuffersAfterMemoryAliasingList() const { return render_pass_after_memory_aliasing_list_; }
  private:
   std::pmr::memory_resource* memory_resource_;
   vector<BufferId> buffer_id_list_;
@@ -226,8 +227,6 @@ class RenderGraph {
   unordered_map<BufferId, uint32_t> buffer_size_list_;
   unordered_map<BufferId, uint32_t> buffer_alignment_list_;
   unordered_map<BufferId, uint32_t> buffer_address_offset_list_;
-  unordered_map<uint32_t, vector<BufferId>> render_pass_before_memory_aliasing_list_;
-  unordered_map<uint32_t, vector<BufferId>> render_pass_after_memory_aliasing_list_;
   uint32_t render_pass_num_;
   [[maybe_unused]] std::byte _pad[4]{};
   RenderGraph() = delete;

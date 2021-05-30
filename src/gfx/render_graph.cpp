@@ -1117,7 +1117,34 @@ static auto GetRenderCommandQueueTypeListWithNewPassIndex(const uint32_t pass_nu
   }
   return fixed_list;
 }
+static auto UpdateMemoryAliasingListWithRenamedBufferIdList(const unordered_map<BufferId, BufferId>& renamed_buffers, unordered_map<uint32_t, vector<BufferId>>&& render_pass_memory_aliasing_list) {
+  for (auto&& [pass_index, list] : render_pass_memory_aliasing_list) {
+    for (auto&& buffer_id : list) {
+      if (renamed_buffers.contains(buffer_id)) {
+        buffer_id = renamed_buffers.at(buffer_id);
+      }
+    }
+  }
+  return std::move(render_pass_memory_aliasing_list);
+}
+static auto AppendMemoryAliasingBarriers(const uint32_t pass_num, const unordered_map<uint32_t, vector<BufferId>>& render_pass_before_memory_aliasing_list, const unordered_map<uint32_t, vector<BufferId>>& render_pass_after_memory_aliasing_list, vector<vector<BarrierConfig>>&& barriers_pre_pass) {
+  for (uint32_t pass_index = 0; pass_index < pass_num; pass_index++) {
+    if (!render_pass_before_memory_aliasing_list.contains(pass_index)) { continue; }
+    const auto& before = render_pass_before_memory_aliasing_list.at(pass_index);
+    const auto& after = render_pass_after_memory_aliasing_list.at(pass_index);
+    const auto num = static_cast<uint32_t>(before.size());
+    for (uint32_t buffer_index = 0; buffer_index < num; buffer_index++) {
+      barriers_pre_pass[pass_index].push_back(BarrierConfig{
+          .buffer_id = before[buffer_index],
+          .params = BarrierAliasing{.buffer_id_after_aliasing = after[buffer_index]},
+        });
+    }
+  }
+  return std::move(barriers_pre_pass);
+}
 void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resource* memory_resource_work) {
+  // TODO add check if all mandatory params in config are set.
+  // TODO if not, log
   render_pass_num_ = config.GetRenderPassNum();
   std::tie(buffer_id_list_, render_pass_buffer_id_list_, render_pass_buffer_state_flag_list_) = InitBufferIdList(render_pass_num_, config.GetRenderPassBufferStateList(), memory_resource_);
   auto buffer_id_name_map = CreateBufferIdNameMap(render_pass_num_, static_cast<uint32_t>(buffer_id_list_.size()), config.GetRenderPassBufferStateList(), render_pass_buffer_id_list_, memory_resource_work);
@@ -1161,16 +1188,21 @@ void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resour
   auto concurrent_pass_list = FindConcurrentPass(render_pass_num_, node_distance_map, memory_resource_work);
   auto concurrent_buffer_list = FindConcurrentBuffers(concurrent_pass_list, render_pass_buffer_id_list_, memory_resource_work);
   unordered_map<BufferId, BufferId> renamed_buffers{memory_resource_work};
-  std::tie(buffer_address_offset_list_, renamed_buffers, render_pass_before_memory_aliasing_list_, render_pass_after_memory_aliasing_list_) = ConfigureBufferAddressOffset(render_pass_num_, concurrent_buffer_list, render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list_, buffer_size_list_, buffer_alignment_list_, excluded_buffers, memory_resource_work, memory_resource_work);
+  unordered_map<uint32_t, vector<BufferId>> render_pass_before_memory_aliasing_list{memory_resource_work};
+  unordered_map<uint32_t, vector<BufferId>> render_pass_after_memory_aliasing_list{memory_resource_work};
+  std::tie(buffer_address_offset_list_, renamed_buffers, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list) = ConfigureBufferAddressOffset(render_pass_num_, concurrent_buffer_list, render_pass_new_buffer_list, render_pass_expired_buffer_list, buffer_config_list_, buffer_size_list_, buffer_alignment_list_, excluded_buffers, memory_resource_work, memory_resource_work);
   renamed_buffers = MergeRenamedBufferDuplicativeBufferIds(buffer_id_list_, std::move(renamed_buffers));
   buffer_id_list_ = UpdateBufferIdListUsingReusableBuffers(renamed_buffers, std::move(buffer_id_list_));
   render_pass_buffer_id_list_ = UpdateRenderPassBufferIdListUsingReusableBuffers(renamed_buffers, std::move(render_pass_buffer_id_list_));
   std::tie(buffer_state_list, buffer_user_pass_list) = UpdateBufferStateListAndUserPassListUsingReusableBuffers(renamed_buffers, std::move(buffer_state_list), std::move(buffer_user_pass_list));
   buffer_config_list_ = MergeReusedBufferConfigs(renamed_buffers, std::move(buffer_config_list_));
+  render_pass_before_memory_aliasing_list = UpdateMemoryAliasingListWithRenamedBufferIdList(renamed_buffers, std::move(render_pass_before_memory_aliasing_list));
+  render_pass_after_memory_aliasing_list = UpdateMemoryAliasingListWithRenamedBufferIdList(renamed_buffers, std::move(render_pass_after_memory_aliasing_list));
   std::tie(buffer_state_list, buffer_user_pass_list) = RevertBufferStateToInitialState(std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work); // NOLINT(hicpp-invalid-access-moved,bugprone-use-after-move)
   auto render_pass_command_queue_type_flag_list = ConvertToCommandQueueTypeFlagsList(render_pass_command_queue_type_list_, memory_resource_work);
   auto buffer_state_change_info_list_map = CreateBufferStateChangeInfoList(render_pass_command_queue_type_flag_list, node_distance_map, buffer_state_list, buffer_user_pass_list, memory_resource_work); // NOLINT(hicpp-invalid-access-moved,bugprone-use-after-move)
   std::tie(barriers_pre_pass_, barriers_post_pass_) = ConfigureBarriers(render_pass_num_, buffer_id_list_, buffer_state_change_info_list_map, memory_resource_);
+  barriers_pre_pass_ = AppendMemoryAliasingBarriers(render_pass_num_, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list, std::move(barriers_pre_pass_));
 }
 #ifdef BUILD_WITH_TEST
 static auto CollectBufferDataForTest(const vector<vector<BufferId>>& render_pass_buffer_id_list, std::pmr::memory_resource* memory_resource) {
@@ -2973,6 +3005,87 @@ TEST_CASE("memory aliasing in middle of proceding buffer") { // NOLINT
   CHECK(render_pass_after_memory_aliasing_list.at(2)[0] == 3); // NOLINT
   CHECK(render_pass_after_memory_aliasing_list.at(2)[1] == 4); // NOLINT
 }
+TEST_CASE("UpdateMemoryAliasingListWithRenamedBufferIdList") { // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::core; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
+  unordered_map<uint32_t, vector<BufferId>> render_pass_memory_aliasing_list{&memory_resource_work};
+  render_pass_memory_aliasing_list.insert_or_assign(1, vector<BufferId>{&memory_resource_work});
+  render_pass_memory_aliasing_list.at(1).push_back(0);
+  render_pass_memory_aliasing_list.at(1).push_back(1);
+  render_pass_memory_aliasing_list.insert_or_assign(3, vector<BufferId>{&memory_resource_work});
+  render_pass_memory_aliasing_list.at(3).push_back(1);
+  render_pass_memory_aliasing_list.at(3).push_back(2);
+  render_pass_memory_aliasing_list.insert_or_assign(8, vector<BufferId>{&memory_resource_work});
+  render_pass_memory_aliasing_list.at(8).push_back(4);
+  render_pass_memory_aliasing_list.at(8).push_back(5);
+  unordered_map<BufferId, BufferId> renamed_buffers{&memory_resource_work};
+  renamed_buffers.insert_or_assign(2, 0);
+  renamed_buffers.insert_or_assign(4, 0);
+  renamed_buffers.insert_or_assign(5, 1);
+  render_pass_memory_aliasing_list = UpdateMemoryAliasingListWithRenamedBufferIdList(renamed_buffers, std::move(render_pass_memory_aliasing_list));
+  CHECK(render_pass_memory_aliasing_list.size() == 3); // NOLINT
+  CHECK(render_pass_memory_aliasing_list.at(1)[0] == 0); // NOLINT
+  CHECK(render_pass_memory_aliasing_list.at(1)[1] == 1); // NOLINT
+  CHECK(render_pass_memory_aliasing_list.at(3)[0] == 1); // NOLINT
+  CHECK(render_pass_memory_aliasing_list.at(3)[1] == 0); // NOLINT
+  CHECK(render_pass_memory_aliasing_list.at(8)[0] == 0); // NOLINT
+  CHECK(render_pass_memory_aliasing_list.at(8)[1] == 1); // NOLINT
+}
+TEST_CASE("AppendMemoryAliasingBarriers") { // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::core; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
+  const uint32_t pass_num = 3;
+  unordered_map<uint32_t, vector<BufferId>> render_pass_before_memory_aliasing_list{&memory_resource_work};
+  unordered_map<uint32_t, vector<BufferId>> render_pass_after_memory_aliasing_list{&memory_resource_work};
+  render_pass_before_memory_aliasing_list.insert_or_assign(0, vector<BufferId>{&memory_resource_work});
+  render_pass_after_memory_aliasing_list.insert_or_assign(0, vector<BufferId>{&memory_resource_work});
+  render_pass_before_memory_aliasing_list.at(0).push_back(0);
+  render_pass_after_memory_aliasing_list.at(0).push_back(1);
+  render_pass_before_memory_aliasing_list.at(0).push_back(2);
+  render_pass_after_memory_aliasing_list.at(0).push_back(3);
+  render_pass_before_memory_aliasing_list.insert_or_assign(1, vector<BufferId>{&memory_resource_work});
+  render_pass_after_memory_aliasing_list.insert_or_assign(1, vector<BufferId>{&memory_resource_work});
+  render_pass_before_memory_aliasing_list.at(1).push_back(4);
+  render_pass_after_memory_aliasing_list.at(1).push_back(5);
+  render_pass_before_memory_aliasing_list.insert_or_assign(2, vector<BufferId>{&memory_resource_work});
+  render_pass_after_memory_aliasing_list.insert_or_assign(2, vector<BufferId>{&memory_resource_work});
+  render_pass_before_memory_aliasing_list.at(2).push_back(6);
+  render_pass_after_memory_aliasing_list.at(2).push_back(7);
+  render_pass_before_memory_aliasing_list.at(2).push_back(8);
+  render_pass_after_memory_aliasing_list.at(2).push_back(9);
+  render_pass_before_memory_aliasing_list.at(2).push_back(10);
+  render_pass_after_memory_aliasing_list.at(2).push_back(11);
+  vector<vector<BarrierConfig>>&& barriers_pre_pass{&memory_resource_work};
+  barriers_pre_pass.push_back(vector<BarrierConfig>{&memory_resource_work}); // pass0
+  barriers_pre_pass.push_back(vector<BarrierConfig>{&memory_resource_work}); // pass1
+  barriers_pre_pass.push_back(vector<BarrierConfig>{&memory_resource_work}); // pass2
+  barriers_pre_pass.back().push_back(BarrierConfig{.buffer_id=101,.split_type=BarrierSplitType::kBegin,.params=BarrierTransition{.state_before=kBufferStateFlagRtv,.state_after=kBufferStateFlagSrvPsOnly}});
+  barriers_pre_pass = AppendMemoryAliasingBarriers(pass_num, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list, std::move(barriers_pre_pass));
+  CHECK(barriers_pre_pass.size() == 3); // NOLINT
+  CHECK(barriers_pre_pass[0].size() == 2); // NOLINT
+  CHECK(barriers_pre_pass[0][0].buffer_id == 0); // NOLINT
+  CHECK(std::get<BarrierAliasing>(barriers_pre_pass[0][0].params).buffer_id_after_aliasing == 1); // NOLINT
+  CHECK(barriers_pre_pass[0][1].buffer_id == 2); // NOLINT
+  CHECK(std::get<BarrierAliasing>(barriers_pre_pass[0][1].params).buffer_id_after_aliasing == 3); // NOLINT
+  CHECK(barriers_pre_pass[1].size() == 1); // NOLINT
+  CHECK(barriers_pre_pass[1][0].buffer_id == 4); // NOLINT
+  CHECK(std::get<BarrierAliasing>(barriers_pre_pass[1][0].params).buffer_id_after_aliasing == 5); // NOLINT
+  CHECK(barriers_pre_pass[2].size() == 4); // NOLINT
+  CHECK(barriers_pre_pass[2][0].buffer_id == 101); // NOLINT
+  CHECK(barriers_pre_pass[2][0].split_type == BarrierSplitType::kBegin); // NOLINT
+  CHECK(std::get<BarrierTransition>(barriers_pre_pass[2][0].params).state_before == kBufferStateFlagRtv); // NOLINT
+  CHECK(std::get<BarrierTransition>(barriers_pre_pass[2][0].params).state_after == kBufferStateFlagSrvPsOnly); // NOLINT
+  CHECK(barriers_pre_pass[2][1].buffer_id == 6); // NOLINT
+  CHECK(std::get<BarrierAliasing>(barriers_pre_pass[2][1].params).buffer_id_after_aliasing == 7); // NOLINT
+  CHECK(barriers_pre_pass[2][2].buffer_id == 8); // NOLINT
+  CHECK(std::get<BarrierAliasing>(barriers_pre_pass[2][2].params).buffer_id_after_aliasing == 9); // NOLINT
+  CHECK(barriers_pre_pass[2][3].buffer_id == 10); // NOLINT
+  CHECK(std::get<BarrierAliasing>(barriers_pre_pass[2][3].params).buffer_id_after_aliasing == 11); // NOLINT
+}
 TEST_CASE("buffer allocation address calc") { // NOLINT
   using namespace illuminate; // NOLINT
   using namespace illuminate::core; // NOLINT
@@ -3579,8 +3692,9 @@ TEST_CASE("update params after pass culling") { // NOLINT
   CHECK(dst_list.size() == 1); // NOLINT
   CHECK(dst_list[0] == CommandQueueType::kCompute); // NOLINT
 }
-// TODO merge memory aliasing barriers to barriers_pre_pass_, barriers_post_pass_
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
 #endif
+// TODO add clear buffer pass info to RenderGraph
+// TODO no memory alias needed between different queues?
