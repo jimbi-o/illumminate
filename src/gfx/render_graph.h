@@ -135,9 +135,8 @@ class RenderGraphConfig {
   void SetBufferDefaultClearValue(const StrId& buffer_name, const ClearValue& clear_value) { buffer_default_clear_value_list_.insert_or_assign(buffer_name, clear_value); }
   void SetBufferDepthStencilFlag(const StrId& buffer_name, const DepthStencilFlag flag) { buffer_depth_stencil_flag_list_.insert_or_assign(buffer_name, flag); }
   void SetBufferDimensionType(const StrId& buffer_name, const BufferDimensionType type) { buffer_dimension_type_list_.insert_or_assign(buffer_name, type); }
-  void EnableAsyncCompute(const bool b) { enable_async_compute_ = b; }
-  void EnableBufferReuse(const bool b) { enable_buffer_reuse_ = b; }
-  void EnableMemoryAliasing(const bool b) { enable_memory_aliasing_ = b; }
+  void EnableAsyncCompute(const bool b) { async_compute_enabled_ = b; }
+  void EnableBufferReuse(const bool b) { buffer_reuse_enabled_ = b; }
   constexpr auto GetRenderPassNum() const { return pass_num_; }
   auto GetRenderPassIndex(const StrId& pass_id) const { return render_pass_id_map_.at(pass_id); }
   constexpr const auto& GetRenderPassCommandQueueTypeList() const { return render_pass_command_queue_type_list_; }
@@ -156,9 +155,8 @@ class RenderGraphConfig {
   constexpr const auto& GetExternalBufferNameList() const { return external_buffer_name_; }
   constexpr const auto& GetBufferSizeInfoFunction() const { return buffer_size_info_function_; }
   constexpr const auto& GetMandatoryBufferNameList() const { return mandatory_buffer_name_list_; }
-  constexpr const auto& IsAsyncComputeEnabled() const { return enable_async_compute_; }
-  constexpr const auto& IsBufferReuseEnabled() const { return enable_buffer_reuse_; }
-  constexpr const auto& IsMemoryAliasingEnabled() const { return enable_memory_aliasing_; }
+  constexpr const auto& IsAsyncComputeEnabled() const { return async_compute_enabled_; }
+  constexpr const auto& IsBufferReuseEnabled() const { return buffer_reuse_enabled_; }
  private:
   std::pmr::memory_resource* memory_resource_;
   unordered_map<StrId, uint32_t> render_pass_id_map_;
@@ -177,10 +175,9 @@ class RenderGraphConfig {
   unordered_set<StrId> mandatory_buffer_name_list_;
   std::function<std::tuple<uint32_t, uint32_t>(const BufferConfig&)> buffer_size_info_function_;
   uint32_t pass_num_;
-  bool enable_async_compute_ = true;
-  bool enable_buffer_reuse_ = true;
-  bool enable_memory_aliasing_ = true;
-  [[maybe_unused]] std::byte _pad[1];
+  bool async_compute_enabled_ = true;
+  bool buffer_reuse_enabled_ = true;
+  [[maybe_unused]] std::byte _pad[2];
   RenderGraphConfig() = delete;
   RenderGraphConfig(const RenderGraphConfig&) = delete;
   void operator=(const RenderGraphConfig&) = delete;
