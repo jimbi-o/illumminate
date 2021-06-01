@@ -43,6 +43,7 @@ constexpr auto IsBufferInReadableState(const BufferStateFlags& state) {
   if ((state & kBufferStateFlagSrvPsOnly) != 0) { return true; }
   if ((state & kBufferStateFlagSrvNonPs) != 0) { return true; }
   if ((state & kBufferStateFlagCopySrc) != 0) { return true; }
+  if ((state & kBufferStateFlagPresent) != 0) { return true; }
   return false;
 }
 static auto InitBufferIdList(const uint32_t pass_num, const RenderPassBufferStateList& render_pass_buffer_state_list, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
@@ -1183,6 +1184,25 @@ static auto AppendBufferClearInfoCausedByMemoryAliasing(const uint32_t pass_num,
   }
   return std::move(render_pass_buffer_clear_info);
 }
+static auto AddBufferClearInfoForInitialWrite(const unordered_map<BufferId, vector<BufferStateFlags>>& buffer_state_list, const unordered_map<BufferId, vector<vector<uint32_t>>>& buffer_user_pass_list, vector<unordered_map<BufferId, BufferClearType>>&& render_pass_buffer_clear_info) {
+  for (auto& [buffer_id, pass_list_list] : buffer_user_pass_list) {
+    auto& state_list = buffer_state_list.at(buffer_id);
+    if (pass_list_list[0].empty()) { continue; }
+    if (IsBufferInReadableState(state_list[0])) { continue; }
+    bool already_cleared = false;
+    for (auto& pass_index : pass_list_list[0]) {
+      if (render_pass_buffer_clear_info[pass_index].contains(buffer_id)) {
+        already_cleared = true;
+        break;
+      }
+    }
+    if (!already_cleared) {
+      // might need to find the ancestor pass of all the other passes in pass_list_list[0]
+      render_pass_buffer_clear_info[pass_list_list[0][0]].insert_or_assign(buffer_id, BufferClearType::kDontCare);
+    }
+  }
+  return std::move(render_pass_buffer_clear_info);
+}
 void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resource* memory_resource_work) {
   if (config.GetMandatoryBufferNameList().empty()) {
     logwarn("mandatory_buffer_name_list_ is empty");
@@ -1245,6 +1265,7 @@ void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resour
   render_pass_after_memory_aliasing_list = UpdateMemoryAliasingListWithRenamedBufferIdList(renamed_buffers, std::move(render_pass_after_memory_aliasing_list));
   render_pass_buffer_clear_info_ = UpdateRenderPassBufferClearInfoWithRenamedBufferIdList(renamed_buffers, std::move(render_pass_buffer_clear_info_));
   render_pass_buffer_clear_info_ = AppendBufferClearInfoCausedByMemoryAliasing(render_pass_num_, render_pass_after_memory_aliasing_list, std::move(render_pass_buffer_clear_info_));
+  render_pass_buffer_clear_info_ = AddBufferClearInfoForInitialWrite(buffer_state_list, buffer_user_pass_list, std::move(render_pass_buffer_clear_info_));
   std::tie(buffer_state_list, buffer_user_pass_list) = RevertBufferStateToInitialState(std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work); // NOLINT(hicpp-invalid-access-moved,bugprone-use-after-move)
   auto render_pass_command_queue_type_flag_list = ConvertToCommandQueueTypeFlagsList(render_pass_command_queue_type_list_, memory_resource_work);
   auto buffer_state_change_info_list_map = CreateBufferStateChangeInfoList(render_pass_command_queue_type_flag_list, node_distance_map, buffer_state_list, buffer_user_pass_list, memory_resource_work); // NOLINT(hicpp-invalid-access-moved,bugprone-use-after-move)
@@ -1806,7 +1827,7 @@ TEST_CASE("barrier for load from srv") { // NOLINT
   render_graph_config.AddMandatoryBufferName(StrId("swapchain"));
   CHECK(render_graph_config.GetRenderPassNum() == 0); // NOLINT
   auto render_pass_id = render_graph_config.CreateNewRenderPass({.pass_name = StrId("draw"), .command_queue_type = CommandQueueType::kGraphics});
-  render_graph_config.AppendRenderPassBufferConfig(render_pass_id, {StrId("mainbuffer"), kBufferStateFlagRtv, kWriteFlag, BufferClearFlag::kClear});
+  render_graph_config.AppendRenderPassBufferConfig(render_pass_id, {StrId("mainbuffer"), kBufferStateFlagRtv, kWriteFlag, BufferClearFlag::kNone});
   CHECK(render_graph_config.GetRenderPassNum() == 1); // NOLINT
   auto prev_render_pass_id = render_pass_id;
   render_pass_id = render_graph_config.CreateNewRenderPass({.pass_name = StrId("copy"), .command_queue_type = CommandQueueType::kGraphics});
@@ -1836,9 +1857,7 @@ TEST_CASE("barrier for load from srv") { // NOLINT
     CHECK(render_pass_buffer_state_flag_list[1][0] == kBufferStateFlagSrvPsOnly); // NOLINT
     CHECK(render_pass_buffer_state_flag_list[1][1] == kBufferStateFlagRtv); // NOLINT
     CHECK(render_pass_buffer_clear_info.size() == 2); // NOLINT
-    CHECK(render_pass_buffer_clear_info[0].size() == 1); // NOLINT
-    CHECK(render_pass_buffer_clear_info[0].contains(0)); // NOLINT
-    CHECK(render_pass_buffer_clear_info[0].at(0) == BufferClearType::kClear); // NOLINT
+    CHECK(render_pass_buffer_clear_info[0].empty()); // NOLINT
     CHECK(render_pass_buffer_clear_info[1].empty()); // NOLINT
     auto [buffer_state_list, buffer_user_pass_list] = CreateBufferStateList(render_pass_num, buffer_id_list, render_pass_buffer_id_list, render_pass_buffer_state_flag_list, &memory_resource_work);
     auto buffer_name_id_map = GetBufferNameIdMap(render_pass_num, render_graph_config.GetRenderPassBufferStateList(), render_pass_buffer_id_list, &memory_resource_work);
@@ -1913,6 +1932,14 @@ TEST_CASE("barrier for load from srv") { // NOLINT
   CHECK(std::holds_alternative<BarrierTransition>(barriers_postpass[1][1].params)); // NOLINT
   CHECK(std::get<BarrierTransition>(barriers_postpass[1][1].params).state_before == kBufferStateFlagRtv); // NOLINT
   CHECK(std::get<BarrierTransition>(barriers_postpass[1][1].params).state_after  == kBufferStateFlagPresent); // NOLINT
+  {
+    auto& render_pass_buffer_clear_info = render_graph.GetRenderPassBufferClearInfo();
+    CHECK(render_pass_buffer_clear_info.size() == 2); // NOLINT
+    CHECK(render_pass_buffer_clear_info[0].size() == 1); // NOLINT
+    CHECK(render_pass_buffer_clear_info[0].contains(0)); // NOLINT
+    CHECK(render_pass_buffer_clear_info[0].at(0) == BufferClearType::kDontCare); // NOLINT
+    CHECK(render_pass_buffer_clear_info[1].empty()); // NOLINT
+  }
 }
 TEST_CASE("barrier for use compute queue") { // NOLINT
   using namespace illuminate; // NOLINT
@@ -1982,7 +2009,7 @@ TEST_CASE("buffer reuse") { // NOLINT
   {
     auto render_pass_index = render_graph_config.CreateNewRenderPass({.pass_name = StrId("1"), .command_queue_type = CommandQueueType::kGraphics});
     render_graph_config.AppendRenderPassBufferConfig(render_pass_index, {StrId("mainbuffer"), kBufferStateFlagSrvPsOnly, kReadFlag, BufferClearFlag::kNone});
-    render_graph_config.AppendRenderPassBufferConfig(render_pass_index, {StrId("mainbuffer"), kBufferStateFlagRtv, kWriteFlag, BufferClearFlag::kNone});
+    render_graph_config.AppendRenderPassBufferConfig(render_pass_index, {StrId("mainbuffer"), kBufferStateFlagRtv, kWriteFlag, BufferClearFlag::kClear});
   }
   {
     auto render_pass_index = render_graph_config.CreateNewRenderPass({.pass_name = StrId("2"), .command_queue_type = CommandQueueType::kGraphics});
@@ -2005,6 +2032,12 @@ TEST_CASE("buffer reuse") { // NOLINT
   {
     auto render_pass_num = render_graph_config.GetRenderPassNum();
     auto [buffer_id_list, render_pass_buffer_id_list, render_pass_buffer_state_flag_list, render_pass_buffer_clear_info] = InitBufferIdList(render_pass_num, render_graph_config.GetRenderPassBufferStateList(), &memory_resource_work, &memory_resource_work);
+    CHECK(render_pass_buffer_clear_info.size() == 4);
+    CHECK(render_pass_buffer_clear_info[0].empty());
+    CHECK(render_pass_buffer_clear_info[1].size() == 1);
+    CHECK(render_pass_buffer_clear_info[1].at(1) == BufferClearType::kClear);
+    CHECK(render_pass_buffer_clear_info[2].empty());
+    CHECK(render_pass_buffer_clear_info[3].empty());
     auto [buffer_state_list, buffer_user_pass_list] = CreateBufferStateList(render_pass_num, buffer_id_list, render_pass_buffer_id_list, render_pass_buffer_state_flag_list, &memory_resource_work);
     auto buffer_name_id_map = GetBufferNameIdMap(render_pass_num, render_graph_config.GetRenderPassBufferStateList(), render_pass_buffer_id_list, &memory_resource_work);
     auto initial_state_flag_list = ConvertBufferNameToBufferIdForBufferStateFlagList(buffer_name_id_map, render_graph_config.GetBufferInitialStateList(), &memory_resource_work);
@@ -3812,4 +3845,3 @@ TEST_CASE("update params after pass culling") { // NOLINT
 #endif
 #endif
 // TODO add option to remove memory alias when in different batch (ExecuteCommandLists)
-// TODO memory aliasing for next frame start
