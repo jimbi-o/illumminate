@@ -1233,7 +1233,7 @@ void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resour
   std::tie(render_pass_buffer_id_list_, render_pass_buffer_state_flag_list_) = UpdateRenderPassBufferInfoWithNewPassIndex(render_pass_num_, new_render_pass_index_list, std::move(render_pass_buffer_id_list_), std::move(render_pass_buffer_state_flag_list_));
   std::tie(buffer_state_list, buffer_user_pass_list) = UpdateBufferStateInfoWithNewPassIndex(used_pass_list, used_buffer_list, new_render_pass_index_list, std::move(buffer_state_list), std::move(buffer_user_pass_list));
   render_pass_command_queue_type_list_ = GetRenderCommandQueueTypeListWithNewPassIndex(render_pass_num_, new_render_pass_index_list, config.GetRenderPassCommandQueueTypeList(), memory_resource_, memory_resource_work);
-  if (!config.IsAsyncComputeEnabled()) {
+  if (config.GetAsyncComputeMode() == AsyncComputeMode::kOff) {
     render_pass_command_queue_type_list_ = RemoveCommandQueueTypeCompute(std::move(render_pass_command_queue_type_list_));
   }
   auto initial_state_flag_list = ConvertBufferNameToBufferIdForBufferStateFlagList(buffer_name_id_map, config.GetBufferInitialStateList(), memory_resource_work);
