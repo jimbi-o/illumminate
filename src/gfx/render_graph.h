@@ -76,7 +76,6 @@ struct BufferConfig {
   DepthStencilFlag depth_stencil_flag;
   std::byte _pad{};
 };
-enum class AsyncComputeMode : uint8_t { kOff, kIntraFrame, kInterFrame, };
 class RenderGraphConfig {
  public:
   RenderGraphConfig(std::pmr::memory_resource* memory_resource)
@@ -97,8 +96,10 @@ class RenderGraphConfig {
       , buffer_dimension_type_list_(memory_resource_)
       , external_buffer_name_(memory_resource_)
       , mandatory_buffer_name_list_(memory_resource_)
+      , async_compute_group_(memory_resource_)
+      , async_compute_group_preceding_command_queue_type_list_(memory_resource_)
+      , disabled_command_queue_type_list_(memory_resource_)
       , pass_num_(0)
-      , async_compute_mode_(AsyncComputeMode::kIntraFrame)
       , buffer_reuse_enabled_(true)
   {
     SetBufferSizeInfo(StrId("swapchain"), BufferSizeType::kSwapchainRelative, 1.0f, 1.0f);
@@ -126,8 +127,20 @@ class RenderGraphConfig {
     pass_num_++;
     return pass_index;
   }
-  void AppendRenderPassBufferConfig(const uint32_t pass_index, RenderGraphBufferStateConfig&& config) {
+  void AppendRenderPassBufferConfig(const uint32_t pass_index /* TODO change to StrId */, RenderGraphBufferStateConfig&& config) {
     render_pass_buffer_state_list_[pass_index].push_back(std::move(config));
+  }
+  void AddAsyncComputeGroup(const StrId& group_name, const StrId& pass_name) {
+    if (!async_compute_group_.contains(group_name)) {
+      async_compute_group_.insert_or_assign(group_name, unordered_set<StrId>(memory_resource_));
+    }
+    async_compute_group_.at(group_name).insert(pass_name);
+  }
+  void AddAsyncComputeGroupPrecedingCommandQueueType(const StrId& group_name, const CommandQueueType command_queue_type) {
+    if (!async_compute_group_preceding_command_queue_type_list_.contains(group_name)) {
+      async_compute_group_preceding_command_queue_type_list_.insert_or_assign(group_name, unordered_set<CommandQueueType>(memory_resource_));
+    }
+    async_compute_group_preceding_command_queue_type_list_.at(group_name).insert(command_queue_type);
   }
   void AddBufferInitialState(const StrId& buffer_name, const BufferStateFlags flag) { initial_buffer_state_list_.insert_or_assign(buffer_name, flag); }
   void AddBufferFinalState(const StrId& buffer_name, const BufferStateFlags flag) { final_buffer_state_list_.insert_or_assign(buffer_name, flag); }
@@ -138,10 +151,11 @@ class RenderGraphConfig {
   void SetBufferDefaultClearValue(const StrId& buffer_name, const ClearValue& clear_value) { buffer_default_clear_value_list_.insert_or_assign(buffer_name, clear_value); }
   void SetBufferDepthStencilFlag(const StrId& buffer_name, const DepthStencilFlag flag) { buffer_depth_stencil_flag_list_.insert_or_assign(buffer_name, flag); }
   void SetBufferDimensionType(const StrId& buffer_name, const BufferDimensionType type) { buffer_dimension_type_list_.insert_or_assign(buffer_name, type); }
-  void SetAsyncComputeMode(const AsyncComputeMode& mode) { async_compute_mode_ = mode; }
+  void DisableCommandQueueType(const CommandQueueType command_queue_type) { if (command_queue_type != CommandQueueType::kGraphics) { disabled_command_queue_type_list_.insert(command_queue_type); } }
   void EnableBufferReuse(const bool b) { buffer_reuse_enabled_ = b; }
   constexpr auto GetRenderPassNum() const { return pass_num_; }
-  auto GetRenderPassIndex(const StrId& pass_id) const { return render_pass_id_map_.at(pass_id); }
+  auto GetRenderPassIndex(const StrId& pass_id) const { return render_pass_id_map_.at(pass_id); } // TODO remove (use function below instead)
+  constexpr const auto& GetRenderPassIdIndexMap() const { return render_pass_id_map_; }
   constexpr const auto& GetRenderPassCommandQueueTypeList() const { return render_pass_command_queue_type_list_; }
   constexpr const auto& GetRenderPassBufferStateList() const { return render_pass_buffer_state_list_; }
   constexpr const auto& GetBufferInitialStateList() const { return initial_buffer_state_list_; }
@@ -158,8 +172,10 @@ class RenderGraphConfig {
   constexpr const auto& GetExternalBufferNameList() const { return external_buffer_name_; }
   constexpr const auto& GetBufferSizeInfoFunction() const { return buffer_size_info_function_; }
   constexpr const auto& GetMandatoryBufferNameList() const { return mandatory_buffer_name_list_; }
-  constexpr const auto& GetAsyncComputeMode() const { return async_compute_mode_; }
+  constexpr const auto& GetAsyncComputeGroup() const { return async_compute_group_; }
+  constexpr const auto& GetAsyncComputeGroupPrecedingCommandQueueTypeList() const { return async_compute_group_preceding_command_queue_type_list_; }
   constexpr const auto& IsBufferReuseEnabled() const { return buffer_reuse_enabled_; }
+  constexpr const auto& GetDisabledCommandQueueTypeList() const { return disabled_command_queue_type_list_; }
  private:
   std::pmr::memory_resource* memory_resource_;
   unordered_map<StrId, uint32_t> render_pass_id_map_;
@@ -176,11 +192,13 @@ class RenderGraphConfig {
   unordered_map<StrId, BufferDimensionType> buffer_dimension_type_list_;
   unordered_set<StrId> external_buffer_name_;
   unordered_set<StrId> mandatory_buffer_name_list_;
+  unordered_map<StrId, unordered_set<StrId>> async_compute_group_;
+  unordered_map<StrId, unordered_set<CommandQueueType>> async_compute_group_preceding_command_queue_type_list_;
+  unordered_set<CommandQueueType> disabled_command_queue_type_list_;
   std::function<std::tuple<uint32_t, uint32_t>(const BufferConfig&)> buffer_size_info_function_;
   uint32_t pass_num_;
-  AsyncComputeMode async_compute_mode_;
   bool buffer_reuse_enabled_;
-  [[maybe_unused]] std::byte _pad[2]{};
+  [[maybe_unused]] std::byte _pad[3]{};
   RenderGraphConfig() = delete;
   RenderGraphConfig(const RenderGraphConfig&) = delete;
   void operator=(const RenderGraphConfig&) = delete;

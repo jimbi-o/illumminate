@@ -1205,13 +1205,32 @@ static auto AddBufferClearInfoForInitialWrite(const unordered_map<BufferId, vect
   }
   return std::move(render_pass_buffer_clear_info);
 }
-static auto RemoveCommandQueueTypeCompute(vector<CommandQueueType>&& render_pass_command_queue_type_list) {
+static auto RemoveDisabledCommandQueueType(const unordered_set<CommandQueueType>& disabled_command_queue_type_list, vector<CommandQueueType>&& render_pass_command_queue_type_list) {
   for (auto&& queue : render_pass_command_queue_type_list) {
-    if (queue == CommandQueueType::kCompute) {
+    if (disabled_command_queue_type_list.contains(queue)) {
       queue = CommandQueueType::kGraphics;
     }
   }
   return std::move(render_pass_command_queue_type_list);
+}
+static auto GetAsyncGroupInfo(const unordered_map<StrId, uint32_t>& render_pass_id_map, const unordered_map<StrId, unordered_set<StrId>>& async_compute_group_with_name, const unordered_map<StrId, unordered_set<CommandQueueType>>& async_compute_group_preceding_command_queue_type_list_with_name, std::pmr::memory_resource* memory_resource) {
+  vector<unordered_set<uint32_t>> async_compute_group{memory_resource};
+  vector<unordered_set<CommandQueueType>> preceding_command_queue_type{memory_resource};
+  // TODO order group_name using render_pass_id_map
+  // TODO make async_compute_group and preceding_command_queue_type sorted in order
+  return std::make_tuple(async_compute_group, preceding_command_queue_type);
+}
+static auto ConfigureAsyncComputeGroup(const vector<uint32_t>& render_pass_order, const vector<CommandQueueType>& render_pass_command_queue_type_list, const vector<unordered_set<CommandQueueType>>& preceding_command_queue_type, const vector<unordered_set<uint32_t>>& async_compute_group, std::pmr::memory_resource* memory_resource) {
+  vector<uint32_t> render_pass_order_initial_frame{memory_resource};
+  vector<uint32_t> render_pass_order_succeeding_frame{memory_resource};
+  unordered_map<uint32_t, unordered_set<uint32_t>> pass_signal_info_initial_frame{memory_resource};
+  unordered_map<uint32_t, unordered_set<uint32_t>> pass_signal_info_succeeding_frame{memory_resource};
+  // TODO
+  return std::make_tuple(render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame);
+}
+static auto ConfigureFrameSyncSignalInfo(const vector<uint32_t>& render_pass_order_initial_frame, const vector<uint32_t>& render_pass_order_succeeding_frame, const vector<CommandQueueType>& render_pass_command_queue_type_list, unordered_map<uint32_t, unordered_set<uint32_t>>&& pass_signal_info_initial_frame, unordered_map<uint32_t, unordered_set<uint32_t>>&& pass_signal_info_succeeding_frame, std::pmr::memory_resource* memory_resource) {
+  // TODO
+  return std::make_tuple(std::move(pass_signal_info_initial_frame), std::move(pass_signal_info_succeeding_frame));
 }
 void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resource* memory_resource_work) {
   if (config.GetMandatoryBufferNameList().empty()) {
@@ -1233,9 +1252,7 @@ void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resour
   std::tie(render_pass_buffer_id_list_, render_pass_buffer_state_flag_list_) = UpdateRenderPassBufferInfoWithNewPassIndex(render_pass_num_, new_render_pass_index_list, std::move(render_pass_buffer_id_list_), std::move(render_pass_buffer_state_flag_list_));
   std::tie(buffer_state_list, buffer_user_pass_list) = UpdateBufferStateInfoWithNewPassIndex(used_pass_list, used_buffer_list, new_render_pass_index_list, std::move(buffer_state_list), std::move(buffer_user_pass_list));
   render_pass_command_queue_type_list_ = GetRenderCommandQueueTypeListWithNewPassIndex(render_pass_num_, new_render_pass_index_list, config.GetRenderPassCommandQueueTypeList(), memory_resource_, memory_resource_work);
-  if (config.GetAsyncComputeMode() == AsyncComputeMode::kOff) {
-    render_pass_command_queue_type_list_ = RemoveCommandQueueTypeCompute(std::move(render_pass_command_queue_type_list_));
-  }
+  render_pass_command_queue_type_list_ = RemoveDisabledCommandQueueType(config.GetDisabledCommandQueueTypeList(), std::move(render_pass_command_queue_type_list_));
   auto initial_state_flag_list = ConvertBufferNameToBufferIdForBufferStateFlagList(buffer_name_id_map, config.GetBufferInitialStateList(), memory_resource_work);
   std::tie(buffer_state_list, buffer_user_pass_list) = MergeInitialBufferState(initial_state_flag_list, std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work);
   auto final_state_flag_list = ConvertBufferNameToBufferIdForBufferStateFlagList(buffer_name_id_map, config.GetBufferFinalStateList(), memory_resource_work);
@@ -1356,6 +1373,7 @@ std::array<std::byte, buffer_offset_in_bytes_work + buffer_size_in_bytes_work> b
 #pragma clang diagnostic ignored "-Wfloat-equal"
 #endif
 #include "doctest/doctest.h"
+#include <numeric>
 TEST_CASE("CreateNodeDistanceMapInSameCommandQueueType - single pass") { // NOLINT
   using namespace illuminate; // NOLINT
   using namespace illuminate::gfx; // NOLINT
@@ -3853,23 +3871,1081 @@ TEST_CASE("update params after pass culling") { // NOLINT
   CHECK(dst_list.size() == 1); // NOLINT
   CHECK(dst_list[0] == CommandQueueType::kCompute); // NOLINT
 }
-TEST_CASE("RemoveCommandQueueTypeCompute") { // NOLINT
+TEST_CASE("RemoveDisabledCommandQueueType") { // NOLINT
   using namespace illuminate; // NOLINT
   using namespace illuminate::core; // NOLINT
   using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
+  unordered_set<CommandQueueType> disabled_command_queue_type_list{&memory_resource_work};
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
-  render_pass_command_queue_type_list = RemoveCommandQueueTypeCompute(std::move(render_pass_command_queue_type_list));
-  CHECK(render_pass_command_queue_type_list.size() == 3); // NOLINT
-  CHECK(render_pass_command_queue_type_list[0] == CommandQueueType::kGraphics); // NOLINT
-  CHECK(render_pass_command_queue_type_list[1] == CommandQueueType::kGraphics); // NOLINT
-  CHECK(render_pass_command_queue_type_list[2] == CommandQueueType::kTransfer); // NOLINT
+  SUBCASE("use all queues") {
+    render_pass_command_queue_type_list = RemoveDisabledCommandQueueType(disabled_command_queue_type_list, std::move(render_pass_command_queue_type_list));
+    CHECK(render_pass_command_queue_type_list.size() == 3); // NOLINT
+    CHECK(render_pass_command_queue_type_list[0] == CommandQueueType::kGraphics); // NOLINT
+    CHECK(render_pass_command_queue_type_list[1] == CommandQueueType::kCompute); // NOLINT
+    CHECK(render_pass_command_queue_type_list[2] == CommandQueueType::kTransfer); // NOLINT
+  }
+  SUBCASE("disable compute queue") {
+    disabled_command_queue_type_list.insert(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list = RemoveDisabledCommandQueueType(disabled_command_queue_type_list, std::move(render_pass_command_queue_type_list));
+    CHECK(render_pass_command_queue_type_list.size() == 3); // NOLINT
+    CHECK(render_pass_command_queue_type_list[0] == CommandQueueType::kGraphics); // NOLINT
+    CHECK(render_pass_command_queue_type_list[1] == CommandQueueType::kGraphics); // NOLINT
+    CHECK(render_pass_command_queue_type_list[2] == CommandQueueType::kTransfer); // NOLINT
+  }
+  SUBCASE("disable compute queue and transfer queue") {
+    disabled_command_queue_type_list.insert(CommandQueueType::kCompute);
+    disabled_command_queue_type_list.insert(CommandQueueType::kTransfer);
+    render_pass_command_queue_type_list = RemoveDisabledCommandQueueType(disabled_command_queue_type_list, std::move(render_pass_command_queue_type_list));
+    CHECK(render_pass_command_queue_type_list.size() == 3); // NOLINT
+    CHECK(render_pass_command_queue_type_list[0] == CommandQueueType::kGraphics); // NOLINT
+    CHECK(render_pass_command_queue_type_list[1] == CommandQueueType::kGraphics); // NOLINT
+    CHECK(render_pass_command_queue_type_list[2] == CommandQueueType::kGraphics); // NOLINT
+  }
+}
+TEST_CASE("async compute") { // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::core; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
+  vector<uint32_t> render_pass_order{&memory_resource_work};
+  uint32_t pass_num = 5;
+  render_pass_order.resize(pass_num);
+  std::iota(render_pass_order.begin(), render_pass_order.end(), 0);
+  vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+  render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  vector<unordered_set<CommandQueueType>> preceding_command_queue_type{&memory_resource_work};
+  vector<unordered_set<uint32_t>> async_compute_group{&memory_resource_work};
+  SUBCASE("no async compute group") {
+    render_pass_command_queue_type_list.clear();
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
+    auto [pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureFrameSyncSignalInfo(render_pass_order, {}, render_pass_command_queue_type_list, {}, {}, &memory_resource_work);
+    CHECK(pass_signal_info_initial_frame.size() == 3);
+    CHECK(!pass_signal_info_initial_frame.contains(0));
+    CHECK(!pass_signal_info_initial_frame.contains(1));
+    CHECK(pass_signal_info_initial_frame.contains(2));
+    CHECK(pass_signal_info_initial_frame.contains(3));
+    CHECK(pass_signal_info_initial_frame.contains(4));
+    CHECK(pass_signal_info_initial_frame.at(2).size() == 2);
+    CHECK(pass_signal_info_initial_frame.at(2).contains(1));
+    CHECK(pass_signal_info_initial_frame.at(2).contains(4));
+    CHECK(pass_signal_info_initial_frame.at(3).size() == 2);
+    CHECK(pass_signal_info_initial_frame.at(3).contains(0));
+    CHECK(pass_signal_info_initial_frame.at(3).contains(4));
+    CHECK(pass_signal_info_initial_frame.at(4).size() == 2);
+    CHECK(pass_signal_info_initial_frame.at(4).contains(0));
+    CHECK(pass_signal_info_initial_frame.at(4).contains(1));
+    CHECK(pass_signal_info_succeeding_frame.empty());
+  }
+  SUBCASE("intra-frame 1") {
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(0);
+    async_compute_group.back().insert(1);
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(2);
+    async_compute_group.back().insert(3);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(render_pass_order, render_pass_command_queue_type_list, preceding_command_queue_type, async_compute_group, &memory_resource_work);
+    CHECK(render_pass_order_initial_frame[0] == 0);
+    CHECK(render_pass_order_initial_frame[1] == 1);
+    CHECK(render_pass_order_initial_frame[2] == 2);
+    CHECK(render_pass_order_initial_frame[3] == 3);
+    CHECK(render_pass_order_initial_frame[4] == 4);
+    CHECK(render_pass_order_succeeding_frame.empty());
+    std::tie(pass_signal_info_initial_frame, pass_signal_info_succeeding_frame) = ConfigureFrameSyncSignalInfo(render_pass_order_initial_frame, render_pass_order_succeeding_frame, render_pass_command_queue_type_list, std::move(pass_signal_info_initial_frame), std::move(pass_signal_info_succeeding_frame), &memory_resource_work);
+    CHECK(pass_signal_info_initial_frame.size() == 4);
+    CHECK(pass_signal_info_initial_frame.contains(0));
+    CHECK(pass_signal_info_initial_frame.contains(1));
+    CHECK(!pass_signal_info_initial_frame.contains(2));
+    CHECK(pass_signal_info_initial_frame.contains(3));
+    CHECK(pass_signal_info_initial_frame.contains(4));
+    CHECK(pass_signal_info_initial_frame.at(0).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(0).contains(3));
+    CHECK(pass_signal_info_initial_frame.at(1).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(1).contains(2));
+    CHECK(pass_signal_info_initial_frame.at(3).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(3).contains(0));
+    CHECK(pass_signal_info_initial_frame.at(4).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(4).contains(1));
+    CHECK(pass_signal_info_succeeding_frame.empty());
+  }
+  SUBCASE("intra-frame 2") {
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(2);
+    async_compute_group.back().insert(3);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(render_pass_order, render_pass_command_queue_type_list, preceding_command_queue_type, async_compute_group, &memory_resource_work);
+    CHECK(render_pass_order_initial_frame[0] == 0);
+    CHECK(render_pass_order_initial_frame[1] == 1);
+    CHECK(render_pass_order_initial_frame[2] == 2);
+    CHECK(render_pass_order_initial_frame[3] == 3);
+    CHECK(render_pass_order_initial_frame[4] == 4);
+    CHECK(render_pass_order_succeeding_frame.empty());
+    std::tie(pass_signal_info_initial_frame, pass_signal_info_succeeding_frame) = ConfigureFrameSyncSignalInfo(render_pass_order_initial_frame, render_pass_order_succeeding_frame, render_pass_command_queue_type_list, std::move(pass_signal_info_initial_frame), std::move(pass_signal_info_succeeding_frame), &memory_resource_work);
+    CHECK(pass_signal_info_initial_frame.size() == 4);
+    CHECK(pass_signal_info_initial_frame.contains(0));
+    CHECK(pass_signal_info_initial_frame.contains(1));
+    CHECK(!pass_signal_info_initial_frame.contains(2));
+    CHECK(pass_signal_info_initial_frame.contains(3));
+    CHECK(pass_signal_info_initial_frame.contains(4));
+    CHECK(pass_signal_info_initial_frame.at(0).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(0).contains(3));
+    CHECK(pass_signal_info_initial_frame.at(1).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(1).contains(2));
+    CHECK(pass_signal_info_initial_frame.at(3).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(3).contains(0));
+    CHECK(pass_signal_info_initial_frame.at(4).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(4).contains(1));
+    CHECK(pass_signal_info_succeeding_frame.empty());
+  }
+  SUBCASE("intra-frame 3") {
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(0);
+    async_compute_group.back().insert(1);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(render_pass_order, render_pass_command_queue_type_list, preceding_command_queue_type, async_compute_group, &memory_resource_work);
+    CHECK(render_pass_order_initial_frame[0] == 0);
+    CHECK(render_pass_order_initial_frame[1] == 1);
+    CHECK(render_pass_order_initial_frame[2] == 2);
+    CHECK(render_pass_order_initial_frame[3] == 3);
+    CHECK(render_pass_order_initial_frame[4] == 4);
+    CHECK(render_pass_order_succeeding_frame.empty());
+    std::tie(pass_signal_info_initial_frame, pass_signal_info_succeeding_frame) = ConfigureFrameSyncSignalInfo(render_pass_order_initial_frame, render_pass_order_succeeding_frame, render_pass_command_queue_type_list, std::move(pass_signal_info_initial_frame), std::move(pass_signal_info_succeeding_frame), &memory_resource_work);
+    CHECK(pass_signal_info_initial_frame.size() == 2);
+    CHECK(!pass_signal_info_initial_frame.contains(0));
+    CHECK(!pass_signal_info_initial_frame.contains(1));
+    CHECK(!pass_signal_info_initial_frame.contains(2));
+    CHECK(pass_signal_info_initial_frame.contains(3));
+    CHECK(pass_signal_info_initial_frame.contains(4));
+    CHECK(pass_signal_info_initial_frame.at(3).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(3).contains(0));
+    CHECK(pass_signal_info_initial_frame.at(4).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(4).contains(1));
+    CHECK(pass_signal_info_succeeding_frame.empty());
+  }
+  SUBCASE("intra-frame 4") {
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(0);
+    async_compute_group.back().insert(3);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(render_pass_order, render_pass_command_queue_type_list, preceding_command_queue_type, async_compute_group, &memory_resource_work);
+    CHECK(render_pass_order_initial_frame[0] == 1);
+    CHECK(render_pass_order_initial_frame[1] == 0);
+    CHECK(render_pass_order_initial_frame[2] == 2);
+    CHECK(render_pass_order_initial_frame[3] == 3);
+    CHECK(render_pass_order_initial_frame[4] == 4);
+    CHECK(render_pass_order_succeeding_frame.empty());
+    std::tie(pass_signal_info_initial_frame, pass_signal_info_succeeding_frame) = ConfigureFrameSyncSignalInfo(render_pass_order_initial_frame, render_pass_order_succeeding_frame, render_pass_command_queue_type_list, std::move(pass_signal_info_initial_frame), std::move(pass_signal_info_succeeding_frame), &memory_resource_work);
+    CHECK(pass_signal_info_initial_frame.size() == 2);
+    CHECK(!pass_signal_info_initial_frame.contains(0));
+    CHECK(pass_signal_info_initial_frame.contains(1));
+    CHECK(!pass_signal_info_initial_frame.contains(2));
+    CHECK(!pass_signal_info_initial_frame.contains(3));
+    CHECK(pass_signal_info_initial_frame.contains(4));
+    CHECK(pass_signal_info_initial_frame.at(1).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(1).contains(0));
+    CHECK(pass_signal_info_initial_frame.at(4).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(4).contains(1));
+    CHECK(pass_signal_info_succeeding_frame.empty());
+  }
+  SUBCASE("intra-frame 5") {
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(2);
+    async_compute_group.back().insert(1);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(render_pass_order, render_pass_command_queue_type_list, preceding_command_queue_type, async_compute_group, &memory_resource_work);
+    CHECK(render_pass_order_initial_frame[0] == 0);
+    CHECK(render_pass_order_initial_frame[1] == 1);
+    CHECK(render_pass_order_initial_frame[2] == 2);
+    CHECK(render_pass_order_initial_frame[3] == 3);
+    CHECK(render_pass_order_initial_frame[4] == 4);
+    CHECK(render_pass_order_succeeding_frame.empty());
+    std::tie(pass_signal_info_initial_frame, pass_signal_info_succeeding_frame) = ConfigureFrameSyncSignalInfo(render_pass_order_initial_frame, render_pass_order_succeeding_frame, render_pass_command_queue_type_list, std::move(pass_signal_info_initial_frame), std::move(pass_signal_info_succeeding_frame), &memory_resource_work);
+    CHECK(pass_signal_info_initial_frame.size() == 2);
+    CHECK(pass_signal_info_initial_frame.contains(0));
+    CHECK(!pass_signal_info_initial_frame.contains(1));
+    CHECK(!pass_signal_info_initial_frame.contains(2));
+    CHECK(pass_signal_info_initial_frame.contains(3));
+    CHECK(!pass_signal_info_initial_frame.contains(4));
+    CHECK(pass_signal_info_initial_frame.at(0).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(0).contains(1));
+    CHECK(pass_signal_info_initial_frame.at(3).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(3).contains(0));
+    CHECK(pass_signal_info_succeeding_frame.empty());
+  }
+  SUBCASE("intra-frame 6") {
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(3);
+    async_compute_group.back().insert(4);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(render_pass_order, render_pass_command_queue_type_list, preceding_command_queue_type, async_compute_group, &memory_resource_work);
+    CHECK(render_pass_order_initial_frame[0] == 0);
+    CHECK(render_pass_order_initial_frame[1] == 1);
+    CHECK(render_pass_order_initial_frame[2] == 2);
+    CHECK(render_pass_order_initial_frame[3] == 3);
+    CHECK(render_pass_order_initial_frame[4] == 4);
+    CHECK(render_pass_order_succeeding_frame.empty());
+    std::tie(pass_signal_info_initial_frame, pass_signal_info_succeeding_frame) = ConfigureFrameSyncSignalInfo(render_pass_order_initial_frame, render_pass_order_succeeding_frame, render_pass_command_queue_type_list, std::move(pass_signal_info_initial_frame), std::move(pass_signal_info_succeeding_frame), &memory_resource_work);
+    CHECK(pass_signal_info_initial_frame.size() == 4);
+    CHECK(!pass_signal_info_initial_frame.contains(0));
+    CHECK(pass_signal_info_initial_frame.contains(1));
+    CHECK(pass_signal_info_initial_frame.contains(2));
+    CHECK(pass_signal_info_initial_frame.contains(3));
+    CHECK(pass_signal_info_initial_frame.contains(4));
+    CHECK(pass_signal_info_initial_frame.at(1).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(1).contains(4));
+    CHECK(pass_signal_info_initial_frame.at(2).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(2).contains(3));
+    CHECK(pass_signal_info_initial_frame.at(3).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(3).contains(0));
+    CHECK(pass_signal_info_initial_frame.at(4).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(4).contains(1));
+    CHECK(pass_signal_info_succeeding_frame.empty());
+  }
+  SUBCASE("intra-frame 7") {
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(1);
+    async_compute_group.back().insert(2);
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(3);
+    async_compute_group.back().insert(4);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(render_pass_order, render_pass_command_queue_type_list, preceding_command_queue_type, async_compute_group, &memory_resource_work);
+    CHECK(render_pass_order_initial_frame[0] == 0);
+    CHECK(render_pass_order_initial_frame[1] == 1);
+    CHECK(render_pass_order_initial_frame[2] == 2);
+    CHECK(render_pass_order_initial_frame[3] == 3);
+    CHECK(render_pass_order_initial_frame[4] == 4);
+    CHECK(render_pass_order_succeeding_frame.empty());
+    std::tie(pass_signal_info_initial_frame, pass_signal_info_succeeding_frame) = ConfigureFrameSyncSignalInfo(render_pass_order_initial_frame, render_pass_order_succeeding_frame, render_pass_command_queue_type_list, std::move(pass_signal_info_initial_frame), std::move(pass_signal_info_succeeding_frame), &memory_resource_work);
+    CHECK(pass_signal_info_initial_frame.size() == 4);
+    CHECK(pass_signal_info_initial_frame.contains(0));
+    CHECK(pass_signal_info_initial_frame.contains(1));
+    CHECK(pass_signal_info_initial_frame.contains(2));
+    CHECK(pass_signal_info_initial_frame.contains(3));
+    CHECK(!pass_signal_info_initial_frame.contains(4));
+    CHECK(pass_signal_info_initial_frame.at(0).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(0).contains(1));
+    CHECK(pass_signal_info_initial_frame.at(1).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(1).contains(4));
+    CHECK(pass_signal_info_initial_frame.at(2).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(2).contains(3));
+    CHECK(pass_signal_info_initial_frame.at(3).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(3).contains(0));
+    CHECK(pass_signal_info_succeeding_frame.empty());
+  }
+  SUBCASE("intra-frame 8") {
+    pass_num = 15;
+    render_pass_order.resize(pass_num);
+    std::iota(render_pass_order.begin(), render_pass_order.end(), 0);
+    render_pass_command_queue_type_list.clear();
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(3);
+    async_compute_group.back().insert(4);
+    async_compute_group.back().insert(5);
+    async_compute_group.back().insert(6);
+    async_compute_group.back().insert(7);
+    async_compute_group.back().insert(8);
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(9);
+    async_compute_group.back().insert(10);
+    async_compute_group.back().insert(11);
+    async_compute_group.back().insert(12);
+    async_compute_group.back().insert(13);
+    async_compute_group.back().insert(14);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(render_pass_order, render_pass_command_queue_type_list, preceding_command_queue_type, async_compute_group, &memory_resource_work);
+    CHECK(render_pass_order_initial_frame[0] == 0);
+    CHECK(render_pass_order_initial_frame[1] == 1);
+    CHECK(render_pass_order_initial_frame[2] == 2);
+    CHECK(render_pass_order_initial_frame[3] == 3);
+    CHECK(render_pass_order_initial_frame[4] == 4);
+    CHECK(render_pass_order_initial_frame[5] == 5);
+    CHECK(render_pass_order_initial_frame[6] == 6);
+    CHECK(render_pass_order_initial_frame[7] == 7);
+    CHECK(render_pass_order_initial_frame[8] == 8);
+    CHECK(render_pass_order_initial_frame[9] == 9);
+    CHECK(render_pass_order_initial_frame[10] == 10);
+    CHECK(render_pass_order_initial_frame[11] == 11);
+    CHECK(render_pass_order_initial_frame[12] == 12);
+    CHECK(render_pass_order_initial_frame[13] == 13);
+    CHECK(render_pass_order_initial_frame[14] == 14);
+    CHECK(render_pass_order_succeeding_frame.empty());
+    std::tie(pass_signal_info_initial_frame, pass_signal_info_succeeding_frame) = ConfigureFrameSyncSignalInfo(render_pass_order_initial_frame, render_pass_order_succeeding_frame, render_pass_command_queue_type_list, std::move(pass_signal_info_initial_frame), std::move(pass_signal_info_succeeding_frame), &memory_resource_work);
+    CHECK(pass_signal_info_initial_frame.size() == 4);
+    CHECK(!pass_signal_info_initial_frame.contains(0));
+    CHECK(!pass_signal_info_initial_frame.contains(1));
+    CHECK(pass_signal_info_initial_frame.contains(2));
+    CHECK(!pass_signal_info_initial_frame.contains(3));
+    CHECK(!pass_signal_info_initial_frame.contains(4));
+    CHECK(pass_signal_info_initial_frame.contains(5));
+    CHECK(!pass_signal_info_initial_frame.contains(6));
+    CHECK(!pass_signal_info_initial_frame.contains(7));
+    CHECK(pass_signal_info_initial_frame.contains(8));
+    CHECK(!pass_signal_info_initial_frame.contains(9));
+    CHECK(!pass_signal_info_initial_frame.contains(10));
+    CHECK(!pass_signal_info_initial_frame.contains(11));
+    CHECK(!pass_signal_info_initial_frame.contains(12));
+    CHECK(!pass_signal_info_initial_frame.contains(13));
+    CHECK(pass_signal_info_initial_frame.contains(14));
+    CHECK(pass_signal_info_initial_frame.at(2).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(2).contains(6));
+    CHECK(pass_signal_info_initial_frame.at(5).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(5).contains(12));
+    CHECK(pass_signal_info_initial_frame.at(8).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(8).contains(9));
+    CHECK(pass_signal_info_initial_frame.at(14).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(14).contains(0));
+    CHECK(pass_signal_info_succeeding_frame.empty());
+  }
+  SUBCASE("intra-frame 9") {
+    pass_num = 12;
+    render_pass_order.resize(pass_num);
+    std::iota(render_pass_order.begin(), render_pass_order.end(), 0);
+    render_pass_command_queue_type_list.clear();
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(2);
+    async_compute_group.back().insert(3);
+    async_compute_group.back().insert(4);
+    async_compute_group.back().insert(5);
+    async_compute_group.back().insert(6);
+    async_compute_group.back().insert(7);
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(8);
+    async_compute_group.back().insert(9);
+    async_compute_group.back().insert(10);
+    async_compute_group.back().insert(11);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(render_pass_order, render_pass_command_queue_type_list, preceding_command_queue_type, async_compute_group, &memory_resource_work);
+    CHECK(render_pass_order_initial_frame.size() == 12);
+    CHECK(render_pass_order_initial_frame[0] == 0);
+    CHECK(render_pass_order_initial_frame[1] == 1);
+    CHECK(render_pass_order_initial_frame[2] == 2);
+    CHECK(render_pass_order_initial_frame[3] == 3);
+    CHECK(render_pass_order_initial_frame[4] == 4);
+    CHECK(render_pass_order_initial_frame[5] == 5);
+    CHECK(render_pass_order_initial_frame[6] == 6);
+    CHECK(render_pass_order_initial_frame[7] == 7);
+    CHECK(render_pass_order_initial_frame[8] == 8);
+    CHECK(render_pass_order_initial_frame[9] == 9);
+    CHECK(render_pass_order_initial_frame[10] == 10);
+    CHECK(render_pass_order_initial_frame[11] == 11);
+    CHECK(render_pass_order_succeeding_frame.empty());
+    std::tie(pass_signal_info_initial_frame, pass_signal_info_succeeding_frame) = ConfigureFrameSyncSignalInfo(render_pass_order_initial_frame, render_pass_order_succeeding_frame, render_pass_command_queue_type_list, std::move(pass_signal_info_initial_frame), std::move(pass_signal_info_succeeding_frame), &memory_resource_work);
+    CHECK(pass_signal_info_initial_frame.size() == 5);
+    CHECK(!pass_signal_info_initial_frame.contains(0));
+    CHECK(pass_signal_info_initial_frame.contains(1));
+    CHECK(!pass_signal_info_initial_frame.contains(2));
+    CHECK(pass_signal_info_initial_frame.contains(3));
+    CHECK(!pass_signal_info_initial_frame.contains(4));
+    CHECK(pass_signal_info_initial_frame.contains(5));
+    CHECK(!pass_signal_info_initial_frame.contains(6));
+    CHECK(!pass_signal_info_initial_frame.contains(7));
+    CHECK(!pass_signal_info_initial_frame.contains(8));
+    CHECK(pass_signal_info_initial_frame.contains(9));
+    CHECK(!pass_signal_info_initial_frame.contains(10));
+    CHECK(pass_signal_info_initial_frame.contains(11));
+    CHECK(pass_signal_info_initial_frame.at(1).size() == 2);
+    CHECK(pass_signal_info_initial_frame.at(1).contains(2));
+    CHECK(pass_signal_info_initial_frame.at(1).contains(4));
+    CHECK(pass_signal_info_initial_frame.at(3).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(3).contains(1));
+    CHECK(pass_signal_info_initial_frame.at(5).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(5).contains(8));
+    CHECK(pass_signal_info_initial_frame.at(9).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(9).contains(0));
+    CHECK(pass_signal_info_initial_frame.at(11).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(11).contains(0));
+    CHECK(pass_signal_info_succeeding_frame.empty());
+  }
+  SUBCASE("inter-frame 1") {
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(0);
+    async_compute_group.back().insert(1);
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(2);
+    async_compute_group.back().insert(3);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(render_pass_order, render_pass_command_queue_type_list, preceding_command_queue_type, async_compute_group, &memory_resource_work);
+    CHECK(render_pass_order_initial_frame.size() == 2);
+    CHECK(render_pass_order_initial_frame[0] == 0);
+    CHECK(render_pass_order_initial_frame[1] == 2);
+    CHECK(render_pass_order_succeeding_frame.size() == 5);
+    CHECK(render_pass_order_succeeding_frame[0] == 0);
+    CHECK(render_pass_order_succeeding_frame[1] == 1);
+    CHECK(render_pass_order_succeeding_frame[2] == 2);
+    CHECK(render_pass_order_succeeding_frame[3] == 3);
+    CHECK(render_pass_order_succeeding_frame[4] == 4);
+    std::tie(pass_signal_info_initial_frame, pass_signal_info_succeeding_frame) = ConfigureFrameSyncSignalInfo(render_pass_order_initial_frame, render_pass_order_succeeding_frame, render_pass_command_queue_type_list, std::move(pass_signal_info_initial_frame), std::move(pass_signal_info_succeeding_frame), &memory_resource_work);
+    CHECK(pass_signal_info_initial_frame.size() == 1);
+    CHECK(!pass_signal_info_initial_frame.contains(0));
+    CHECK(!pass_signal_info_initial_frame.contains(1));
+    CHECK(!pass_signal_info_initial_frame.contains(2));
+    CHECK(!pass_signal_info_initial_frame.contains(3));
+    CHECK(!pass_signal_info_initial_frame.contains(4));
+    CHECK(pass_signal_info_initial_frame.at(2).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(2).contains(1));
+    CHECK(pass_signal_info_succeeding_frame.size() == 4);
+    CHECK(pass_signal_info_succeeding_frame.contains(0));
+    CHECK(pass_signal_info_succeeding_frame.contains(1));
+    CHECK(!pass_signal_info_succeeding_frame.contains(2));
+    CHECK(pass_signal_info_succeeding_frame.contains(3));
+    CHECK(pass_signal_info_succeeding_frame.contains(4));
+    CHECK(pass_signal_info_succeeding_frame.at(0).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(0).contains(3));
+    CHECK(pass_signal_info_succeeding_frame.at(1).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(1).contains(2));
+    CHECK(pass_signal_info_succeeding_frame.at(3).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(3).contains(0));
+    CHECK(pass_signal_info_succeeding_frame.at(4).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(4).contains(1));
+  }
+  SUBCASE("inter-frame 2") {
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(2);
+    async_compute_group.back().insert(3);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(render_pass_order, render_pass_command_queue_type_list, preceding_command_queue_type, async_compute_group, &memory_resource_work);
+    CHECK(render_pass_order_initial_frame.size() == 1);
+    CHECK(render_pass_order_initial_frame[1] == 2);
+    CHECK(render_pass_order_succeeding_frame.size() == 5);
+    CHECK(render_pass_order_succeeding_frame[0] == 0);
+    CHECK(render_pass_order_succeeding_frame[1] == 1);
+    CHECK(render_pass_order_succeeding_frame[2] == 2);
+    CHECK(render_pass_order_succeeding_frame[3] == 3);
+    CHECK(render_pass_order_succeeding_frame[4] == 4);
+    std::tie(pass_signal_info_initial_frame, pass_signal_info_succeeding_frame) = ConfigureFrameSyncSignalInfo(render_pass_order_initial_frame, render_pass_order_succeeding_frame, render_pass_command_queue_type_list, std::move(pass_signal_info_initial_frame), std::move(pass_signal_info_succeeding_frame), &memory_resource_work);
+	CHECK(pass_signal_info_initial_frame.size() == 1);
+    CHECK(!pass_signal_info_initial_frame.contains(0));
+    CHECK(pass_signal_info_initial_frame.contains(1));
+    CHECK(!pass_signal_info_initial_frame.contains(2));
+    CHECK(!pass_signal_info_initial_frame.contains(3));
+    CHECK(!pass_signal_info_initial_frame.contains(4));
+    CHECK(pass_signal_info_initial_frame.at(2).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(2).contains(1));
+    CHECK(pass_signal_info_succeeding_frame.size() == 4);
+    CHECK(pass_signal_info_succeeding_frame.contains(0));
+    CHECK(pass_signal_info_succeeding_frame.contains(1));
+    CHECK(!pass_signal_info_succeeding_frame.contains(2));
+    CHECK(pass_signal_info_succeeding_frame.contains(3));
+    CHECK(pass_signal_info_succeeding_frame.contains(4));
+    CHECK(pass_signal_info_succeeding_frame.at(0).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(0).contains(3));
+    CHECK(pass_signal_info_succeeding_frame.at(1).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(1).contains(2));
+    CHECK(pass_signal_info_succeeding_frame.at(3).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(3).contains(0));
+    CHECK(pass_signal_info_succeeding_frame.at(4).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(4).contains(1));
+  }
+  SUBCASE("inter-frame 3") {
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(0);
+    async_compute_group.back().insert(1);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(render_pass_order, render_pass_command_queue_type_list, preceding_command_queue_type, async_compute_group, &memory_resource_work);
+    CHECK(render_pass_order_initial_frame.size() == 1);
+    CHECK(render_pass_order_initial_frame[0] == 0);
+    CHECK(render_pass_order_succeeding_frame.size() == 5);
+    CHECK(render_pass_order_succeeding_frame[0] == 0);
+    CHECK(render_pass_order_succeeding_frame[1] == 1);
+    CHECK(render_pass_order_succeeding_frame[2] == 2);
+    CHECK(render_pass_order_succeeding_frame[3] == 3);
+    CHECK(render_pass_order_succeeding_frame[4] == 4);
+    std::tie(pass_signal_info_initial_frame, pass_signal_info_succeeding_frame) = ConfigureFrameSyncSignalInfo(render_pass_order_initial_frame, render_pass_order_succeeding_frame, render_pass_command_queue_type_list, std::move(pass_signal_info_initial_frame), std::move(pass_signal_info_succeeding_frame), &memory_resource_work);
+	CHECK(pass_signal_info_initial_frame.size() == 1);
+    CHECK(pass_signal_info_initial_frame.contains(0));
+    CHECK(!pass_signal_info_initial_frame.contains(1));
+    CHECK(!pass_signal_info_initial_frame.contains(2));
+    CHECK(!pass_signal_info_initial_frame.contains(3));
+    CHECK(!pass_signal_info_initial_frame.contains(4));
+    CHECK(pass_signal_info_initial_frame.at(0).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(0).contains(1));
+    CHECK(pass_signal_info_succeeding_frame.size() == 2);
+    CHECK(!pass_signal_info_succeeding_frame.contains(0));
+    CHECK(!pass_signal_info_succeeding_frame.contains(1));
+    CHECK(!pass_signal_info_succeeding_frame.contains(2));
+    CHECK(pass_signal_info_succeeding_frame.contains(3));
+    CHECK(pass_signal_info_succeeding_frame.contains(4));
+    CHECK(pass_signal_info_succeeding_frame.at(3).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(3).contains(0));
+    CHECK(pass_signal_info_succeeding_frame.at(4).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(4).contains(1));
+  }
+  SUBCASE("inter-frame 4") {
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(0);
+    async_compute_group.back().insert(3);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(render_pass_order, render_pass_command_queue_type_list, preceding_command_queue_type, async_compute_group, &memory_resource_work);
+    CHECK(render_pass_order_initial_frame.size() == 1);
+    CHECK(render_pass_order_initial_frame[0] == 0);
+    CHECK(render_pass_order_succeeding_frame.size() == 5);
+    CHECK(render_pass_order_succeeding_frame[0] == 0);
+    CHECK(render_pass_order_succeeding_frame[1] == 1);
+    CHECK(render_pass_order_succeeding_frame[2] == 2);
+    CHECK(render_pass_order_succeeding_frame[3] == 3);
+    CHECK(render_pass_order_succeeding_frame[4] == 4);
+    std::tie(pass_signal_info_initial_frame, pass_signal_info_succeeding_frame) = ConfigureFrameSyncSignalInfo(render_pass_order_initial_frame, render_pass_order_succeeding_frame, render_pass_command_queue_type_list, std::move(pass_signal_info_initial_frame), std::move(pass_signal_info_succeeding_frame), &memory_resource_work);
+	CHECK(pass_signal_info_initial_frame.size() == 1);
+    CHECK(pass_signal_info_initial_frame.contains(0));
+    CHECK(!pass_signal_info_initial_frame.contains(1));
+    CHECK(!pass_signal_info_initial_frame.contains(2));
+    CHECK(!pass_signal_info_initial_frame.contains(3));
+    CHECK(!pass_signal_info_initial_frame.contains(4));
+    CHECK(pass_signal_info_initial_frame.at(0).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(0).contains(1));
+    CHECK(pass_signal_info_succeeding_frame.size() == 2);
+    CHECK(!pass_signal_info_succeeding_frame.contains(0));
+    CHECK(pass_signal_info_succeeding_frame.contains(1));
+    CHECK(!pass_signal_info_succeeding_frame.contains(2));
+    CHECK(!pass_signal_info_succeeding_frame.contains(3));
+    CHECK(pass_signal_info_succeeding_frame.contains(4));
+    CHECK(pass_signal_info_succeeding_frame.at(1).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(1).contains(0));
+    CHECK(pass_signal_info_succeeding_frame.at(4).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(4).contains(1));
+  }
+  SUBCASE("inter-frame 4-2") {
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type.back().insert(CommandQueueType::kCompute);
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(0);
+    async_compute_group.back().insert(3);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(render_pass_order, render_pass_command_queue_type_list, preceding_command_queue_type, async_compute_group, &memory_resource_work);
+    CHECK(render_pass_order_initial_frame.size() == 1);
+    CHECK(render_pass_order_initial_frame[0] == 3);
+    CHECK(render_pass_order_succeeding_frame.size() == 5);
+    CHECK(render_pass_order_succeeding_frame[0] == 0);
+    CHECK(render_pass_order_succeeding_frame[1] == 1);
+    CHECK(render_pass_order_succeeding_frame[2] == 2);
+    CHECK(render_pass_order_succeeding_frame[3] == 3);
+    CHECK(render_pass_order_succeeding_frame[4] == 4);
+    std::tie(pass_signal_info_initial_frame, pass_signal_info_succeeding_frame) = ConfigureFrameSyncSignalInfo(render_pass_order_initial_frame, render_pass_order_succeeding_frame, render_pass_command_queue_type_list, std::move(pass_signal_info_initial_frame), std::move(pass_signal_info_succeeding_frame), &memory_resource_work);
+    CHECK(pass_signal_info_initial_frame.size() == 1);
+    CHECK(!pass_signal_info_initial_frame.contains(0));
+    CHECK(!pass_signal_info_initial_frame.contains(1));
+    CHECK(!pass_signal_info_initial_frame.contains(2));
+    CHECK(pass_signal_info_initial_frame.contains(3));
+    CHECK(!pass_signal_info_initial_frame.contains(4));
+    CHECK(pass_signal_info_initial_frame.at(3).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(3).contains(0));
+    CHECK(pass_signal_info_succeeding_frame.size() == 2);
+    CHECK(!pass_signal_info_succeeding_frame.contains(0));
+    CHECK(pass_signal_info_succeeding_frame.contains(1));
+    CHECK(!pass_signal_info_succeeding_frame.contains(2));
+    CHECK(!pass_signal_info_succeeding_frame.contains(3));
+    CHECK(pass_signal_info_succeeding_frame.contains(4));
+    CHECK(pass_signal_info_succeeding_frame.at(1).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(1).contains(0));
+    CHECK(pass_signal_info_succeeding_frame.at(4).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(4).contains(1));
+  }
+  SUBCASE("inter-frame 5") {
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(2);
+    async_compute_group.back().insert(1);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(render_pass_order, render_pass_command_queue_type_list, preceding_command_queue_type, async_compute_group, &memory_resource_work);
+    CHECK(render_pass_order_initial_frame.size() == 1);
+    CHECK(render_pass_order_initial_frame[0] == 2);
+    CHECK(render_pass_order_succeeding_frame.size() == 5);
+    CHECK(render_pass_order_succeeding_frame[0] == 0);
+    CHECK(render_pass_order_succeeding_frame[1] == 1);
+    CHECK(render_pass_order_succeeding_frame[2] == 2);
+    CHECK(render_pass_order_succeeding_frame[3] == 3);
+    CHECK(render_pass_order_succeeding_frame[4] == 4);
+    std::tie(pass_signal_info_initial_frame, pass_signal_info_succeeding_frame) = ConfigureFrameSyncSignalInfo(render_pass_order_initial_frame, render_pass_order_succeeding_frame, render_pass_command_queue_type_list, std::move(pass_signal_info_initial_frame), std::move(pass_signal_info_succeeding_frame), &memory_resource_work);
+    CHECK(pass_signal_info_initial_frame.size() == 1);
+    CHECK(!pass_signal_info_initial_frame.contains(0));
+    CHECK(!pass_signal_info_initial_frame.contains(1));
+    CHECK(pass_signal_info_initial_frame.contains(2));
+    CHECK(!pass_signal_info_initial_frame.contains(3));
+    CHECK(!pass_signal_info_initial_frame.contains(4));
+    CHECK(pass_signal_info_initial_frame.at(2).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(2).contains(1));
+    CHECK(pass_signal_info_succeeding_frame.size() == 1);
+    CHECK(!pass_signal_info_succeeding_frame.contains(0));
+    CHECK(!pass_signal_info_succeeding_frame.contains(1));
+    CHECK(pass_signal_info_succeeding_frame.contains(2));
+    CHECK(!pass_signal_info_succeeding_frame.contains(3));
+    CHECK(!pass_signal_info_succeeding_frame.contains(4));
+    CHECK(pass_signal_info_succeeding_frame.at(0).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(0).contains(1));
+    CHECK(pass_signal_info_succeeding_frame.at(3).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(3).contains(0));
+  }
+  SUBCASE("inter-frame 5-2") {
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type.back().insert(CommandQueueType::kCompute);
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(1);
+    async_compute_group.back().insert(2);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(render_pass_order, render_pass_command_queue_type_list, preceding_command_queue_type, async_compute_group, &memory_resource_work);
+    CHECK(render_pass_order_initial_frame.size() == 1);
+    CHECK(render_pass_order_initial_frame[0] == 1);
+    CHECK(render_pass_order_succeeding_frame.size() == 5);
+    CHECK(render_pass_order_succeeding_frame[0] == 0);
+    CHECK(render_pass_order_succeeding_frame[1] == 1);
+    CHECK(render_pass_order_succeeding_frame[2] == 2);
+    CHECK(render_pass_order_succeeding_frame[3] == 3);
+    CHECK(render_pass_order_succeeding_frame[4] == 4);
+    std::tie(pass_signal_info_initial_frame, pass_signal_info_succeeding_frame) = ConfigureFrameSyncSignalInfo(render_pass_order_initial_frame, render_pass_order_succeeding_frame, render_pass_command_queue_type_list, std::move(pass_signal_info_initial_frame), std::move(pass_signal_info_succeeding_frame), &memory_resource_work);
+    CHECK(pass_signal_info_initial_frame.size() == 1);
+    CHECK(!pass_signal_info_initial_frame.contains(0));
+    CHECK(pass_signal_info_initial_frame.contains(1));
+    CHECK(!pass_signal_info_initial_frame.contains(2));
+    CHECK(!pass_signal_info_initial_frame.contains(3));
+    CHECK(!pass_signal_info_initial_frame.contains(4));
+    CHECK(pass_signal_info_initial_frame.at(1).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(1).contains(0));
+    CHECK(pass_signal_info_succeeding_frame.size() == 2);
+    CHECK(pass_signal_info_succeeding_frame.contains(0));
+    CHECK(!pass_signal_info_succeeding_frame.contains(1));
+    CHECK(!pass_signal_info_succeeding_frame.contains(2));
+    CHECK(pass_signal_info_succeeding_frame.contains(3));
+    CHECK(!pass_signal_info_succeeding_frame.contains(4));
+    CHECK(pass_signal_info_succeeding_frame.at(0).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(0).contains(1));
+    CHECK(pass_signal_info_succeeding_frame.at(3).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(3).contains(0));
+  }
+  SUBCASE("inter-frame 6") {
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(3);
+    async_compute_group.back().insert(4);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(render_pass_order, render_pass_command_queue_type_list, preceding_command_queue_type, async_compute_group, &memory_resource_work);
+    CHECK(render_pass_order_initial_frame.size() == 2);
+    CHECK(render_pass_order_initial_frame[0] == 4);
+    CHECK(render_pass_order_succeeding_frame.size() == 5);
+    CHECK(render_pass_order_succeeding_frame[0] == 0);
+    CHECK(render_pass_order_succeeding_frame[1] == 1);
+    CHECK(render_pass_order_succeeding_frame[2] == 2);
+    CHECK(render_pass_order_succeeding_frame[3] == 3);
+    CHECK(render_pass_order_succeeding_frame[4] == 4);
+    std::tie(pass_signal_info_initial_frame, pass_signal_info_succeeding_frame) = ConfigureFrameSyncSignalInfo(render_pass_order_initial_frame, render_pass_order_succeeding_frame, render_pass_command_queue_type_list, std::move(pass_signal_info_initial_frame), std::move(pass_signal_info_succeeding_frame), &memory_resource_work);
+    CHECK(pass_signal_info_initial_frame.empty());
+    CHECK(pass_signal_info_succeeding_frame.size() == 4);
+    CHECK(!pass_signal_info_succeeding_frame.contains(0));
+    CHECK(pass_signal_info_succeeding_frame.contains(1));
+    CHECK(pass_signal_info_succeeding_frame.contains(2));
+    CHECK(pass_signal_info_succeeding_frame.contains(3));
+    CHECK(pass_signal_info_succeeding_frame.contains(4));
+    CHECK(pass_signal_info_succeeding_frame.at(1).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(1).contains(4));
+    CHECK(pass_signal_info_succeeding_frame.at(2).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(2).contains(3));
+    CHECK(pass_signal_info_succeeding_frame.at(3).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(3).contains(0));
+    CHECK(pass_signal_info_succeeding_frame.at(4).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(4).contains(1));
+  }
+  SUBCASE("inter-frame 7") {
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(1);
+    async_compute_group.back().insert(2);
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type.back().insert(CommandQueueType::kCompute);
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(3);
+    async_compute_group.back().insert(4);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(render_pass_order, render_pass_command_queue_type_list, preceding_command_queue_type, async_compute_group, &memory_resource_work);
+    CHECK(render_pass_order_initial_frame.size() == 2);
+    CHECK(render_pass_order_initial_frame[0] == 2);
+    CHECK(render_pass_order_initial_frame[1] == 3);
+    CHECK(render_pass_order_succeeding_frame.size() == 5);
+    CHECK(render_pass_order_succeeding_frame[0] == 0);
+    CHECK(render_pass_order_succeeding_frame[1] == 1);
+    CHECK(render_pass_order_succeeding_frame[2] == 2);
+    CHECK(render_pass_order_succeeding_frame[3] == 3);
+    CHECK(render_pass_order_succeeding_frame[4] == 4);
+    std::tie(pass_signal_info_initial_frame, pass_signal_info_succeeding_frame) = ConfigureFrameSyncSignalInfo(render_pass_order_initial_frame, render_pass_order_succeeding_frame, render_pass_command_queue_type_list, std::move(pass_signal_info_initial_frame), std::move(pass_signal_info_succeeding_frame), &memory_resource_work);
+    CHECK(pass_signal_info_initial_frame.size() == 1);
+    CHECK(!pass_signal_info_initial_frame.contains(0));
+    CHECK(!pass_signal_info_initial_frame.contains(1));
+    CHECK(!pass_signal_info_initial_frame.contains(2));
+    CHECK(pass_signal_info_initial_frame.contains(3));
+    CHECK(!pass_signal_info_initial_frame.contains(4));
+    CHECK(pass_signal_info_initial_frame.at(3).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(3).contains(0));
+    CHECK(pass_signal_info_succeeding_frame.size() == 4);
+    CHECK(pass_signal_info_succeeding_frame.contains(0));
+    CHECK(pass_signal_info_succeeding_frame.contains(1));
+    CHECK(pass_signal_info_succeeding_frame.contains(2));
+    CHECK(pass_signal_info_succeeding_frame.contains(3));
+    CHECK(!pass_signal_info_succeeding_frame.contains(4));
+    CHECK(pass_signal_info_succeeding_frame.at(0).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(0).contains(1));
+    CHECK(pass_signal_info_succeeding_frame.at(1).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(1).contains(4));
+    CHECK(pass_signal_info_succeeding_frame.at(2).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(2).contains(3));
+    CHECK(pass_signal_info_succeeding_frame.at(3).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(3).contains(0));
+  }
+  SUBCASE("inter-frame 8") {
+    pass_num = 15;
+    render_pass_order.resize(pass_num);
+    std::iota(render_pass_order.begin(), render_pass_order.end(), 0);
+    render_pass_command_queue_type_list.clear();
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type.back().insert(CommandQueueType::kCompute);
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(3);
+    async_compute_group.back().insert(4);
+    async_compute_group.back().insert(5);
+    async_compute_group.back().insert(6);
+    async_compute_group.back().insert(7);
+    async_compute_group.back().insert(8);
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(9);
+    async_compute_group.back().insert(10);
+    async_compute_group.back().insert(11);
+    async_compute_group.back().insert(12);
+    async_compute_group.back().insert(13);
+    async_compute_group.back().insert(14);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(render_pass_order, render_pass_command_queue_type_list, preceding_command_queue_type, async_compute_group, &memory_resource_work);
+    CHECK(render_pass_order_initial_frame.size() == 6);
+    CHECK(render_pass_order_initial_frame[0] == 6);
+    CHECK(render_pass_order_initial_frame[1] == 7);
+    CHECK(render_pass_order_initial_frame[2] == 8);
+    CHECK(render_pass_order_initial_frame[3] == 9);
+    CHECK(render_pass_order_initial_frame[4] == 10);
+    CHECK(render_pass_order_initial_frame[5] == 11);
+    CHECK(render_pass_order_succeeding_frame.size() == 15);
+    CHECK(render_pass_order_succeeding_frame[0] == 0);
+    CHECK(render_pass_order_succeeding_frame[1] == 1);
+    CHECK(render_pass_order_succeeding_frame[2] == 2);
+    CHECK(render_pass_order_succeeding_frame[3] == 3);
+    CHECK(render_pass_order_succeeding_frame[4] == 4);
+    CHECK(render_pass_order_succeeding_frame[5] == 5);
+    CHECK(render_pass_order_succeeding_frame[6] == 6);
+    CHECK(render_pass_order_succeeding_frame[7] == 7);
+    CHECK(render_pass_order_succeeding_frame[8] == 8);
+    CHECK(render_pass_order_succeeding_frame[9] == 9);
+    CHECK(render_pass_order_succeeding_frame[10] == 10);
+    CHECK(render_pass_order_succeeding_frame[11] == 11);
+    CHECK(render_pass_order_succeeding_frame[12] == 12);
+    CHECK(render_pass_order_succeeding_frame[13] == 13);
+    CHECK(render_pass_order_succeeding_frame[14] == 14);
+    std::tie(pass_signal_info_initial_frame, pass_signal_info_succeeding_frame) = ConfigureFrameSyncSignalInfo(render_pass_order_initial_frame, render_pass_order_succeeding_frame, render_pass_command_queue_type_list, std::move(pass_signal_info_initial_frame), std::move(pass_signal_info_succeeding_frame), &memory_resource_work);
+    CHECK(pass_signal_info_initial_frame.size() == 1);
+    CHECK(!pass_signal_info_initial_frame.contains(0));
+    CHECK(!pass_signal_info_initial_frame.contains(1));
+    CHECK(!pass_signal_info_initial_frame.contains(2));
+    CHECK(!pass_signal_info_initial_frame.contains(3));
+    CHECK(!pass_signal_info_initial_frame.contains(4));
+    CHECK(!pass_signal_info_initial_frame.contains(5));
+    CHECK(!pass_signal_info_initial_frame.contains(6));
+    CHECK(!pass_signal_info_initial_frame.contains(7));
+    CHECK(pass_signal_info_initial_frame.contains(8));
+    CHECK(!pass_signal_info_initial_frame.contains(9));
+    CHECK(!pass_signal_info_initial_frame.contains(10));
+    CHECK(!pass_signal_info_initial_frame.contains(11));
+    CHECK(!pass_signal_info_initial_frame.contains(12));
+    CHECK(!pass_signal_info_initial_frame.contains(13));
+    CHECK(!pass_signal_info_initial_frame.contains(14));
+    CHECK(pass_signal_info_initial_frame.at(8).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(8).contains(9));
+    CHECK(pass_signal_info_succeeding_frame.size() == 4);
+    CHECK(!pass_signal_info_succeeding_frame.contains(0));
+    CHECK(!pass_signal_info_succeeding_frame.contains(1));
+    CHECK(pass_signal_info_succeeding_frame.contains(2));
+    CHECK(!pass_signal_info_succeeding_frame.contains(3));
+    CHECK(!pass_signal_info_succeeding_frame.contains(4));
+    CHECK(pass_signal_info_succeeding_frame.contains(5));
+    CHECK(!pass_signal_info_succeeding_frame.contains(6));
+    CHECK(!pass_signal_info_succeeding_frame.contains(7));
+    CHECK(pass_signal_info_succeeding_frame.contains(8));
+    CHECK(!pass_signal_info_succeeding_frame.contains(9));
+    CHECK(!pass_signal_info_succeeding_frame.contains(10));
+    CHECK(!pass_signal_info_succeeding_frame.contains(11));
+    CHECK(!pass_signal_info_succeeding_frame.contains(12));
+    CHECK(!pass_signal_info_succeeding_frame.contains(13));
+    CHECK(pass_signal_info_succeeding_frame.contains(14));
+    CHECK(pass_signal_info_succeeding_frame.at(2).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(2).contains(6));
+    CHECK(pass_signal_info_succeeding_frame.at(5).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(5).contains(12));
+    CHECK(pass_signal_info_succeeding_frame.at(8).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(8).contains(9));
+    CHECK(pass_signal_info_succeeding_frame.at(14).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(14).contains(0));
+  }
+  SUBCASE("inter-frame 9") {
+    pass_num = 12;
+    render_pass_order.resize(pass_num);
+    std::iota(render_pass_order.begin(), render_pass_order.end(), 0);
+    render_pass_command_queue_type_list.clear();
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type.back().insert(CommandQueueType::kTransfer);
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(0);
+    async_compute_group.back().insert(1);
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(2);
+    async_compute_group.back().insert(3);
+    async_compute_group.back().insert(4);
+    async_compute_group.back().insert(5);
+    async_compute_group.back().insert(6);
+    async_compute_group.back().insert(7);
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(8);
+    async_compute_group.back().insert(9);
+    async_compute_group.back().insert(10);
+    async_compute_group.back().insert(11);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(render_pass_order, render_pass_command_queue_type_list, preceding_command_queue_type, async_compute_group, &memory_resource_work);
+    CHECK(render_pass_order_initial_frame.size() == 6);
+    CHECK(render_pass_order_initial_frame[0] == 0);
+    CHECK(render_pass_order_initial_frame[1] == 1);
+    CHECK(render_pass_order_initial_frame[2] == 2);
+    CHECK(render_pass_order_initial_frame[3] == 3);
+    CHECK(render_pass_order_initial_frame[4] == 8);
+    CHECK(render_pass_order_initial_frame[5] == 9);
+    CHECK(render_pass_order_succeeding_frame.size() == 12);
+    CHECK(render_pass_order_succeeding_frame[0] == 0);
+    CHECK(render_pass_order_succeeding_frame[1] == 1);
+    CHECK(render_pass_order_succeeding_frame[2] == 2);
+    CHECK(render_pass_order_succeeding_frame[3] == 3);
+    CHECK(render_pass_order_succeeding_frame[4] == 4);
+    CHECK(render_pass_order_succeeding_frame[5] == 5);
+    CHECK(render_pass_order_succeeding_frame[6] == 6);
+    CHECK(render_pass_order_succeeding_frame[7] == 7);
+    CHECK(render_pass_order_succeeding_frame[8] == 8);
+    CHECK(render_pass_order_succeeding_frame[9] == 9);
+    CHECK(render_pass_order_succeeding_frame[10] == 10);
+    CHECK(render_pass_order_succeeding_frame[11] == 11);
+    std::tie(pass_signal_info_initial_frame, pass_signal_info_succeeding_frame) = ConfigureFrameSyncSignalInfo(render_pass_order_initial_frame, render_pass_order_succeeding_frame, render_pass_command_queue_type_list, std::move(pass_signal_info_initial_frame), std::move(pass_signal_info_succeeding_frame), &memory_resource_work);
+    CHECK(pass_signal_info_initial_frame.size() == 2);
+    CHECK(!pass_signal_info_initial_frame.contains(0));
+    CHECK(pass_signal_info_initial_frame.contains(1));
+    CHECK(!pass_signal_info_initial_frame.contains(2));
+    CHECK(!pass_signal_info_initial_frame.contains(3));
+    CHECK(!pass_signal_info_initial_frame.contains(4));
+    CHECK(!pass_signal_info_initial_frame.contains(5));
+    CHECK(!pass_signal_info_initial_frame.contains(6));
+    CHECK(!pass_signal_info_initial_frame.contains(7));
+    CHECK(!pass_signal_info_initial_frame.contains(8));
+    CHECK(pass_signal_info_initial_frame.contains(9));
+    CHECK(!pass_signal_info_initial_frame.contains(10));
+    CHECK(!pass_signal_info_initial_frame.contains(11));
+    CHECK(pass_signal_info_initial_frame.contains(1));
+    CHECK(pass_signal_info_initial_frame.at(1).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(1).contains(2));
+    CHECK(pass_signal_info_initial_frame.contains(9));
+    CHECK(pass_signal_info_initial_frame.at(9).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(9).contains(0));
+    CHECK(pass_signal_info_succeeding_frame.size() == 4);
+    CHECK(!pass_signal_info_succeeding_frame.contains(0));
+    CHECK(!pass_signal_info_succeeding_frame.contains(1));
+    CHECK(pass_signal_info_succeeding_frame.contains(2));
+    CHECK(!pass_signal_info_succeeding_frame.contains(3));
+    CHECK(!pass_signal_info_succeeding_frame.contains(4));
+    CHECK(pass_signal_info_succeeding_frame.contains(5));
+    CHECK(!pass_signal_info_succeeding_frame.contains(6));
+    CHECK(!pass_signal_info_succeeding_frame.contains(7));
+    CHECK(pass_signal_info_succeeding_frame.contains(8));
+    CHECK(!pass_signal_info_succeeding_frame.contains(9));
+    CHECK(!pass_signal_info_succeeding_frame.contains(10));
+    CHECK(!pass_signal_info_succeeding_frame.contains(11));
+    CHECK(!pass_signal_info_succeeding_frame.contains(12));
+    CHECK(!pass_signal_info_succeeding_frame.contains(13));
+    CHECK(pass_signal_info_succeeding_frame.contains(14));
+    CHECK(pass_signal_info_succeeding_frame.at(1).size() == 2);
+    CHECK(pass_signal_info_succeeding_frame.at(1).contains(2));
+    CHECK(pass_signal_info_succeeding_frame.at(1).contains(4));
+    CHECK(pass_signal_info_succeeding_frame.at(3).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(3).contains(10));
+    CHECK(pass_signal_info_succeeding_frame.at(5).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(5).contains(8));
+    CHECK(pass_signal_info_succeeding_frame.at(9).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(9).contains(0));
+    CHECK(pass_signal_info_succeeding_frame.at(11).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(11).contains(0));
+  }
+  SUBCASE("intra-frame + inter-frame") {
+    pass_num = 12;
+    render_pass_order.resize(pass_num);
+    std::iota(render_pass_order.begin(), render_pass_order.end(), 0);
+    render_pass_command_queue_type_list.clear();
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(2);
+    async_compute_group.back().insert(3);
+    async_compute_group.back().insert(4);
+    async_compute_group.back().insert(5);
+    async_compute_group.back().insert(6);
+    async_compute_group.back().insert(7);
+    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
+    async_compute_group.back().insert(8);
+    async_compute_group.back().insert(9);
+    async_compute_group.back().insert(10);
+    async_compute_group.back().insert(11);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(render_pass_order, render_pass_command_queue_type_list, preceding_command_queue_type, async_compute_group, &memory_resource_work);
+    CHECK(render_pass_order_initial_frame.size() == 2);
+    CHECK(render_pass_order_initial_frame[0] == 2);
+    CHECK(render_pass_order_initial_frame[1] == 3);
+    CHECK(render_pass_order_succeeding_frame.size() == 12);
+    CHECK(render_pass_order_succeeding_frame[0] == 0);
+    CHECK(render_pass_order_succeeding_frame[1] == 1);
+    CHECK(render_pass_order_succeeding_frame[2] == 2);
+    CHECK(render_pass_order_succeeding_frame[3] == 3);
+    CHECK(render_pass_order_succeeding_frame[4] == 4);
+    CHECK(render_pass_order_succeeding_frame[5] == 5);
+    CHECK(render_pass_order_succeeding_frame[6] == 6);
+    CHECK(render_pass_order_succeeding_frame[7] == 7);
+    CHECK(render_pass_order_succeeding_frame[8] == 8);
+    CHECK(render_pass_order_succeeding_frame[9] == 9);
+    CHECK(render_pass_order_succeeding_frame[10] == 10);
+    CHECK(render_pass_order_succeeding_frame[11] == 11);
+    std::tie(pass_signal_info_initial_frame, pass_signal_info_succeeding_frame) = ConfigureFrameSyncSignalInfo(render_pass_order_initial_frame, render_pass_order_succeeding_frame, render_pass_command_queue_type_list, std::move(pass_signal_info_initial_frame), std::move(pass_signal_info_succeeding_frame), &memory_resource_work);
+    CHECK(pass_signal_info_initial_frame.size() == 1);
+    CHECK(!pass_signal_info_initial_frame.contains(0));
+    CHECK(!pass_signal_info_initial_frame.contains(1));
+    CHECK(!pass_signal_info_initial_frame.contains(2));
+    CHECK(pass_signal_info_initial_frame.contains(3));
+    CHECK(!pass_signal_info_initial_frame.contains(4));
+    CHECK(!pass_signal_info_initial_frame.contains(5));
+    CHECK(!pass_signal_info_initial_frame.contains(6));
+    CHECK(!pass_signal_info_initial_frame.contains(7));
+    CHECK(!pass_signal_info_initial_frame.contains(8));
+    CHECK(!pass_signal_info_initial_frame.contains(9));
+    CHECK(!pass_signal_info_initial_frame.contains(10));
+    CHECK(!pass_signal_info_initial_frame.contains(11));
+    CHECK(pass_signal_info_initial_frame.contains(3));
+    CHECK(pass_signal_info_initial_frame.at(3).size() == 1);
+    CHECK(pass_signal_info_initial_frame.at(3).contains(0));
+    CHECK(pass_signal_info_succeeding_frame.size() == 4);
+    CHECK(!pass_signal_info_succeeding_frame.contains(0));
+    CHECK(!pass_signal_info_succeeding_frame.contains(1));
+    CHECK(pass_signal_info_succeeding_frame.contains(2));
+    CHECK(!pass_signal_info_succeeding_frame.contains(3));
+    CHECK(!pass_signal_info_succeeding_frame.contains(4));
+    CHECK(pass_signal_info_succeeding_frame.contains(5));
+    CHECK(!pass_signal_info_succeeding_frame.contains(6));
+    CHECK(!pass_signal_info_succeeding_frame.contains(7));
+    CHECK(pass_signal_info_succeeding_frame.contains(8));
+    CHECK(!pass_signal_info_succeeding_frame.contains(9));
+    CHECK(!pass_signal_info_succeeding_frame.contains(10));
+    CHECK(!pass_signal_info_succeeding_frame.contains(11));
+    CHECK(!pass_signal_info_succeeding_frame.contains(12));
+    CHECK(!pass_signal_info_succeeding_frame.contains(13));
+    CHECK(pass_signal_info_succeeding_frame.contains(14));
+    CHECK(pass_signal_info_succeeding_frame.at(1).size() == 2);
+    CHECK(pass_signal_info_succeeding_frame.at(1).contains(2));
+    CHECK(pass_signal_info_succeeding_frame.at(1).contains(4));
+    CHECK(pass_signal_info_succeeding_frame.at(3).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(3).contains(10));
+    CHECK(pass_signal_info_succeeding_frame.at(5).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(5).contains(8));
+    CHECK(pass_signal_info_succeeding_frame.at(9).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(9).contains(0));
+    CHECK(pass_signal_info_succeeding_frame.at(11).size() == 1);
+    CHECK(pass_signal_info_succeeding_frame.at(11).contains(0));
+  }
 }
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
 #endif
-// TODO add option to remove memory alias when in different batch (ExecuteCommandLists)
+// TODO add option to remove memory alias barrier when in different batch (ExecuteCommandLists)
