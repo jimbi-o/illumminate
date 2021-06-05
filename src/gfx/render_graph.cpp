@@ -1213,12 +1213,45 @@ static auto RemoveDisabledCommandQueueType(const unordered_set<CommandQueueType>
   }
   return std::move(render_pass_command_queue_type_list);
 }
-static auto GetAsyncGroupInfo(const unordered_map<StrId, uint32_t>& render_pass_id_map, const unordered_map<StrId, unordered_set<StrId>>& async_compute_group_with_name, const unordered_map<StrId, unordered_set<CommandQueueType>>& async_compute_group_preceding_command_queue_type_list_with_name, std::pmr::memory_resource* memory_resource) {
+static auto GetAsyncGroupInfo(const unordered_map<StrId, uint32_t>& render_pass_id_map, const unordered_map<StrId, unordered_set<StrId>>& async_compute_group_with_name, const unordered_map<StrId, unordered_set<CommandQueueType>>& preceding_command_queue_type_list_with_name, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
   vector<unordered_set<uint32_t>> async_compute_group{memory_resource};
-  vector<unordered_set<CommandQueueType>> preceding_command_queue_type{memory_resource};
-  // TODO order group_name using render_pass_id_map
-  // TODO make async_compute_group and preceding_command_queue_type sorted in order
-  return std::make_tuple(async_compute_group, preceding_command_queue_type);
+  async_compute_group.reserve(async_compute_group_with_name.size());
+  vector<unordered_set<CommandQueueType>> preceding_command_queue_type_list{memory_resource};
+  preceding_command_queue_type_list.reserve(preceding_command_queue_type_list_with_name.size());
+  vector<uint32_t> min_pass_index_list{memory_resource_work};
+  min_pass_index_list.reserve(async_compute_group_with_name.size());
+  for (auto& [group_name, pass_names] : async_compute_group_with_name) {
+    uint32_t min_pass_index = std::numeric_limits<uint32_t>::max();
+    for (auto& pass_name : pass_names) {
+      auto& pass_index = render_pass_id_map.at(pass_name);
+      if (pass_index < min_pass_index) {
+        min_pass_index = pass_index;
+      }
+    }
+    uint32_t index = 0;
+    while (index < min_pass_index_list.size()) {
+      if (min_pass_index <= min_pass_index_list[index]) break;
+      index++;
+    }
+    if (index >= min_pass_index_list.size()) {
+      async_compute_group.push_back(unordered_set<uint32_t>{memory_resource});
+      preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{memory_resource});
+      min_pass_index_list.push_back(min_pass_index);
+    } else {
+      async_compute_group.insert(async_compute_group.begin() + index, unordered_set<uint32_t>{memory_resource});
+      preceding_command_queue_type_list.insert(preceding_command_queue_type_list.begin() + index, unordered_set<CommandQueueType>{memory_resource});
+      min_pass_index_list.insert(min_pass_index_list.begin() + index, min_pass_index);
+    }
+    for (auto& pass_name : pass_names) {
+      async_compute_group[index].insert(render_pass_id_map.at(pass_name));
+    }
+    if (preceding_command_queue_type_list_with_name.contains(group_name)) {
+      for (auto& queue : preceding_command_queue_type_list_with_name.at(group_name)) {
+        preceding_command_queue_type_list[index].insert(queue);
+      }
+    }
+  }
+  return std::make_tuple(async_compute_group, preceding_command_queue_type_list);
 }
 static auto ConfigureAsyncComputeGroup(const vector<uint32_t>& render_pass_order, const vector<CommandQueueType>& render_pass_command_queue_type_list, const vector<unordered_set<CommandQueueType>>& preceding_command_queue_type, const vector<unordered_set<uint32_t>>& async_compute_group, std::pmr::memory_resource* memory_resource) {
   vector<uint32_t> render_pass_order_initial_frame{memory_resource};
@@ -4943,6 +4976,51 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(pass_signal_info_succeeding_frame.at(11).size() == 1);
     CHECK(pass_signal_info_succeeding_frame.at(11).contains(0));
   }
+}
+TEST_CASE("GetAsyncGroupInfo") { // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::core; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
+  unordered_map<StrId, uint32_t> render_pass_id_map{&memory_resource_work};
+  render_pass_id_map.insert_or_assign(StrId("pass_a"), 0);
+  render_pass_id_map.insert_or_assign(StrId("pass_b"), 1);
+  render_pass_id_map.insert_or_assign(StrId("pass_c"), 2);
+  render_pass_id_map.insert_or_assign(StrId("pass_d"), 3);
+  render_pass_id_map.insert_or_assign(StrId("pass_e"), 4);
+  render_pass_id_map.insert_or_assign(StrId("pass_f"), 5);
+  render_pass_id_map.insert_or_assign(StrId("pass_g"), 6);
+  unordered_map<StrId, unordered_set<StrId>> async_compute_group_with_name{&memory_resource_work};
+  async_compute_group_with_name.insert_or_assign(StrId("group_a"), unordered_set<StrId>{&memory_resource_work});
+  async_compute_group_with_name.at(StrId("group_a")).insert(StrId("pass_a"));
+  async_compute_group_with_name.at(StrId("group_a")).insert(StrId("pass_b"));
+  async_compute_group_with_name.at(StrId("group_a")).insert(StrId("pass_c"));
+  async_compute_group_with_name.insert_or_assign(StrId("group_b"), unordered_set<StrId>{&memory_resource_work});
+  async_compute_group_with_name.at(StrId("group_b")).insert(StrId("pass_d"));
+  async_compute_group_with_name.at(StrId("group_b")).insert(StrId("pass_e"));
+  async_compute_group_with_name.insert_or_assign(StrId("group_c"), unordered_set<StrId>{&memory_resource_work});
+  async_compute_group_with_name.at(StrId("group_c")).insert(StrId("pass_f"));
+  async_compute_group_with_name.at(StrId("group_c")).insert(StrId("pass_g"));
+  unordered_map<StrId, unordered_set<CommandQueueType>> preceding_command_queue_type_list_with_name{&memory_resource_work};
+  preceding_command_queue_type_list_with_name.insert_or_assign(StrId("group_b"), unordered_set<CommandQueueType>{&memory_resource_work});
+  preceding_command_queue_type_list_with_name.at(StrId("group_b")).insert(CommandQueueType::kCompute);
+  auto [async_compute_group, preceding_command_queue_type] = GetAsyncGroupInfo(render_pass_id_map, async_compute_group_with_name, preceding_command_queue_type_list_with_name, &memory_resource_work, &memory_resource_work);
+  CHECK(async_compute_group.size() == 3);
+  CHECK(async_compute_group[0].size() == 3);
+  CHECK(async_compute_group[0].contains(0));
+  CHECK(async_compute_group[0].contains(1));
+  CHECK(async_compute_group[0].contains(2));
+  CHECK(async_compute_group[1].size() == 2);
+  CHECK(async_compute_group[1].contains(3));
+  CHECK(async_compute_group[1].contains(4));
+  CHECK(async_compute_group[2].size() == 2);
+  CHECK(async_compute_group[2].contains(5));
+  CHECK(async_compute_group[2].contains(6));
+  CHECK(preceding_command_queue_type.size() == 3);
+  CHECK(preceding_command_queue_type[0].empty());
+  CHECK(preceding_command_queue_type[1].size() == 1);
+  CHECK(preceding_command_queue_type[1].contains(CommandQueueType::kCompute));
+  CHECK(preceding_command_queue_type[2].empty());
 }
 #ifdef __clang__
 #pragma clang diagnostic pop
