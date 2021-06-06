@@ -1282,20 +1282,37 @@ static auto ConfigureAsyncComputeGroupPerQueueType(const unordered_map<CommandQu
     }
   }
   for (const auto& [queue, pass_order] : render_pass_order_per_command_queue_type) {
-    uint32_t pass_order_index = 0;
-    uint32_t group_index = 0;
-    while (true) {
-      while (pass_order_index < pass_order.size() && (group_index == group_num || !async_compute_group[group_index].contains(pass_order[pass_order_index]))) {
-        pre_group_pass[group_index].at(queue).push_back(pass_order[pass_order_index]);
-        pass_order_index++;
+    uint32_t current_group_index = 0;
+    uint32_t processed_pass_index = 0;
+    while (processed_pass_index < pass_order.size()) {
+      uint32_t next_group_index = current_group_index;
+      uint32_t next_in_group_pass_index = processed_pass_index;
+      while (next_group_index < async_compute_group.size()) {
+        while (next_in_group_pass_index < pass_order.size() && !async_compute_group[next_group_index].contains(pass_order[next_in_group_pass_index])) {
+          next_in_group_pass_index++;
+        }
+        if (next_in_group_pass_index < pass_order.size()) { break; }
+        next_group_index++;
+        next_in_group_pass_index = processed_pass_index;
       }
-      if (pass_order_index >= pass_order.size() || group_index == group_num) { break; }
-      while (pass_order_index < pass_order.size() && async_compute_group[group_index].contains(pass_order[pass_order_index])) {
-        group_pass[group_index].at(queue).push_back(pass_order[pass_order_index]);
-        pass_order_index++;
+      if (next_group_index == async_compute_group.size()) {
+        next_in_group_pass_index = pass_order.size();
       }
-      if (pass_order_index >= pass_order.size()) { break; }
-      group_index++;
+      if (processed_pass_index < next_in_group_pass_index) {
+        auto& dst = pre_group_pass[current_group_index].at(queue);
+        dst.reserve(dst.size() + next_in_group_pass_index - processed_pass_index);
+        dst.insert(dst.end(), pass_order.begin() + processed_pass_index, pass_order.begin() + next_in_group_pass_index);
+      }
+      if (next_group_index == async_compute_group.size()) {
+        break;
+      }
+      processed_pass_index = next_in_group_pass_index;
+      current_group_index = next_group_index;
+      while (processed_pass_index < pass_order.size() && async_compute_group[current_group_index].contains(pass_order[processed_pass_index])) {
+        group_pass[current_group_index].at(queue).push_back(pass_order[processed_pass_index]);
+        processed_pass_index++;
+      }
+      current_group_index++;
     }
   }
   return std::make_tuple(pre_group_pass, group_pass);
