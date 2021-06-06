@@ -4036,31 +4036,6 @@ TEST_CASE("async compute") { // NOLINT
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   vector<unordered_set<CommandQueueType>> preceding_command_queue_type_list{&memory_resource_work};
   vector<unordered_set<uint32_t>> async_compute_group{&memory_resource_work};
-  SUBCASE("no async compute group") {
-    render_pass_command_queue_type_list.clear();
-    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
-    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
-    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
-    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
-    render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
-    auto [pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureFrameSyncSignalInfo(render_pass_order, {}, render_pass_command_queue_type_list, {}, {}, &memory_resource_work);
-    CHECK(pass_signal_info_initial_frame.empty());
-    CHECK(pass_signal_info_succeeding_frame.size() == 3);
-    CHECK(!pass_signal_info_succeeding_frame.contains(0));
-    CHECK(!pass_signal_info_succeeding_frame.contains(1));
-    CHECK(pass_signal_info_succeeding_frame.contains(2));
-    CHECK(pass_signal_info_succeeding_frame.contains(3));
-    CHECK(pass_signal_info_succeeding_frame.contains(4));
-    CHECK(pass_signal_info_succeeding_frame.at(2).size() == 2);
-    CHECK(pass_signal_info_succeeding_frame.at(2).contains(1));
-    CHECK(pass_signal_info_succeeding_frame.at(2).contains(4));
-    CHECK(pass_signal_info_succeeding_frame.at(3).size() == 2);
-    CHECK(pass_signal_info_succeeding_frame.at(3).contains(0));
-    CHECK(pass_signal_info_succeeding_frame.at(3).contains(4));
-    CHECK(pass_signal_info_succeeding_frame.at(4).size() == 2);
-    CHECK(pass_signal_info_succeeding_frame.at(4).contains(0));
-    CHECK(pass_signal_info_succeeding_frame.at(4).contains(1));
-  }
   SUBCASE("intra-frame 1") {
     preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
@@ -5118,6 +5093,31 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(pass_signal_info_succeeding_frame.at(9).contains(0));
     CHECK(pass_signal_info_succeeding_frame.at(11).size() == 1);
     CHECK(pass_signal_info_succeeding_frame.at(11).contains(0));
+  }
+  SUBCASE("no async compute group") {
+    render_pass_command_queue_type_list.clear();
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
+    render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
+    auto [pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureFrameSyncSignalInfo(render_pass_order, {}, render_pass_command_queue_type_list, {}, {}, &memory_resource_work);
+    CHECK(pass_signal_info_initial_frame.empty());
+    CHECK(pass_signal_info_succeeding_frame.size() == 3);
+    CHECK(!pass_signal_info_succeeding_frame.contains(0));
+    CHECK(!pass_signal_info_succeeding_frame.contains(1));
+    CHECK(pass_signal_info_succeeding_frame.contains(2));
+    CHECK(pass_signal_info_succeeding_frame.contains(3));
+    CHECK(pass_signal_info_succeeding_frame.contains(4));
+    CHECK(pass_signal_info_succeeding_frame.at(2).size() == 2);
+    CHECK(pass_signal_info_succeeding_frame.at(2).contains(1));
+    CHECK(pass_signal_info_succeeding_frame.at(2).contains(4));
+    CHECK(pass_signal_info_succeeding_frame.at(3).size() == 2);
+    CHECK(pass_signal_info_succeeding_frame.at(3).contains(0));
+    CHECK(pass_signal_info_succeeding_frame.at(3).contains(4));
+    CHECK(pass_signal_info_succeeding_frame.at(4).size() == 2);
+    CHECK(pass_signal_info_succeeding_frame.at(4).contains(0));
+    CHECK(pass_signal_info_succeeding_frame.at(4).contains(1));
   }
 }
 TEST_CASE("GetAsyncGroupInfo") { // NOLINT
