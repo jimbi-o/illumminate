@@ -1300,11 +1300,41 @@ static auto ConfigureAsyncComputeGroupPerQueueType(const unordered_map<CommandQu
   }
   return std::make_tuple(pre_group_pass, group_pass);
 }
-static auto ConfigureAsyncComputeGroup(const vector<unordered_map<CommandQueueType, vector<uint32_t>>>& pre_group_pass, const vector<unordered_map<CommandQueueType, vector<uint32_t>>>& group_pass, const vector<unordered_set<CommandQueueType>>& preceding_command_queue_type, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
+static auto ConfigureAsyncComputeGroup(const vector<unordered_map<CommandQueueType, vector<uint32_t>>>& pre_group_pass, const vector<unordered_map<CommandQueueType, vector<uint32_t>>>& group_pass, const vector<unordered_set<CommandQueueType>>& preceding_command_queue_type_list, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
   vector<uint32_t> render_pass_order_initial_frame{memory_resource};
   vector<uint32_t> render_pass_order_succeeding_frame{memory_resource};
   unordered_map<uint32_t, unordered_set<uint32_t>> pass_signal_info_initial_frame{memory_resource};
   unordered_map<uint32_t, unordered_set<uint32_t>> pass_signal_info_succeeding_frame{memory_resource};
+  vector<CommandQueueType> command_queue_type_list{memory_resource_work};
+  ASSERT(!pre_group_pass.empty());
+  if (pre_group_pass[0].contains(CommandQueueType::kGraphics)) {
+    command_queue_type_list.push_back(CommandQueueType::kGraphics);
+  }
+  if (pre_group_pass[0].contains(CommandQueueType::kCompute)) {
+    command_queue_type_list.push_back(CommandQueueType::kCompute);
+  }
+  if (pre_group_pass[0].contains(CommandQueueType::kTransfer)) {
+    command_queue_type_list.push_back(CommandQueueType::kTransfer);
+  }
+  ASSERT(command_queue_type_list.size() == kCommandQueueTypeNum);
+  const auto group_num = static_cast<uint32_t>(group_pass.size());
+  for (uint32_t group_index = 0; group_index <= group_num; group_index++) {
+    for (const auto& queue : command_queue_type_list) {
+      for (const auto& pass_index : pre_group_pass[group_index].at(queue)) {
+        render_pass_order_succeeding_frame.push_back(pass_index);
+      }
+    }
+    if (group_index == group_num) { break; }
+    for (const auto& queue : command_queue_type_list) {
+      const auto is_in_preceding_frame = preceding_command_queue_type_list[group_index].contains(queue);
+      for (const auto& pass_index : group_pass[group_index].at(queue)) {
+        if (is_in_preceding_frame) {
+          render_pass_order_initial_frame.push_back(pass_index);
+        }
+        render_pass_order_succeeding_frame.push_back(pass_index);
+      }
+    }
+  }
   // TODO
   return std::make_tuple(render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame);
 }
@@ -4001,7 +4031,7 @@ TEST_CASE("async compute") { // NOLINT
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
-  vector<unordered_set<CommandQueueType>> preceding_command_queue_type{&memory_resource_work};
+  vector<unordered_set<CommandQueueType>> preceding_command_queue_type_list{&memory_resource_work};
   vector<unordered_set<uint32_t>> async_compute_group{&memory_resource_work};
   SUBCASE("no async compute group") {
     render_pass_command_queue_type_list.clear();
@@ -4029,17 +4059,17 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(pass_signal_info_succeeding_frame.at(4).contains(1));
   }
   SUBCASE("intra-frame 1") {
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(0);
     async_compute_group.back().insert(1);
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(2);
     async_compute_group.back().insert(3);
     auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
-    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type, &memory_resource_work, &memory_resource_work);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     CHECK(render_pass_order_initial_frame.empty());
     CHECK(render_pass_order_succeeding_frame[0] == 0);
     CHECK(render_pass_order_succeeding_frame[1] == 1);
@@ -4064,13 +4094,13 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(pass_signal_info_succeeding_frame.at(4).contains(1));
   }
   SUBCASE("intra-frame 2") {
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(2);
     async_compute_group.back().insert(3);
     auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
-    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type, &memory_resource_work, &memory_resource_work);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     CHECK(render_pass_order_initial_frame.empty());
     CHECK(render_pass_order_succeeding_frame[0] == 0);
     CHECK(render_pass_order_succeeding_frame[1] == 1);
@@ -4095,13 +4125,13 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(pass_signal_info_succeeding_frame.at(4).contains(1));
   }
   SUBCASE("intra-frame 3") {
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(0);
     async_compute_group.back().insert(1);
     auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
-    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type, &memory_resource_work, &memory_resource_work);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     CHECK(render_pass_order_initial_frame.empty());
     CHECK(render_pass_order_succeeding_frame[0] == 0);
     CHECK(render_pass_order_succeeding_frame[1] == 1);
@@ -4122,13 +4152,13 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(pass_signal_info_succeeding_frame.at(4).contains(1));
   }
   SUBCASE("intra-frame 4") {
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(0);
     async_compute_group.back().insert(3);
     auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
-    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type, &memory_resource_work, &memory_resource_work);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     CHECK(render_pass_order_initial_frame.empty());
     CHECK(render_pass_order_succeeding_frame[0] == 1);
     CHECK(render_pass_order_succeeding_frame[1] == 0);
@@ -4149,13 +4179,13 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(pass_signal_info_succeeding_frame.at(4).contains(1));
   }
   SUBCASE("intra-frame 5") {
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(2);
     async_compute_group.back().insert(1);
     auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
-    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type, &memory_resource_work, &memory_resource_work);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     CHECK(render_pass_order_initial_frame.empty());
     CHECK(render_pass_order_succeeding_frame[0] == 0);
     CHECK(render_pass_order_succeeding_frame[1] == 1);
@@ -4176,13 +4206,13 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(pass_signal_info_succeeding_frame.at(3).contains(0));
   }
   SUBCASE("intra-frame 6") {
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(3);
     async_compute_group.back().insert(4);
     auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
-    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type, &memory_resource_work, &memory_resource_work);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     CHECK(render_pass_order_initial_frame.empty());
     CHECK(render_pass_order_succeeding_frame[0] == 0);
     CHECK(render_pass_order_succeeding_frame[1] == 1);
@@ -4207,17 +4237,17 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(pass_signal_info_succeeding_frame.at(4).contains(1));
   }
   SUBCASE("intra-frame 7") {
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(1);
     async_compute_group.back().insert(2);
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(3);
     async_compute_group.back().insert(4);
     auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
-    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type, &memory_resource_work, &memory_resource_work);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     CHECK(render_pass_order_initial_frame.empty());
     CHECK(render_pass_order_succeeding_frame[0] == 0);
     CHECK(render_pass_order_succeeding_frame[1] == 1);
@@ -4261,7 +4291,7 @@ TEST_CASE("async compute") { // NOLINT
     render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
     render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
     render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(3);
     async_compute_group.back().insert(4);
@@ -4269,7 +4299,7 @@ TEST_CASE("async compute") { // NOLINT
     async_compute_group.back().insert(6);
     async_compute_group.back().insert(7);
     async_compute_group.back().insert(8);
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(9);
     async_compute_group.back().insert(10);
@@ -4279,7 +4309,7 @@ TEST_CASE("async compute") { // NOLINT
     async_compute_group.back().insert(14);
     auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
-    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type, &memory_resource_work, &memory_resource_work);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     CHECK(render_pass_order_initial_frame.empty());
     CHECK(render_pass_order_succeeding_frame[0] == 0);
     CHECK(render_pass_order_succeeding_frame[1] == 1);
@@ -4340,7 +4370,7 @@ TEST_CASE("async compute") { // NOLINT
     render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
     render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
     render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(2);
     async_compute_group.back().insert(3);
@@ -4348,7 +4378,7 @@ TEST_CASE("async compute") { // NOLINT
     async_compute_group.back().insert(5);
     async_compute_group.back().insert(6);
     async_compute_group.back().insert(7);
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(8);
     async_compute_group.back().insert(9);
@@ -4356,7 +4386,7 @@ TEST_CASE("async compute") { // NOLINT
     async_compute_group.back().insert(11);
     auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
-    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type, &memory_resource_work, &memory_resource_work);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     CHECK(render_pass_order_initial_frame.empty());
     CHECK(render_pass_order_succeeding_frame.size() == 12);
     CHECK(render_pass_order_succeeding_frame[0] == 0);
@@ -4399,19 +4429,19 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(pass_signal_info_succeeding_frame.at(11).contains(0));
   }
   SUBCASE("inter-frame 1") {
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
-    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.back().insert(CommandQueueType::kGraphics);
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(0);
     async_compute_group.back().insert(1);
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
-    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.back().insert(CommandQueueType::kGraphics);
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(2);
     async_compute_group.back().insert(3);
     auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
-    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type, &memory_resource_work, &memory_resource_work);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     CHECK(render_pass_order_initial_frame.size() == 2);
     CHECK(render_pass_order_initial_frame[0] == 0);
     CHECK(render_pass_order_initial_frame[1] == 2);
@@ -4446,14 +4476,14 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(pass_signal_info_succeeding_frame.at(4).contains(1));
   }
   SUBCASE("inter-frame 2") {
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
-    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.back().insert(CommandQueueType::kGraphics);
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(2);
     async_compute_group.back().insert(3);
     auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
-    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type, &memory_resource_work, &memory_resource_work);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     CHECK(render_pass_order_initial_frame.size() == 1);
     CHECK(render_pass_order_initial_frame[1] == 2);
     CHECK(render_pass_order_succeeding_frame.size() == 5);
@@ -4487,14 +4517,14 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(pass_signal_info_succeeding_frame.at(4).contains(1));
   }
   SUBCASE("inter-frame 3") {
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
-    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.back().insert(CommandQueueType::kGraphics);
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(0);
     async_compute_group.back().insert(1);
     auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
-    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type, &memory_resource_work, &memory_resource_work);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     CHECK(render_pass_order_initial_frame.size() == 1);
     CHECK(render_pass_order_initial_frame[0] == 0);
     CHECK(render_pass_order_succeeding_frame.size() == 5);
@@ -4524,14 +4554,14 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(pass_signal_info_succeeding_frame.at(4).contains(1));
   }
   SUBCASE("inter-frame 4") {
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
-    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.back().insert(CommandQueueType::kGraphics);
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(0);
     async_compute_group.back().insert(3);
     auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
-    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type, &memory_resource_work, &memory_resource_work);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     CHECK(render_pass_order_initial_frame.size() == 1);
     CHECK(render_pass_order_initial_frame[0] == 0);
     CHECK(render_pass_order_succeeding_frame.size() == 5);
@@ -4561,14 +4591,14 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(pass_signal_info_succeeding_frame.at(4).contains(1));
   }
   SUBCASE("inter-frame 4-2") {
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
-    preceding_command_queue_type.back().insert(CommandQueueType::kCompute);
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.back().insert(CommandQueueType::kCompute);
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(0);
     async_compute_group.back().insert(3);
     auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
-    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type, &memory_resource_work, &memory_resource_work);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     CHECK(render_pass_order_initial_frame.size() == 1);
     CHECK(render_pass_order_initial_frame[0] == 3);
     CHECK(render_pass_order_succeeding_frame.size() == 5);
@@ -4598,14 +4628,14 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(pass_signal_info_succeeding_frame.at(4).contains(1));
   }
   SUBCASE("inter-frame 5") {
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
-    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.back().insert(CommandQueueType::kGraphics);
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(2);
     async_compute_group.back().insert(1);
     auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
-    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type, &memory_resource_work, &memory_resource_work);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     CHECK(render_pass_order_initial_frame.size() == 1);
     CHECK(render_pass_order_initial_frame[0] == 2);
     CHECK(render_pass_order_succeeding_frame.size() == 5);
@@ -4635,14 +4665,14 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(pass_signal_info_succeeding_frame.at(3).contains(0));
   }
   SUBCASE("inter-frame 5-2") {
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
-    preceding_command_queue_type.back().insert(CommandQueueType::kCompute);
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.back().insert(CommandQueueType::kCompute);
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(1);
     async_compute_group.back().insert(2);
     auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
-    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type, &memory_resource_work, &memory_resource_work);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     CHECK(render_pass_order_initial_frame.size() == 1);
     CHECK(render_pass_order_initial_frame[0] == 1);
     CHECK(render_pass_order_succeeding_frame.size() == 5);
@@ -4672,14 +4702,14 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(pass_signal_info_succeeding_frame.at(3).contains(0));
   }
   SUBCASE("inter-frame 6") {
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
-    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.back().insert(CommandQueueType::kGraphics);
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(3);
     async_compute_group.back().insert(4);
     auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
-    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type, &memory_resource_work, &memory_resource_work);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     CHECK(render_pass_order_initial_frame.size() == 2);
     CHECK(render_pass_order_initial_frame[0] == 4);
     CHECK(render_pass_order_succeeding_frame.size() == 5);
@@ -4706,19 +4736,19 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(pass_signal_info_succeeding_frame.at(4).contains(1));
   }
   SUBCASE("inter-frame 7") {
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
-    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.back().insert(CommandQueueType::kGraphics);
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(1);
     async_compute_group.back().insert(2);
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
-    preceding_command_queue_type.back().insert(CommandQueueType::kCompute);
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.back().insert(CommandQueueType::kCompute);
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(3);
     async_compute_group.back().insert(4);
     auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
-    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type, &memory_resource_work, &memory_resource_work);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     CHECK(render_pass_order_initial_frame.size() == 2);
     CHECK(render_pass_order_initial_frame[0] == 2);
     CHECK(render_pass_order_initial_frame[1] == 3);
@@ -4772,8 +4802,8 @@ TEST_CASE("async compute") { // NOLINT
     render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
     render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
     render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
-    preceding_command_queue_type.back().insert(CommandQueueType::kCompute);
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.back().insert(CommandQueueType::kCompute);
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(3);
     async_compute_group.back().insert(4);
@@ -4781,8 +4811,8 @@ TEST_CASE("async compute") { // NOLINT
     async_compute_group.back().insert(6);
     async_compute_group.back().insert(7);
     async_compute_group.back().insert(8);
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
-    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.back().insert(CommandQueueType::kGraphics);
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(9);
     async_compute_group.back().insert(10);
@@ -4792,7 +4822,7 @@ TEST_CASE("async compute") { // NOLINT
     async_compute_group.back().insert(14);
     auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
-    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type, &memory_resource_work, &memory_resource_work);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     CHECK(render_pass_order_initial_frame.size() == 6);
     CHECK(render_pass_order_initial_frame[0] == 6);
     CHECK(render_pass_order_initial_frame[1] == 7);
@@ -4877,13 +4907,13 @@ TEST_CASE("async compute") { // NOLINT
     render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
     render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
     render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
-    preceding_command_queue_type.back().insert(CommandQueueType::kTransfer);
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.back().insert(CommandQueueType::kTransfer);
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(0);
     async_compute_group.back().insert(1);
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
-    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.back().insert(CommandQueueType::kGraphics);
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(2);
     async_compute_group.back().insert(3);
@@ -4891,8 +4921,8 @@ TEST_CASE("async compute") { // NOLINT
     async_compute_group.back().insert(5);
     async_compute_group.back().insert(6);
     async_compute_group.back().insert(7);
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
-    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.back().insert(CommandQueueType::kGraphics);
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(8);
     async_compute_group.back().insert(9);
@@ -4900,7 +4930,7 @@ TEST_CASE("async compute") { // NOLINT
     async_compute_group.back().insert(11);
     auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
-    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type, &memory_resource_work, &memory_resource_work);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     CHECK(render_pass_order_initial_frame.size() == 6);
     CHECK(render_pass_order_initial_frame[0] == 0);
     CHECK(render_pass_order_initial_frame[1] == 1);
@@ -4986,8 +5016,8 @@ TEST_CASE("async compute") { // NOLINT
     render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
     render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
     render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
-    preceding_command_queue_type.back().insert(CommandQueueType::kGraphics);
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.back().insert(CommandQueueType::kGraphics);
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(2);
     async_compute_group.back().insert(3);
@@ -4995,7 +5025,7 @@ TEST_CASE("async compute") { // NOLINT
     async_compute_group.back().insert(5);
     async_compute_group.back().insert(6);
     async_compute_group.back().insert(7);
-    preceding_command_queue_type.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
+    preceding_command_queue_type_list.push_back(unordered_set<CommandQueueType>{&memory_resource_work});
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(8);
     async_compute_group.back().insert(9);
@@ -5003,7 +5033,7 @@ TEST_CASE("async compute") { // NOLINT
     async_compute_group.back().insert(11);
     auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
-    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type, &memory_resource_work, &memory_resource_work);
+    auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame, pass_signal_info_initial_frame, pass_signal_info_succeeding_frame] = ConfigureAsyncComputeGroup(pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
     CHECK(render_pass_order_initial_frame.size() == 2);
     CHECK(render_pass_order_initial_frame[0] == 2);
     CHECK(render_pass_order_initial_frame[1] == 3);
@@ -5093,7 +5123,7 @@ TEST_CASE("GetAsyncGroupInfo") { // NOLINT
   unordered_map<StrId, unordered_set<CommandQueueType>> preceding_command_queue_type_list_with_name{&memory_resource_work};
   preceding_command_queue_type_list_with_name.insert_or_assign(StrId("group_b"), unordered_set<CommandQueueType>{&memory_resource_work});
   preceding_command_queue_type_list_with_name.at(StrId("group_b")).insert(CommandQueueType::kCompute);
-  auto [async_compute_group, preceding_command_queue_type] = GetAsyncGroupInfo(render_pass_id_map, async_compute_group_with_name, preceding_command_queue_type_list_with_name, &memory_resource_work, &memory_resource_work);
+  auto [async_compute_group, preceding_command_queue_type_list] = GetAsyncGroupInfo(render_pass_id_map, async_compute_group_with_name, preceding_command_queue_type_list_with_name, &memory_resource_work, &memory_resource_work);
   CHECK(async_compute_group.size() == 3);
   CHECK(async_compute_group[0].size() == 3);
   CHECK(async_compute_group[0].contains(0));
@@ -5105,11 +5135,11 @@ TEST_CASE("GetAsyncGroupInfo") { // NOLINT
   CHECK(async_compute_group[2].size() == 2);
   CHECK(async_compute_group[2].contains(5));
   CHECK(async_compute_group[2].contains(6));
-  CHECK(preceding_command_queue_type.size() == 3);
-  CHECK(preceding_command_queue_type[0].empty());
-  CHECK(preceding_command_queue_type[1].size() == 1);
-  CHECK(preceding_command_queue_type[1].contains(CommandQueueType::kCompute));
-  CHECK(preceding_command_queue_type[2].empty());
+  CHECK(preceding_command_queue_type_list.size() == 3);
+  CHECK(preceding_command_queue_type_list[0].empty());
+  CHECK(preceding_command_queue_type_list[1].size() == 1);
+  CHECK(preceding_command_queue_type_list[1].contains(CommandQueueType::kCompute));
+  CHECK(preceding_command_queue_type_list[2].empty());
 }
 TEST_CASE("ConfigureAsyncComputeGroupPerQueueType") { // NOLINT
   using namespace illuminate; // NOLINT
