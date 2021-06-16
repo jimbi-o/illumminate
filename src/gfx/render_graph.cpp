@@ -1253,9 +1253,9 @@ static auto GetAsyncGroupInfo(const unordered_map<StrId, uint32_t>& render_pass_
   }
   return std::make_tuple(async_compute_group, preceding_command_queue_type_list);
 }
-static auto GetRenderPassOrderPerQueue(const vector<uint32_t>& render_pass_order, const vector<CommandQueueType>& render_pass_command_queue_type_list, std::pmr::memory_resource* memory_resource) {
+static auto GetRenderPassOrderPerQueue(const uint32_t pass_num, const vector<CommandQueueType>& render_pass_command_queue_type_list, std::pmr::memory_resource* memory_resource) {
   unordered_map<CommandQueueType, vector<uint32_t>> render_pass_order_per_command_queue_type{memory_resource};
-  for (auto& pass_index : render_pass_order) {
+  for (uint32_t pass_index = 0; pass_index < pass_num; pass_index++) {
     auto& queue = render_pass_command_queue_type_list[pass_index];
     if (!render_pass_order_per_command_queue_type.contains(queue)) {
       render_pass_order_per_command_queue_type.insert_or_assign(queue, vector<uint32_t>{memory_resource});
@@ -1505,6 +1505,11 @@ void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resour
   auto [buffer_state_list, buffer_user_pass_list] = CreateBufferStateList(render_pass_num_, buffer_id_list_, render_pass_buffer_id_list_, render_pass_buffer_state_flag_list_, memory_resource_work);
   auto [used_pass_list, used_buffer_list] = CullUsedRenderPass(buffer_state_list, buffer_user_pass_list, render_pass_buffer_id_list_, render_pass_buffer_state_flag_list_, std::move(required_buffers), memory_resource_work, memory_resource_work);
   buffer_id_list_ = UpdateBufferIdListUsingUsedBuffers(used_buffer_list, std::move(buffer_id_list_));
+#if 0
+  render_pass_command_queue_type_list_ = RemoveDisabledCommandQueueType(config.GetDisabledCommandQueueTypeList(), std::move(render_pass_command_queue_type_list_));
+  auto [async_compute_group, preceding_command_queue_type_list] = GetAsyncGroupInfo(render_pass_id_map_, config.GetAsyncComputeGroup(), config.GetAsyncComputeGroupPrecedingCommandQueueTypeList(), memory_resource_work, memory_resource_work);
+  auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_num_, render_pass_command_queue_type_list_, memory_resource_work);
+#else
   auto new_render_pass_index_list = CalculateNewPassIndexAfterPassCulling(render_pass_num_, used_pass_list, memory_resource_work);
   render_pass_num_ = static_cast<decltype(render_pass_num_)>(used_pass_list.size());
   std::tie(render_pass_buffer_id_list_, render_pass_buffer_state_flag_list_) = UpdateRenderPassBufferInfoWithNewPassIndex(render_pass_num_, new_render_pass_index_list, std::move(render_pass_buffer_id_list_), std::move(render_pass_buffer_state_flag_list_));
@@ -1559,6 +1564,7 @@ void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resour
   auto buffer_state_change_info_list_map = CreateBufferStateChangeInfoList(render_pass_command_queue_type_flag_list, node_distance_map, buffer_state_list, buffer_user_pass_list, memory_resource_work); // NOLINT(hicpp-invalid-access-moved,bugprone-use-after-move)
   std::tie(barriers_pre_pass_, barriers_post_pass_) = ConfigureBarriers(render_pass_num_, buffer_id_list_, buffer_state_change_info_list_map, memory_resource_);
   barriers_pre_pass_ = AppendMemoryAliasingBarriers(render_pass_num_, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list, std::move(barriers_pre_pass_));
+#endif
 }
 #ifdef BUILD_WITH_TEST
 static auto CollectBufferDataForTest(const vector<vector<BufferId>>& render_pass_buffer_id_list, std::pmr::memory_resource* memory_resource) {
@@ -4169,10 +4175,7 @@ TEST_CASE("async compute") { // NOLINT
   using namespace illuminate::core; // NOLINT
   using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
-  vector<uint32_t> render_pass_order{&memory_resource_work};
   uint32_t pass_num = 5;
-  render_pass_order.resize(pass_num);
-  std::iota(render_pass_order.begin(), render_pass_order.end(), 0);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
@@ -4190,7 +4193,7 @@ TEST_CASE("async compute") { // NOLINT
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(2);
     async_compute_group.back().insert(3);
-    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
     auto used_command_queues = GetUsedCommandQueueList(pre_group_pass[0], &memory_resource_work);
     auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame] = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work);
@@ -4225,7 +4228,7 @@ TEST_CASE("async compute") { // NOLINT
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(2);
     async_compute_group.back().insert(3);
-    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
     auto used_command_queues = GetUsedCommandQueueList(pre_group_pass[0], &memory_resource_work);
     auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame] = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work);
@@ -4260,7 +4263,7 @@ TEST_CASE("async compute") { // NOLINT
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(0);
     async_compute_group.back().insert(1);
-    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
     auto used_command_queues = GetUsedCommandQueueList(pre_group_pass[0], &memory_resource_work);
     auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame] = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work);
@@ -4291,7 +4294,7 @@ TEST_CASE("async compute") { // NOLINT
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(0);
     async_compute_group.back().insert(3);
-    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
     auto used_command_queues = GetUsedCommandQueueList(pre_group_pass[0], &memory_resource_work);
     auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame] = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work);
@@ -4322,7 +4325,7 @@ TEST_CASE("async compute") { // NOLINT
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(2);
     async_compute_group.back().insert(1);
-    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
     auto used_command_queues = GetUsedCommandQueueList(pre_group_pass[0], &memory_resource_work);
     auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame] = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work);
@@ -4353,7 +4356,7 @@ TEST_CASE("async compute") { // NOLINT
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(3);
     async_compute_group.back().insert(4);
-    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
     auto used_command_queues = GetUsedCommandQueueList(pre_group_pass[0], &memory_resource_work);
     auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame] = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work);
@@ -4392,7 +4395,7 @@ TEST_CASE("async compute") { // NOLINT
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(3);
     async_compute_group.back().insert(4);
-    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
     auto used_command_queues = GetUsedCommandQueueList(pre_group_pass[0], &memory_resource_work);
     auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame] = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work);
@@ -4424,8 +4427,6 @@ TEST_CASE("async compute") { // NOLINT
   }
   SUBCASE("intra-frame 8") {
     pass_num = 15;
-    render_pass_order.resize(pass_num);
-    std::iota(render_pass_order.begin(), render_pass_order.end(), 0);
     render_pass_command_queue_type_list.clear();
     render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
     render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
@@ -4458,7 +4459,7 @@ TEST_CASE("async compute") { // NOLINT
     async_compute_group.back().insert(12);
     async_compute_group.back().insert(13);
     async_compute_group.back().insert(14);
-    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
     auto used_command_queues = GetUsedCommandQueueList(pre_group_pass[0], &memory_resource_work);
     auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame] = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work);
@@ -4510,8 +4511,6 @@ TEST_CASE("async compute") { // NOLINT
   }
   SUBCASE("intra-frame 9") {
     pass_num = 12;
-    render_pass_order.resize(pass_num);
-    std::iota(render_pass_order.begin(), render_pass_order.end(), 0);
     render_pass_command_queue_type_list.clear();
     render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
     render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
@@ -4539,7 +4538,7 @@ TEST_CASE("async compute") { // NOLINT
     async_compute_group.back().insert(9);
     async_compute_group.back().insert(10);
     async_compute_group.back().insert(11);
-    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
     auto used_command_queues = GetUsedCommandQueueList(pre_group_pass[0], &memory_resource_work);
     auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame] = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work);
@@ -4600,7 +4599,7 @@ TEST_CASE("async compute") { // NOLINT
     async_compute_group.back().insert(9);
     async_compute_group.back().insert(10);
     async_compute_group.back().insert(11);
-    render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+    render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
     std::tie(pre_group_pass, group_pass) = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
     used_command_queues = GetUsedCommandQueueList(pre_group_pass[0], &memory_resource_work);
     std::tie(render_pass_order_initial_frame, render_pass_order_succeeding_frame) = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work);
@@ -4661,7 +4660,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(2);
     async_compute_group.back().insert(3);
-    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
     auto used_command_queues = GetUsedCommandQueueList(pre_group_pass[0], &memory_resource_work);
     auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame] = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work);
@@ -4754,7 +4753,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(2);
     async_compute_group.back().insert(3);
-    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
     auto used_command_queues = GetUsedCommandQueueList(pre_group_pass[0], &memory_resource_work);
     auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame] = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work);
@@ -4799,7 +4798,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(0);
     async_compute_group.back().insert(1);
-    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
     auto used_command_queues = GetUsedCommandQueueList(pre_group_pass[0], &memory_resource_work);
     auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame] = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work);
@@ -4840,7 +4839,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(0);
     async_compute_group.back().insert(3);
-    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
     auto used_command_queues = GetUsedCommandQueueList(pre_group_pass[0], &memory_resource_work);
     auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame] = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work);
@@ -4881,7 +4880,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(0);
     async_compute_group.back().insert(3);
-    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
     auto used_command_queues = GetUsedCommandQueueList(pre_group_pass[0], &memory_resource_work);
     auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame] = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work);
@@ -4920,7 +4919,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(2);
     async_compute_group.back().insert(1);
-    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
     auto used_command_queues = GetUsedCommandQueueList(pre_group_pass[0], &memory_resource_work);
     auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame] = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work);
@@ -4954,7 +4953,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(1);
     async_compute_group.back().insert(2);
-    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
     auto used_command_queues = GetUsedCommandQueueList(pre_group_pass[0], &memory_resource_work);
     auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame] = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work);
@@ -4995,7 +4994,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(3);
     async_compute_group.back().insert(4);
-    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
     auto used_command_queues = GetUsedCommandQueueList(pre_group_pass[0], &memory_resource_work);
     auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame] = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work);
@@ -5045,7 +5044,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     async_compute_group.push_back(unordered_set<uint32_t>{&memory_resource_work});
     async_compute_group.back().insert(3);
     async_compute_group.back().insert(4);
-    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
     auto used_command_queues = GetUsedCommandQueueList(pre_group_pass[0], &memory_resource_work);
     auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame] = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work);
@@ -5089,8 +5088,6 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
   }
   SUBCASE("inter-frame 8") {
     pass_num = 15;
-    render_pass_order.resize(pass_num);
-    std::iota(render_pass_order.begin(), render_pass_order.end(), 0);
     render_pass_command_queue_type_list.clear();
     render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
     render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
@@ -5125,7 +5122,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     async_compute_group.back().insert(12);
     async_compute_group.back().insert(13);
     async_compute_group.back().insert(14);
-    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
     auto used_command_queues = GetUsedCommandQueueList(pre_group_pass[0], &memory_resource_work);
     auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame] = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work);
@@ -5201,8 +5198,6 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
   }
   SUBCASE("inter-frame 9") {
     pass_num = 12;
-    render_pass_order.resize(pass_num);
-    std::iota(render_pass_order.begin(), render_pass_order.end(), 0);
     render_pass_command_queue_type_list.clear();
     render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
     render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
@@ -5237,7 +5232,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     async_compute_group.back().insert(9);
     async_compute_group.back().insert(10);
     async_compute_group.back().insert(11);
-    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
     auto used_command_queues = GetUsedCommandQueueList(pre_group_pass[0], &memory_resource_work);
     auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame] = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work);
@@ -5314,8 +5309,6 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
   }
   SUBCASE("intra-frame + inter-frame") {
     pass_num = 12;
-    render_pass_order.resize(pass_num);
-    std::iota(render_pass_order.begin(), render_pass_order.end(), 0);
     render_pass_command_queue_type_list.clear();
     render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
     render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
@@ -5344,7 +5337,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     async_compute_group.back().insert(9);
     async_compute_group.back().insert(10);
     async_compute_group.back().insert(11);
-    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, &memory_resource_work);
     auto used_command_queues = GetUsedCommandQueueList(pre_group_pass[0], &memory_resource_work);
     auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame] = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work);
@@ -5419,7 +5412,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
     render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
     render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
-    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+    auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
     auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, {}, &memory_resource_work);
     auto used_command_queues = GetUsedCommandQueueList(pre_group_pass[0], &memory_resource_work);
     auto [render_pass_order_initial_frame, render_pass_order_succeeding_frame] = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, &memory_resource_work);
@@ -5562,17 +5555,14 @@ TEST_CASE("ConfigureFrameSyncSignalInfo") { // NOLINT
   using namespace illuminate::core; // NOLINT
   using namespace illuminate::gfx; // NOLINT
   PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
-  vector<uint32_t> render_pass_order{&memory_resource_work};
   uint32_t pass_num = 5;
-  render_pass_order.resize(pass_num);
-  std::iota(render_pass_order.begin(), render_pass_order.end(), 0);
   vector<CommandQueueType> render_pass_command_queue_type_list{&memory_resource_work};
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
-  auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_order, render_pass_command_queue_type_list, &memory_resource_work);
+  auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(pass_num, render_pass_command_queue_type_list, &memory_resource_work);
   unordered_map<uint32_t, unordered_set<uint32_t>> pass_signal_info_initial_frame{&memory_resource_work};
   unordered_map<uint32_t, unordered_set<uint32_t>> pass_signal_info_succeeding_frame{&memory_resource_work};
   pass_signal_info_succeeding_frame.insert_or_assign(0, unordered_set<uint32_t>{&memory_resource_work});
