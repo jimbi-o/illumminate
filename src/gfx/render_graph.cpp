@@ -1473,24 +1473,19 @@ static auto ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(const unorder
   }
   return std::move(pass_signal_info_initial_frame);
 }
-static auto GetNextFrameIndex(const uint32_t processed_index, vector<uint32_t>&& next_frame_index_list, const bool dispose_processed_frame) {
+static auto DisposeProcessedFrameIndex(const uint32_t processed_index, vector<uint32_t>&& next_frame_index_list) {
   auto next_frame_index = next_frame_index_list[processed_index];
-  if (dispose_processed_frame) {
-    if (next_frame_index > processed_index) {
-      next_frame_index--;
+  if (next_frame_index > processed_index) {
+    next_frame_index--;
+  }
+  next_frame_index_list.erase(next_frame_index_list.begin() + processed_index);
+  for (auto&& index : next_frame_index_list) {
+    if (index == processed_index) {
+      logwarn("DisposeProcessedFrameIndex disposing used index {}", index);
+      continue;
     }
-    next_frame_index_list.erase(next_frame_index_list.begin() + processed_index);
-    auto it = next_frame_index_list.begin();
-    while (it != next_frame_index_list.end()) {
-      if (*it == processed_index) {
-        it = next_frame_index_list.erase(it);
-      }
-      it++;
-    }
-    for (auto&& index : next_frame_index_list) {
-      if (index > processed_index) {
-        index--;
-      }
+    if (index > processed_index) {
+      index--;
     }
   }
   return std::make_tuple(next_frame_index, std::move(next_frame_index_list));
@@ -5635,7 +5630,7 @@ TEST_CASE("ConfigureFrameSyncSignalInfo") { // NOLINT
     CHECK(!pass_signal_info_succeeding_frame.at(4).contains(2));
   }
 }
-TEST_CASE("GetNextFrameIndex") { // NOLINT
+TEST_CASE("DisposeProcessedFrameIndex") { // NOLINT
   using namespace illuminate; // NOLINT
   using namespace illuminate::core; // NOLINT
   using namespace illuminate::gfx; // NOLINT
@@ -5645,17 +5640,7 @@ TEST_CASE("GetNextFrameIndex") { // NOLINT
   next_frame_index_list.push_back(2);
   next_frame_index_list.push_back(1);
   uint32_t next_frame_index = 0;
-  std::tie(next_frame_index, next_frame_index_list) = GetNextFrameIndex(0, std::move(next_frame_index_list), true);
-  CHECK(next_frame_index == 0);
-  CHECK(next_frame_index_list.size() == 2);
-  CHECK(next_frame_index_list[0] == 1);
-  CHECK(next_frame_index_list[1] == 0);
-  std::tie(next_frame_index, next_frame_index_list) = GetNextFrameIndex(next_frame_index, std::move(next_frame_index_list), false);
-  CHECK(next_frame_index == 1);
-  CHECK(next_frame_index_list.size() == 2);
-  CHECK(next_frame_index_list[0] == 1);
-  CHECK(next_frame_index_list[1] == 0);
-  std::tie(next_frame_index, next_frame_index_list) = GetNextFrameIndex(next_frame_index, std::move(next_frame_index_list), false);
+  std::tie(next_frame_index, next_frame_index_list) = DisposeProcessedFrameIndex(0, std::move(next_frame_index_list));
   CHECK(next_frame_index == 0);
   CHECK(next_frame_index_list.size() == 2);
   CHECK(next_frame_index_list[0] == 1);
