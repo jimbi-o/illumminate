@@ -1213,6 +1213,23 @@ static auto RemoveDisabledCommandQueueType(const unordered_set<CommandQueueType>
   }
   return std::move(render_pass_command_queue_type_list);
 }
+static auto GetRenderPassIdMap(const unordered_map<StrId, uint32_t>& render_pass_id_map_original, const unordered_set<uint32_t>& used_pass_list, std::pmr::memory_resource* memory_resource) {
+  unordered_map<StrId, uint32_t> render_pass_id_map{memory_resource};
+  for (const auto& [id, original_index] : render_pass_id_map_original) {
+    if (!used_pass_list.contains(original_index)) {
+      render_pass_id_map.insert_or_assign(id, ~0u);
+      continue;
+    }
+    uint32_t new_index = 0;
+    for (uint32_t i : used_pass_list) {
+      if (i < original_index) {
+        new_index++;
+      }
+    }
+    render_pass_id_map.insert_or_assign(id, new_index);
+  }
+  return render_pass_id_map;
+}
 static auto GetAsyncGroupInfo(const unordered_map<StrId, uint32_t>& render_pass_id_map, const unordered_map<StrId, unordered_set<StrId>>& async_compute_group_with_name, const unordered_map<StrId, unordered_set<CommandQueueType>>& preceding_command_queue_type_list_with_name, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
   vector<unordered_set<uint32_t>> async_compute_group{memory_resource};
   async_compute_group.reserve(async_compute_group_with_name.size());
@@ -1412,9 +1429,9 @@ static auto ConfigureFrameSyncSignalInfo(const unordered_map<CommandQueueType, v
   }
   return std::move(pass_signal_info_succeeding_frame);
 }
-static auto ConfigurePassSignalsForPrecedingFrame(const vector<unordered_map<CommandQueueType, vector<uint32_t>>>& group_pass, const vector<unordered_set<CommandQueueType>>& preceding_command_queue_type_list, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
+static auto ConfigurePassSignalsForPrecedingFrame(const vector<unordered_map<CommandQueueType, vector<uint32_t>>>& group_pass, const vector<unordered_set<CommandQueueType>>& preceding_command_queue_type_list, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_unprocessed_signal_pass, std::pmr::memory_resource* memory_resource_work) {
   unordered_map<uint32_t, unordered_set<uint32_t>> pass_signal_info_initial_frame{memory_resource};
-  unordered_map<CommandQueueType, uint32_t> signal_pass_per_queue{memory_resource};
+  unordered_map<CommandQueueType, uint32_t> signal_pass_per_queue{memory_resource_unprocessed_signal_pass};
   unordered_map<CommandQueueType, uint32_t> waiting_pass_per_queue{memory_resource_work};
   const auto group_num = static_cast<uint32_t>(group_pass.size());
   for (uint32_t group_index = 0; group_index < group_num; group_index++) {
@@ -1507,8 +1524,17 @@ void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resour
   buffer_id_list_ = UpdateBufferIdListUsingUsedBuffers(used_buffer_list, std::move(buffer_id_list_));
 #if 0
   render_pass_command_queue_type_list_ = RemoveDisabledCommandQueueType(config.GetDisabledCommandQueueTypeList(), std::move(render_pass_command_queue_type_list_));
-  auto [async_compute_group, preceding_command_queue_type_list] = GetAsyncGroupInfo(render_pass_id_map_, config.GetAsyncComputeGroup(), config.GetAsyncComputeGroupPrecedingCommandQueueTypeList(), memory_resource_work, memory_resource_work);
+  auto render_pass_id_map = GetRenderPassIdMap(config.GetRenderPassIdIndexMap(), used_buffer_list, memory_resource_);
+  auto [async_compute_group, preceding_command_queue_type_list] = GetAsyncGroupInfo(render_pass_id_map, config.GetAsyncComputeGroup(), config.GetAsyncComputeGroupPrecedingCommandQueueTypeList(), memory_resource_work, memory_resource_work);
   auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_num_, render_pass_command_queue_type_list_, memory_resource_work);
+  auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, memory_resource_work);
+  auto used_command_queues = GetUsedCommandQueueList(render_pass_order_per_command_queue_type, memory_resource_work);
+  auto [render_pass_order_initial_frame_, render_pass_order_succeeding_frame_] = ConfigureAsyncComputeGroupRenderPassOrder(used_command_queues, pre_group_pass, group_pass, preceding_command_queue_type_list, memory_resource_);
+  auto pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_group_pass, group_pass, memory_resource_, memory_resource_work);
+  pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), memory_resource_, memory_resource_work);
+  auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, memory_resource_, memory_resource_work, memory_resource_work);
+  pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), memory_resource_, memory_resource_work);
+  // TODO
 #else
   auto new_render_pass_index_list = CalculateNewPassIndexAfterPassCulling(render_pass_num_, used_pass_list, memory_resource_work);
   render_pass_num_ = static_cast<decltype(render_pass_num_)>(used_pass_list.size());
@@ -4205,7 +4231,7 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(render_pass_order_succeeding_frame[3] == 3);
     CHECK(render_pass_order_succeeding_frame[4] == 4);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.empty());
     CHECK(pass_signal_info_succeeding_frame.size() == 4);
@@ -4240,7 +4266,7 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(render_pass_order_succeeding_frame[3] == 3);
     CHECK(render_pass_order_succeeding_frame[4] == 4);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.empty());
     CHECK(pass_signal_info_succeeding_frame.size() == 4);
@@ -4275,7 +4301,7 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(render_pass_order_succeeding_frame[3] == 4);
     CHECK(render_pass_order_succeeding_frame[4] == 3);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.empty());
     CHECK(pass_signal_info_succeeding_frame.size() == 2);
@@ -4306,7 +4332,7 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(render_pass_order_succeeding_frame[3] == 2);
     CHECK(render_pass_order_succeeding_frame[4] == 4);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.empty());
     CHECK(pass_signal_info_succeeding_frame.size() == 2);
@@ -4337,7 +4363,7 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(render_pass_order_succeeding_frame[3] == 4);
     CHECK(render_pass_order_succeeding_frame[4] == 3);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.empty());
     CHECK(pass_signal_info_succeeding_frame.size() == 2);
@@ -4368,7 +4394,7 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(render_pass_order_succeeding_frame[3] == 4);
     CHECK(render_pass_order_succeeding_frame[4] == 3);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.empty());
     CHECK(pass_signal_info_succeeding_frame.size() == 4);
@@ -4407,7 +4433,7 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(render_pass_order_succeeding_frame[3] == 4);
     CHECK(render_pass_order_succeeding_frame[4] == 3);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.empty());
     CHECK(pass_signal_info_succeeding_frame.size() == 4);
@@ -4481,7 +4507,7 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(render_pass_order_succeeding_frame[13] == 13);
     CHECK(render_pass_order_succeeding_frame[14] == 14);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.empty());
     CHECK(pass_signal_info_succeeding_frame.size() == 4);
@@ -4558,7 +4584,7 @@ TEST_CASE("async compute") { // NOLINT
     CHECK(render_pass_order_succeeding_frame[10] == 10);
     CHECK(render_pass_order_succeeding_frame[11] == 11);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.empty());
     CHECK(pass_signal_info_succeeding_frame.size() == 5);
@@ -4619,7 +4645,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     CHECK(render_pass_order_succeeding_frame[10] == 10);
     CHECK(render_pass_order_succeeding_frame[11] == 11);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    std::tie(pass_signal_info_initial_frame, unprocessed_signal_pass) = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    std::tie(pass_signal_info_initial_frame, unprocessed_signal_pass) = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.empty());
     CHECK(pass_signal_info_succeeding_frame.size() == 5);
@@ -4675,7 +4701,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     CHECK(render_pass_order_succeeding_frame[3] == 3);
     CHECK(render_pass_order_succeeding_frame[4] == 4);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.empty());
     CHECK(unprocessed_signal_pass.size() == 1);
     CHECK(unprocessed_signal_pass.at(CommandQueueType::kGraphics) == 2);
@@ -4718,7 +4744,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     CHECK(render_pass_order_succeeding_frame[3] == 3);
     CHECK(render_pass_order_succeeding_frame[4] == 4);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    std::tie(pass_signal_info_initial_frame, unprocessed_signal_pass) = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    std::tie(pass_signal_info_initial_frame, unprocessed_signal_pass) = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.size() == 3);
     CHECK(pass_signal_info_initial_frame.contains(0));
@@ -4767,7 +4793,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     CHECK(render_pass_order_succeeding_frame[3] == 3);
     CHECK(render_pass_order_succeeding_frame[4] == 4);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.size() == 1);
     CHECK(!pass_signal_info_initial_frame.contains(0));
@@ -4812,7 +4838,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     CHECK(render_pass_order_succeeding_frame[3] == 4);
     CHECK(render_pass_order_succeeding_frame[4] == 3);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.size() == 1);
     CHECK(pass_signal_info_initial_frame.contains(0));
@@ -4853,7 +4879,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     CHECK(render_pass_order_succeeding_frame[3] == 2);
     CHECK(render_pass_order_succeeding_frame[4] == 4);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.size() == 1);
     CHECK(pass_signal_info_initial_frame.contains(0));
@@ -4894,7 +4920,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     CHECK(render_pass_order_succeeding_frame[3] == 2);
     CHECK(render_pass_order_succeeding_frame[4] == 4);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.empty());
     CHECK(!pass_signal_info_initial_frame.contains(0));
@@ -4933,7 +4959,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     CHECK(render_pass_order_succeeding_frame[3] == 4);
     CHECK(render_pass_order_succeeding_frame[4] == 3);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.empty());
     CHECK(pass_signal_info_succeeding_frame.size() == 2);
@@ -4967,7 +4993,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     CHECK(render_pass_order_succeeding_frame[3] == 4);
     CHECK(render_pass_order_succeeding_frame[4] == 3);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.size() == 1);
     CHECK(!pass_signal_info_initial_frame.contains(0));
@@ -5008,7 +5034,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     CHECK(render_pass_order_succeeding_frame[3] == 4);
     CHECK(render_pass_order_succeeding_frame[4] == 3);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.size() == 1);
     CHECK(!pass_signal_info_initial_frame.contains(0));
@@ -5059,7 +5085,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     CHECK(render_pass_order_succeeding_frame[3] == 4);
     CHECK(render_pass_order_succeeding_frame[4] == 3);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.size() == 2);
     CHECK(!pass_signal_info_initial_frame.contains(0));
@@ -5151,7 +5177,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     CHECK(render_pass_order_succeeding_frame[13] == 13);
     CHECK(render_pass_order_succeeding_frame[14] == 14);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.size() == 1);
     CHECK(!pass_signal_info_initial_frame.contains(0));
@@ -5258,7 +5284,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     CHECK(render_pass_order_succeeding_frame[10] == 10);
     CHECK(render_pass_order_succeeding_frame[11] == 11);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.size() == 2);
     CHECK(!pass_signal_info_initial_frame.contains(0));
@@ -5359,7 +5385,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     CHECK(render_pass_order_succeeding_frame[10] == 10);
     CHECK(render_pass_order_succeeding_frame[11] == 11);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.size() == 1);
     CHECK(!pass_signal_info_initial_frame.contains(0));
@@ -5420,7 +5446,7 @@ pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_gr
     CHECK(render_pass_order_succeeding_frame.size() == 5);
     auto pass_signal_info_succeeding_frame = ConfigureAsyncComputeGroupPassSignals(pre_group_pass, group_pass, &memory_resource_work, &memory_resource_work);
     pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), &memory_resource_work, &memory_resource_work);
-    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work);
+    auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, &memory_resource_work, &memory_resource_work, &memory_resource_work);
     CHECK(unprocessed_signal_pass.empty());
     pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), &memory_resource_work, &memory_resource_work);
     CHECK(pass_signal_info_initial_frame.empty());
@@ -5635,6 +5661,73 @@ TEST_CASE("DisposeProcessedFrameIndex") { // NOLINT
   CHECK(next_frame_index_list.size() == 2);
   CHECK(next_frame_index_list[0] == 1);
   CHECK(next_frame_index_list[1] == 0);
+}
+TEST_CASE("GetRenderPassIdMap") { // NOLINT
+  using namespace illuminate; // NOLINT
+  using namespace illuminate::core; // NOLINT
+  using namespace illuminate::gfx; // NOLINT
+  PmrLinearAllocator memory_resource_work(&buffer[buffer_offset_in_bytes_work], buffer_size_in_bytes_work);
+  unordered_map<StrId, uint32_t> render_pass_id_map(&memory_resource_work);
+  unordered_set<uint32_t> used_pass_list(&memory_resource_work);
+  auto render_pass_id_map_new = GetRenderPassIdMap(render_pass_id_map, used_pass_list, &memory_resource_work);
+  CHECK(render_pass_id_map_new.empty());
+  render_pass_id_map.insert_or_assign(StrId("a"), 0);
+  render_pass_id_map.insert_or_assign(StrId("b"), 1);
+  used_pass_list.insert(0);
+  used_pass_list.insert(1);
+  render_pass_id_map_new = GetRenderPassIdMap(render_pass_id_map, used_pass_list, &memory_resource_work);
+  CHECK(render_pass_id_map_new.size() == 2);
+  CHECK(render_pass_id_map_new.at(StrId("a")) == 0);
+  CHECK(render_pass_id_map_new.at(StrId("b")) == 1);
+  used_pass_list.erase(1);
+  render_pass_id_map_new = GetRenderPassIdMap(render_pass_id_map, used_pass_list, &memory_resource_work);
+  CHECK(render_pass_id_map_new.size() == 2);
+  CHECK(render_pass_id_map_new.at(StrId("a")) == 0);
+  CHECK(render_pass_id_map_new.at(StrId("b")) == ~0u);
+  used_pass_list.clear();
+  render_pass_id_map_new = GetRenderPassIdMap(render_pass_id_map, used_pass_list, &memory_resource_work);
+  CHECK(render_pass_id_map_new.size() == 2);
+  CHECK(render_pass_id_map_new.at(StrId("a")) == ~0u);
+  CHECK(render_pass_id_map_new.at(StrId("b")) == ~0u);
+  used_pass_list.insert(1);
+  render_pass_id_map_new = GetRenderPassIdMap(render_pass_id_map, used_pass_list, &memory_resource_work);
+  CHECK(render_pass_id_map_new.size() == 2);
+  CHECK(render_pass_id_map_new.at(StrId("a")) == ~0u);
+  CHECK(render_pass_id_map_new.at(StrId("b")) == 0);
+  render_pass_id_map.insert_or_assign(StrId("c"), 2);
+  render_pass_id_map.insert_or_assign(StrId("d"), 3);
+  render_pass_id_map.insert_or_assign(StrId("e"), 4);
+  render_pass_id_map_new = GetRenderPassIdMap(render_pass_id_map, used_pass_list, &memory_resource_work);
+  CHECK(render_pass_id_map_new.size() == 5);
+  CHECK(render_pass_id_map_new.at(StrId("a")) == ~0u);
+  CHECK(render_pass_id_map_new.at(StrId("b")) == 0);
+  CHECK(render_pass_id_map_new.at(StrId("c")) == ~0u);
+  CHECK(render_pass_id_map_new.at(StrId("d")) == ~0u);
+  CHECK(render_pass_id_map_new.at(StrId("e")) == ~0u);
+  used_pass_list.insert(3);
+  render_pass_id_map_new = GetRenderPassIdMap(render_pass_id_map, used_pass_list, &memory_resource_work);
+  CHECK(render_pass_id_map_new.size() == 5);
+  CHECK(render_pass_id_map_new.at(StrId("a")) == ~0u);
+  CHECK(render_pass_id_map_new.at(StrId("b")) == 0);
+  CHECK(render_pass_id_map_new.at(StrId("c")) == ~0u);
+  CHECK(render_pass_id_map_new.at(StrId("d")) == 1);
+  CHECK(render_pass_id_map_new.at(StrId("e")) == ~0u);
+  used_pass_list.insert(0);
+  render_pass_id_map_new = GetRenderPassIdMap(render_pass_id_map, used_pass_list, &memory_resource_work);
+  CHECK(render_pass_id_map_new.size() == 5);
+  CHECK(render_pass_id_map_new.at(StrId("a")) == 0);
+  CHECK(render_pass_id_map_new.at(StrId("b")) == 1);
+  CHECK(render_pass_id_map_new.at(StrId("c")) == ~0u);
+  CHECK(render_pass_id_map_new.at(StrId("d")) == 2);
+  CHECK(render_pass_id_map_new.at(StrId("e")) == ~0u);
+  used_pass_list.insert(4);
+  render_pass_id_map_new = GetRenderPassIdMap(render_pass_id_map, used_pass_list, &memory_resource_work);
+  CHECK(render_pass_id_map_new.size() == 5);
+  CHECK(render_pass_id_map_new.at(StrId("a")) == 0);
+  CHECK(render_pass_id_map_new.at(StrId("b")) == 1);
+  CHECK(render_pass_id_map_new.at(StrId("c")) == ~0u);
+  CHECK(render_pass_id_map_new.at(StrId("d")) == 2);
+  CHECK(render_pass_id_map_new.at(StrId("e")) == 3);
 }
 #ifdef __clang__
 #pragma clang diagnostic pop
