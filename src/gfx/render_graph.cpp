@@ -1113,22 +1113,19 @@ static auto UpdateBufferStateInfoWithNewPassIndex(const unordered_set<uint32_t>&
   }
   return std::make_tuple(std::move(buffer_state_list), std::move(buffer_user_pass_list));
 }
-static auto GetRenderCommandQueueTypeListWithNewPassIndex(const uint32_t pass_num, const unordered_map<uint32_t, uint32_t>& new_render_pass_index_list, const vector<CommandQueueType>& src_list, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
+static auto GetRenderCommandQueueTypeListWithNewPassIndex(const uint32_t pass_num, const unordered_map<uint32_t, uint32_t>& new_render_pass_index_list, vector<CommandQueueType>&& render_pass_command_queue_type_list, std::pmr::memory_resource* memory_resource_work) {
   unordered_map<uint32_t, uint32_t> new_index_to_old_index{memory_resource_work};
   new_index_to_old_index.reserve(new_render_pass_index_list.size());
   for (const auto& [old_index, new_index] : new_render_pass_index_list) {
     new_index_to_old_index.insert_or_assign(new_index, old_index);
   }
-  vector<CommandQueueType> fixed_list{memory_resource};
-  fixed_list.resize(pass_num);
   for (uint32_t pass_index = 0; pass_index < pass_num; pass_index++) {
     if (new_index_to_old_index.contains(pass_index)) {
-      fixed_list[pass_index] = src_list[new_index_to_old_index.at(pass_index)];
-    } else {
-      fixed_list[pass_index] = src_list[pass_index];
+      render_pass_command_queue_type_list[pass_index] = render_pass_command_queue_type_list[new_index_to_old_index.at(pass_index)];
     }
   }
-  return fixed_list;
+  render_pass_command_queue_type_list.resize(pass_num);
+  return std::move(render_pass_command_queue_type_list);
 }
 static auto UpdateMemoryAliasingListWithRenamedBufferIdList(const unordered_map<BufferId, BufferId>& renamed_buffers, unordered_map<uint32_t, vector<BufferId>>&& render_pass_memory_aliasing_list) {
   for (auto&& [pass_index, list] : render_pass_memory_aliasing_list) {
@@ -1205,13 +1202,16 @@ static auto AddBufferClearInfoForInitialWrite(const unordered_map<BufferId, vect
   }
   return std::move(render_pass_buffer_clear_info);
 }
-static auto RemoveDisabledCommandQueueType(const unordered_set<CommandQueueType>& disabled_command_queue_type_list, vector<CommandQueueType>&& render_pass_command_queue_type_list) {
-  for (auto&& queue : render_pass_command_queue_type_list) {
+static auto RemoveDisabledCommandQueueType(const unordered_set<CommandQueueType>& disabled_command_queue_type_list, const vector<CommandQueueType>& render_pass_command_queue_type_list_original, std::pmr::memory_resource* memory_resource) {
+  vector<CommandQueueType> render_pass_command_queue_type_list{memory_resource};
+  for (const auto& queue : render_pass_command_queue_type_list_original) {
     if (disabled_command_queue_type_list.contains(queue)) {
-      queue = CommandQueueType::kGraphics;
+      render_pass_command_queue_type_list.push_back(CommandQueueType::kGraphics);
+    } else {
+      render_pass_command_queue_type_list.push_back(queue);
     }
   }
-  return std::move(render_pass_command_queue_type_list);
+  return render_pass_command_queue_type_list;
 }
 static auto GetRenderPassIdMap(const unordered_map<StrId, uint32_t>& render_pass_id_map_original, const unordered_set<uint32_t>& used_pass_list, std::pmr::memory_resource* memory_resource) {
   unordered_map<StrId, uint32_t> render_pass_id_map{memory_resource};
@@ -1521,10 +1521,8 @@ void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resour
   auto required_buffers = GatherBufferIdsFromBufferNames(buffer_name_id_map, config.GetMandatoryBufferNameList(), memory_resource_work);
   auto [buffer_state_list, buffer_user_pass_list] = CreateBufferStateList(render_pass_num_, buffer_id_list_, render_pass_buffer_id_list_, render_pass_buffer_state_flag_list_, memory_resource_work);
   auto [used_pass_list, used_buffer_list] = CullUsedRenderPass(buffer_state_list, buffer_user_pass_list, render_pass_buffer_id_list_, render_pass_buffer_state_flag_list_, std::move(required_buffers), memory_resource_work, memory_resource_work);
-  buffer_id_list_ = UpdateBufferIdListUsingUsedBuffers(used_buffer_list, std::move(buffer_id_list_));
-#if 0
-  render_pass_command_queue_type_list_ = RemoveDisabledCommandQueueType(config.GetDisabledCommandQueueTypeList(), std::move(render_pass_command_queue_type_list_));
-  auto render_pass_id_map = GetRenderPassIdMap(config.GetRenderPassIdIndexMap(), used_buffer_list, memory_resource_);
+  render_pass_command_queue_type_list_ = RemoveDisabledCommandQueueType(config.GetDisabledCommandQueueTypeList(), config.GetRenderPassCommandQueueTypeList(), memory_resource_);
+  auto render_pass_id_map = GetRenderPassIdMap(config.GetRenderPassIdIndexMap(), used_pass_list, memory_resource_);
   auto [async_compute_group, preceding_command_queue_type_list] = GetAsyncGroupInfo(render_pass_id_map, config.GetAsyncComputeGroup(), config.GetAsyncComputeGroupPrecedingCommandQueueTypeList(), memory_resource_work, memory_resource_work);
   auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_num_, render_pass_command_queue_type_list_, memory_resource_work);
   auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, memory_resource_work);
@@ -1534,14 +1532,12 @@ void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resour
   pass_signal_info_succeeding_frame = ConfigureFrameSyncSignalInfo(render_pass_order_per_command_queue_type, std::move(pass_signal_info_succeeding_frame), memory_resource_, memory_resource_work);
   auto [pass_signal_info_initial_frame, unprocessed_signal_pass] = ConfigurePassSignalsForPrecedingFrame(group_pass, preceding_command_queue_type_list, memory_resource_, memory_resource_work, memory_resource_work);
   pass_signal_info_initial_frame = ConfigurePassSignalsFromPrecedingFrameToSuccedingFrame(render_pass_order_per_command_queue_type, pre_group_pass, group_pass, unprocessed_signal_pass, std::move(pass_signal_info_initial_frame), memory_resource_, memory_resource_work);
-  // TODO
-#else
+  buffer_id_list_ = UpdateBufferIdListUsingUsedBuffers(used_buffer_list, std::move(buffer_id_list_));
   auto new_render_pass_index_list = CalculateNewPassIndexAfterPassCulling(render_pass_num_, used_pass_list, memory_resource_work);
   render_pass_num_ = static_cast<decltype(render_pass_num_)>(used_pass_list.size());
   std::tie(render_pass_buffer_id_list_, render_pass_buffer_state_flag_list_) = UpdateRenderPassBufferInfoWithNewPassIndex(render_pass_num_, new_render_pass_index_list, std::move(render_pass_buffer_id_list_), std::move(render_pass_buffer_state_flag_list_));
   std::tie(buffer_state_list, buffer_user_pass_list) = UpdateBufferStateInfoWithNewPassIndex(used_pass_list, used_buffer_list, new_render_pass_index_list, std::move(buffer_state_list), std::move(buffer_user_pass_list));
-  render_pass_command_queue_type_list_ = GetRenderCommandQueueTypeListWithNewPassIndex(render_pass_num_, new_render_pass_index_list, config.GetRenderPassCommandQueueTypeList(), memory_resource_, memory_resource_work);
-  render_pass_command_queue_type_list_ = RemoveDisabledCommandQueueType(config.GetDisabledCommandQueueTypeList(), std::move(render_pass_command_queue_type_list_));
+  render_pass_command_queue_type_list_ = GetRenderCommandQueueTypeListWithNewPassIndex(render_pass_num_, new_render_pass_index_list, std::move(render_pass_command_queue_type_list_), memory_resource_work);
   auto initial_state_flag_list = ConvertBufferNameToBufferIdForBufferStateFlagList(buffer_name_id_map, config.GetBufferInitialStateList(), memory_resource_work);
   std::tie(buffer_state_list, buffer_user_pass_list) = MergeInitialBufferState(initial_state_flag_list, std::move(buffer_state_list), std::move(buffer_user_pass_list), memory_resource_work);
   auto final_state_flag_list = ConvertBufferNameToBufferIdForBufferStateFlagList(buffer_name_id_map, config.GetBufferFinalStateList(), memory_resource_work);
@@ -1590,7 +1586,6 @@ void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resour
   auto buffer_state_change_info_list_map = CreateBufferStateChangeInfoList(render_pass_command_queue_type_flag_list, node_distance_map, buffer_state_list, buffer_user_pass_list, memory_resource_work); // NOLINT(hicpp-invalid-access-moved,bugprone-use-after-move)
   std::tie(barriers_pre_pass_, barriers_post_pass_) = ConfigureBarriers(render_pass_num_, buffer_id_list_, buffer_state_change_info_list_map, memory_resource_);
   barriers_pre_pass_ = AppendMemoryAliasingBarriers(render_pass_num_, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list, std::move(barriers_pre_pass_));
-#endif
 }
 #ifdef BUILD_WITH_TEST
 static auto CollectBufferDataForTest(const vector<vector<BufferId>>& render_pass_buffer_id_list, std::pmr::memory_resource* memory_resource) {
@@ -4124,40 +4119,47 @@ TEST_CASE("update params after pass culling") { // NOLINT
   src_list.push_back(CommandQueueType::kCompute);
   src_list.push_back(CommandQueueType::kTransfer);
   new_render_pass_index_list.clear();
-  auto dst_list = GetRenderCommandQueueTypeListWithNewPassIndex(3, new_render_pass_index_list, src_list, &memory_resource_work, &memory_resource_work);
+  auto dst_list = src_list;
+  dst_list = GetRenderCommandQueueTypeListWithNewPassIndex(3, new_render_pass_index_list, std::move(dst_list), &memory_resource_work);
   CHECK(dst_list.size() == 3); // NOLINT
   CHECK(dst_list[0] == CommandQueueType::kGraphics); // NOLINT
   CHECK(dst_list[1] == CommandQueueType::kCompute); // NOLINT
   CHECK(dst_list[2] == CommandQueueType::kTransfer); // NOLINT
-  dst_list = GetRenderCommandQueueTypeListWithNewPassIndex(2, new_render_pass_index_list, src_list, &memory_resource_work, &memory_resource_work);
+  dst_list = src_list;
+  dst_list = GetRenderCommandQueueTypeListWithNewPassIndex(2, new_render_pass_index_list, std::move(dst_list), &memory_resource_work);
   CHECK(dst_list.size() == 2); // NOLINT
   CHECK(dst_list[0] == CommandQueueType::kGraphics); // NOLINT
   CHECK(dst_list[1] == CommandQueueType::kCompute); // NOLINT
   new_render_pass_index_list.clear();
   new_render_pass_index_list.insert_or_assign(1, 0);
   new_render_pass_index_list.insert_or_assign(2, 1);
-  dst_list = GetRenderCommandQueueTypeListWithNewPassIndex(2, new_render_pass_index_list, src_list, &memory_resource_work, &memory_resource_work);
+  dst_list = src_list;
+  dst_list = GetRenderCommandQueueTypeListWithNewPassIndex(2, new_render_pass_index_list, std::move(dst_list), &memory_resource_work);
   CHECK(dst_list.size() == 2); // NOLINT
   CHECK(dst_list[0] == CommandQueueType::kCompute); // NOLINT
   CHECK(dst_list[1] == CommandQueueType::kTransfer); // NOLINT
   new_render_pass_index_list.clear();
   new_render_pass_index_list.insert_or_assign(2, 1);
-  dst_list = GetRenderCommandQueueTypeListWithNewPassIndex(2, new_render_pass_index_list, src_list, &memory_resource_work, &memory_resource_work);
+  dst_list = src_list;
+  dst_list = GetRenderCommandQueueTypeListWithNewPassIndex(2, new_render_pass_index_list, std::move(dst_list), &memory_resource_work);
   CHECK(dst_list.size() == 2); // NOLINT
   CHECK(dst_list[0] == CommandQueueType::kGraphics); // NOLINT
   CHECK(dst_list[1] == CommandQueueType::kTransfer); // NOLINT
   new_render_pass_index_list.clear();
   new_render_pass_index_list.insert_or_assign(2, 0);
-  dst_list = GetRenderCommandQueueTypeListWithNewPassIndex(1, new_render_pass_index_list, src_list, &memory_resource_work, &memory_resource_work);
+  dst_list = src_list;
+  dst_list = GetRenderCommandQueueTypeListWithNewPassIndex(1, new_render_pass_index_list, std::move(dst_list), &memory_resource_work);
   CHECK(dst_list.size() == 1); // NOLINT
   CHECK(dst_list[0] == CommandQueueType::kTransfer); // NOLINT
   new_render_pass_index_list.clear();
-  dst_list = GetRenderCommandQueueTypeListWithNewPassIndex(1, new_render_pass_index_list, src_list, &memory_resource_work, &memory_resource_work);
+  dst_list = src_list;
+  dst_list = GetRenderCommandQueueTypeListWithNewPassIndex(1, new_render_pass_index_list, std::move(dst_list), &memory_resource_work);
   CHECK(dst_list.size() == 1); // NOLINT
   CHECK(dst_list[0] == CommandQueueType::kGraphics); // NOLINT
   new_render_pass_index_list.clear();
   new_render_pass_index_list.insert_or_assign(1, 0);
-  dst_list = GetRenderCommandQueueTypeListWithNewPassIndex(1, new_render_pass_index_list, src_list, &memory_resource_work, &memory_resource_work);
+  dst_list = src_list;
+  dst_list = GetRenderCommandQueueTypeListWithNewPassIndex(1, new_render_pass_index_list, std::move(dst_list), &memory_resource_work);
   CHECK(dst_list.size() == 1); // NOLINT
   CHECK(dst_list[0] == CommandQueueType::kCompute); // NOLINT
 }
@@ -4172,7 +4174,7 @@ TEST_CASE("RemoveDisabledCommandQueueType") { // NOLINT
   render_pass_command_queue_type_list.push_back(CommandQueueType::kCompute);
   render_pass_command_queue_type_list.push_back(CommandQueueType::kTransfer);
   SUBCASE("use all queues") {
-    render_pass_command_queue_type_list = RemoveDisabledCommandQueueType(disabled_command_queue_type_list, std::move(render_pass_command_queue_type_list));
+    render_pass_command_queue_type_list = RemoveDisabledCommandQueueType(disabled_command_queue_type_list, render_pass_command_queue_type_list, &memory_resource_work);
     CHECK(render_pass_command_queue_type_list.size() == 3); // NOLINT
     CHECK(render_pass_command_queue_type_list[0] == CommandQueueType::kGraphics); // NOLINT
     CHECK(render_pass_command_queue_type_list[1] == CommandQueueType::kCompute); // NOLINT
@@ -4180,7 +4182,7 @@ TEST_CASE("RemoveDisabledCommandQueueType") { // NOLINT
   }
   SUBCASE("disable compute queue") {
     disabled_command_queue_type_list.insert(CommandQueueType::kCompute);
-    render_pass_command_queue_type_list = RemoveDisabledCommandQueueType(disabled_command_queue_type_list, std::move(render_pass_command_queue_type_list));
+    render_pass_command_queue_type_list = RemoveDisabledCommandQueueType(disabled_command_queue_type_list, render_pass_command_queue_type_list, &memory_resource_work);
     CHECK(render_pass_command_queue_type_list.size() == 3); // NOLINT
     CHECK(render_pass_command_queue_type_list[0] == CommandQueueType::kGraphics); // NOLINT
     CHECK(render_pass_command_queue_type_list[1] == CommandQueueType::kGraphics); // NOLINT
@@ -4189,7 +4191,7 @@ TEST_CASE("RemoveDisabledCommandQueueType") { // NOLINT
   SUBCASE("disable compute queue and transfer queue") {
     disabled_command_queue_type_list.insert(CommandQueueType::kCompute);
     disabled_command_queue_type_list.insert(CommandQueueType::kTransfer);
-    render_pass_command_queue_type_list = RemoveDisabledCommandQueueType(disabled_command_queue_type_list, std::move(render_pass_command_queue_type_list));
+    render_pass_command_queue_type_list = RemoveDisabledCommandQueueType(disabled_command_queue_type_list, render_pass_command_queue_type_list, &memory_resource_work);
     CHECK(render_pass_command_queue_type_list.size() == 3); // NOLINT
     CHECK(render_pass_command_queue_type_list[0] == CommandQueueType::kGraphics); // NOLINT
     CHECK(render_pass_command_queue_type_list[1] == CommandQueueType::kGraphics); // NOLINT
