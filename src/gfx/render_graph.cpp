@@ -1,4 +1,4 @@
-#include "render_graph.h"
+ #include "render_graph.h"
 namespace illuminate::gfx {
 constexpr auto IsBufferStateFlagMergeAcceptable(const BufferStateFlags& state) {
   if ((state & kBufferStateFlagUav) != 0) { return false; }
@@ -1230,7 +1230,7 @@ static auto GetRenderPassIdMap(const unordered_map<StrId, uint32_t>& render_pass
   }
   return render_pass_id_map;
 }
-static auto GetAsyncGroupInfo(const unordered_map<StrId, uint32_t>& render_pass_id_map, const unordered_map<StrId, unordered_set<StrId>>& async_compute_group_with_name, const unordered_map<StrId, unordered_set<CommandQueueType>>& preceding_command_queue_type_list_with_name, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
+static auto GetAsyncGroupInfo(const unordered_map<StrId, uint32_t>& render_pass_id_map, const unordered_map<uint32_t, uint32_t>& render_pass_exec_order_index_map, const unordered_map<StrId, unordered_set<StrId>>& async_compute_group_with_name, const unordered_map<StrId, unordered_set<CommandQueueType>>& preceding_command_queue_type_list_with_name, std::pmr::memory_resource* memory_resource, std::pmr::memory_resource* memory_resource_work) {
   vector<unordered_set<uint32_t>> async_compute_group{memory_resource};
   async_compute_group.reserve(async_compute_group_with_name.size());
   vector<unordered_set<CommandQueueType>> preceding_command_queue_type_list{memory_resource};
@@ -1240,7 +1240,7 @@ static auto GetAsyncGroupInfo(const unordered_map<StrId, uint32_t>& render_pass_
   for (auto& [group_name, pass_names] : async_compute_group_with_name) {
     uint32_t min_pass_index = std::numeric_limits<uint32_t>::max();
     for (auto& pass_name : pass_names) {
-      auto& pass_index = render_pass_id_map.at(pass_name);
+      auto& pass_index = render_pass_exec_order_index_map.at(render_pass_id_map.at(pass_name));
       if (pass_index < min_pass_index) {
         min_pass_index = pass_index;
       }
@@ -1260,7 +1260,7 @@ static auto GetAsyncGroupInfo(const unordered_map<StrId, uint32_t>& render_pass_
       min_pass_index_list.insert(min_pass_index_list.begin() + index, min_pass_index);
     }
     for (auto& pass_name : pass_names) {
-      async_compute_group[index].insert(render_pass_id_map.at(pass_name));
+      async_compute_group[index].insert(render_pass_exec_order_index_map.at(render_pass_id_map.at(pass_name)));
     }
     if (preceding_command_queue_type_list_with_name.contains(group_name)) {
       for (auto& queue : preceding_command_queue_type_list_with_name.at(group_name)) {
@@ -1507,6 +1507,25 @@ static auto DisposeProcessedFrameIndex(const uint32_t processed_index, vector<ui
   }
   return std::make_tuple(next_frame_index, std::move(next_frame_index_list));
 }
+static auto GetRenderPassOrder(const uint32_t pass_num, unordered_set<uint32_t> used_pass_list, std::pmr::memory_resource* memory_resource) {
+  vector<uint32_t> render_pass_order{memory_resource};
+  render_pass_order.reserve(used_pass_list.size());
+  for (uint32_t i = 0; i < pass_num; i++) {
+    if (used_pass_list.contains(i)) {
+      render_pass_order.push_back(i);
+    }
+  }
+  return render_pass_order;
+}
+static auto GetRenderPassExecOrderIndexMap(const vector<uint32_t>& render_pass_order, std::pmr::memory_resource* memory_resource) {
+  unordered_map<uint32_t, uint32_t> render_pass_exec_order_index_map(memory_resource);
+  const auto len = static_cast<uint32_t>(render_pass_order.size());
+  render_pass_exec_order_index_map.reserve(len);
+  for (uint32_t i = 0; i < len; i++) {
+    render_pass_exec_order_index_map.insert_or_assign(render_pass_order[i], i);
+  }
+  return render_pass_exec_order_index_map;
+}
 void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resource* memory_resource_work) {
   if (config.GetMandatoryBufferNameList().empty()) {
     logwarn("mandatory_buffer_name_list_ is empty");
@@ -1521,9 +1540,12 @@ void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resour
   auto required_buffers = GatherBufferIdsFromBufferNames(buffer_name_id_map, config.GetMandatoryBufferNameList(), memory_resource_work);
   auto [buffer_state_list, buffer_user_pass_list] = CreateBufferStateList(render_pass_num_, buffer_id_list_, render_pass_buffer_id_list_, render_pass_buffer_state_flag_list_, memory_resource_work);
   auto [used_pass_list, used_buffer_list] = CullUsedRenderPass(buffer_state_list, buffer_user_pass_list, render_pass_buffer_id_list_, render_pass_buffer_state_flag_list_, std::move(required_buffers), memory_resource_work, memory_resource_work);
+  auto render_pass_order = GetRenderPassOrder(render_pass_num_, used_pass_list, memory_resource_work);
+  auto render_pass_exec_order_index_map = GetRenderPassExecOrderIndexMap(render_pass_order, memory_resource_work);
   render_pass_command_queue_type_list_ = RemoveDisabledCommandQueueType(config.GetDisabledCommandQueueTypeList(), config.GetRenderPassCommandQueueTypeList(), memory_resource_);
-  auto render_pass_id_map = GetRenderPassIdMap(config.GetRenderPassIdIndexMap(), used_pass_list, memory_resource_);
-  auto [async_compute_group, preceding_command_queue_type_list] = GetAsyncGroupInfo(render_pass_id_map, config.GetAsyncComputeGroup(), config.GetAsyncComputeGroupPrecedingCommandQueueTypeList(), memory_resource_work, memory_resource_work);
+  const auto& render_pass_id_map = config.GetRenderPassIdIndexMap();
+  auto [async_compute_group, preceding_command_queue_type_list] = GetAsyncGroupInfo(render_pass_id_map, render_pass_exec_order_index_map, config.GetAsyncComputeGroup(), config.GetAsyncComputeGroupPrecedingCommandQueueTypeList(), memory_resource_work, memory_resource_work);
+# if 1
   auto render_pass_order_per_command_queue_type = GetRenderPassOrderPerQueue(render_pass_num_, render_pass_command_queue_type_list_, memory_resource_work);
   auto [pre_group_pass, group_pass] = ConfigureAsyncComputeGroupPerQueueType(render_pass_order_per_command_queue_type, async_compute_group, memory_resource_work);
   auto used_command_queues = GetUsedCommandQueueList(render_pass_order_per_command_queue_type, memory_resource_work);
@@ -1586,6 +1608,9 @@ void RenderGraph::Build(const RenderGraphConfig& config, std::pmr::memory_resour
   auto buffer_state_change_info_list_map = CreateBufferStateChangeInfoList(render_pass_command_queue_type_flag_list, node_distance_map, buffer_state_list, buffer_user_pass_list, memory_resource_work); // NOLINT(hicpp-invalid-access-moved,bugprone-use-after-move)
   std::tie(barriers_pre_pass_, barriers_post_pass_) = ConfigureBarriers(render_pass_num_, buffer_id_list_, buffer_state_change_info_list_map, memory_resource_);
   barriers_pre_pass_ = AppendMemoryAliasingBarriers(render_pass_num_, render_pass_before_memory_aliasing_list, render_pass_after_memory_aliasing_list, std::move(barriers_pre_pass_));
+  // TODO merge pass_signal_info_initial_frame to existing pass_signal_info
+  // TODO configure barriers for initial and succeeding frames.
+#endif
 }
 #ifdef BUILD_WITH_TEST
 static auto CollectBufferDataForTest(const vector<vector<BufferId>>& render_pass_buffer_id_list, std::pmr::memory_resource* memory_resource) {
@@ -5482,6 +5507,14 @@ TEST_CASE("GetAsyncGroupInfo") { // NOLINT
   render_pass_id_map.insert_or_assign(StrId("pass_e"), 4);
   render_pass_id_map.insert_or_assign(StrId("pass_f"), 5);
   render_pass_id_map.insert_or_assign(StrId("pass_g"), 6);
+  unordered_map<uint32_t, uint32_t> render_pass_exec_order_index_map{&memory_resource_work};
+  render_pass_exec_order_index_map.insert_or_assign(0, 0);
+  render_pass_exec_order_index_map.insert_or_assign(1, 1);
+  render_pass_exec_order_index_map.insert_or_assign(2, 2);
+  render_pass_exec_order_index_map.insert_or_assign(3, 3);
+  render_pass_exec_order_index_map.insert_or_assign(4, 4);
+  render_pass_exec_order_index_map.insert_or_assign(5, 5);
+  render_pass_exec_order_index_map.insert_or_assign(6, 6);
   unordered_map<StrId, unordered_set<StrId>> async_compute_group_with_name{&memory_resource_work};
   async_compute_group_with_name.insert_or_assign(StrId("group_a"), unordered_set<StrId>{&memory_resource_work});
   async_compute_group_with_name.at(StrId("group_a")).insert(StrId("pass_a"));
@@ -5496,7 +5529,7 @@ TEST_CASE("GetAsyncGroupInfo") { // NOLINT
   unordered_map<StrId, unordered_set<CommandQueueType>> preceding_command_queue_type_list_with_name{&memory_resource_work};
   preceding_command_queue_type_list_with_name.insert_or_assign(StrId("group_b"), unordered_set<CommandQueueType>{&memory_resource_work});
   preceding_command_queue_type_list_with_name.at(StrId("group_b")).insert(CommandQueueType::kCompute);
-  auto [async_compute_group, preceding_command_queue_type_list] = GetAsyncGroupInfo(render_pass_id_map, async_compute_group_with_name, preceding_command_queue_type_list_with_name, &memory_resource_work, &memory_resource_work);
+  auto [async_compute_group, preceding_command_queue_type_list] = GetAsyncGroupInfo(render_pass_id_map, render_pass_exec_order_index_map, async_compute_group_with_name, preceding_command_queue_type_list_with_name, &memory_resource_work, &memory_resource_work);
   CHECK(async_compute_group.size() == 3);
   CHECK(async_compute_group[0].size() == 3);
   CHECK(async_compute_group[0].contains(0));
